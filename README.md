@@ -20,7 +20,7 @@ The app drives the DMC2's stock BlueSkyT USB board directly, using a protocol ma
 
 ## Files
 
-Settings (`machine.json`), the tool table and work offsets (`state.json`) live in `%APPDATA%\rcnc` on Windows (`~/.config/rcnc` elsewhere) and are saved as they change. Put macros there as `macros/M<n>.nc`: plain G-code run in place of `M<n>`, with P and Q in `#1` and `#2`.
+Settings (`machine.json`), the tool table and work offsets (`state.json`) live in `%APPDATA%\rcnc` on Windows (`~/.config/rcnc` elsewhere) and are saved as they change. The simulator (`--sim`) keeps its own in a `sim` folder there. Put macros there as `macros/M<n>.nc`: plain G-code run in place of `M<n>`, with P and Q in `#1` and `#2`.
 
 ## CAM link
 

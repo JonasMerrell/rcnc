@@ -43,9 +43,11 @@ fn main() -> eframe::Result<()> {
     };
     // Settings, tool table and work offsets live in the data folder and are
     // saved as they change; the DMC2 defaults apply until something is saved.
-    let data = store::data_dir();
+    // The simulator keeps its own, so trying things out never changes the real machine's.
+    let data = if simulate { store::data_dir().join("sim") } else { store::data_dir() };
     let config = match store::load::<MachineConfig>(&data.join("machine.json")) {
         Ok(Some(c)) => c,
+        Ok(None) if simulate => sim_config(),
         Ok(None) => MachineConfig::dmc2(),
         Err(e) => {
             eprintln!("ignoring unreadable settings ({e}); using DMC2 defaults");
@@ -69,4 +71,17 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |cc| Ok(Box::new(app::App::new(cc, handle).with_program(program.map(Into::into))))),
     )
+}
+
+/// The DMC2 with the tool setter and change position where the simulator's
+/// table is (machine Z30, starting at Z150).
+fn sim_config() -> MachineConfig {
+    let mut c = MachineConfig::dmc2();
+    c.probing.setter.x = 50.0;
+    c.probing.setter.y = 50.0;
+    c.probing.setter.travel_z = 120.0;
+    c.tool_change.x = 10.0;
+    c.tool_change.y = 20.0;
+    c.tool_change.z = 120.0;
+    c
 }
