@@ -217,7 +217,7 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ScrollArea::vertical().show(ui, |ui| {
                     self.dro(ui);
-                    ui.add_space(14.0);
+                    ui.add_space(8.0);
                     self.jog(ui);
                 });
             });
@@ -327,65 +327,54 @@ impl App {
         let s = self.snap.clone();
         let ready = s.mode == Mode::Idle;
         for axis in 0..3 {
+            // One line per axis so the jog pad fits below on a 720p screen.
             egui::Frame::new()
                 .fill(RAISED)
                 .corner_radius(CornerRadius::same(8))
-                .inner_margin(Margin::symmetric(12, 8))
+                .inner_margin(Margin::symmetric(10, 2))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new(AXIS_LETTERS[axis].to_string())
-                                .font(FontId::monospace(28.0))
+                                .font(FontId::monospace(24.0))
                                 .color(ACCENT)
                                 .strong(),
                         );
                         ui.add_space(4.0);
                         ui.vertical(|ui| {
-                            ui.set_width(176.0);
+                            ui.set_width(150.0);
+                            ui.spacing_mut().item_spacing.y = 0.0;
                             ui.with_layout(Layout::top_down(Align::Max), |ui| {
                                 ui.label(
                                     RichText::new(format!("{:.3}", s.work[axis]))
-                                        .font(FontId::monospace(28.0))
+                                        .font(FontId::monospace(24.0))
                                         .color(TEXT),
                                 );
                                 ui.label(
                                     RichText::new(format!("mach {:.3}", s.machine[axis]))
-                                        .font(FontId::monospace(12.0))
+                                        .font(FontId::monospace(11.0))
                                         .color(MUTED),
                                 );
                             });
                         });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.vertical(|ui| {
-                                if ui
-                                    .add_enabled(
-                                        ready,
-                                        Button::new("Zero").min_size(Vec2::new(64.0, 24.0)),
-                                    )
-                                    .clicked()
-                                {
-                                    self.machine.send(Command::ZeroAxis(axis));
-                                }
-                                if ui
-                                    .add_enabled(
-                                        ready,
-                                        Button::new("Home").min_size(Vec2::new(64.0, 24.0)),
-                                    )
-                                    .clicked()
-                                {
-                                    self.machine.send(Command::Home(Some(axis)));
-                                }
-                            });
+                            ui.spacing_mut().button_padding = Vec2::new(8.0, 3.0);
+                            if ui.add_enabled(ready, Button::new("Home")).clicked() {
+                                self.machine.send(Command::Home(Some(axis)));
+                            }
+                            if ui.add_enabled(ready, Button::new("Zero")).clicked() {
+                                self.machine.send(Command::ZeroAxis(axis));
+                            }
                         });
                     });
                 });
-            ui.add_space(6.0);
+            ui.add_space(4.0);
         }
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(
                     ready,
-                    Button::new("Ref All Home").min_size(Vec2::new(150.0, 34.0)),
+                    Button::new("Ref All Home").min_size(Vec2::new(150.0, 28.0)),
                 )
                 .clicked()
             {
@@ -394,40 +383,32 @@ impl App {
             if ui
                 .add_enabled(
                     ready,
-                    Button::new("Go to Work Zero").min_size(Vec2::new(150.0, 34.0)),
+                    Button::new("Go to Work Zero").min_size(Vec2::new(150.0, 28.0)),
                 )
                 .clicked()
             {
                 self.machine.send(Command::Mdi("G0 X0 Y0".into()));
             }
         });
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            stat(ui, "Feed", &format!("{:.0} mm/min", s.velocity));
+        ui.add_space(6.0);
+        let spindle = match s.spindle {
+            Spindle::Off => "off".to_string(),
+            Spindle::Cw => format!("{:.0} CW", s.rpm),
+            Spindle::Ccw => format!("{:.0} CCW", s.rpm),
+        };
+        let coolant = if s.flood {
+            "flood"
+        } else if s.mist {
+            "mist"
+        } else {
+            "off"
+        };
+        ui.columns(4, |cols| {
+            stat(&mut cols[0], "Feed", &format!("{:.0}", s.velocity));
+            stat(&mut cols[1], "Spindle", &spindle);
+            stat(&mut cols[2], "Coolant", coolant);
             stat(
-                ui,
-                "Spindle",
-                &match s.spindle {
-                    Spindle::Off => "off".to_string(),
-                    Spindle::Cw => format!("{:.0} rpm CW", s.rpm),
-                    Spindle::Ccw => format!("{:.0} rpm CCW", s.rpm),
-                },
-            );
-        });
-        ui.horizontal(|ui| {
-            stat(
-                ui,
-                "Coolant",
-                if s.flood {
-                    "flood"
-                } else if s.mist {
-                    "mist"
-                } else {
-                    "off"
-                },
-            );
-            stat(
-                ui,
+                &mut cols[3],
                 "Probe",
                 if s.probe_active { "touching" } else { "clear" },
             );
@@ -457,7 +438,6 @@ impl App {
                 }
             }
         });
-        ui.add_space(6.0);
         let mut speed = self.snap.jog_speed * 100.0;
         ui.horizontal(|ui| {
             ui.label(RichText::new("Speed").color(MUTED));
@@ -472,9 +452,9 @@ impl App {
                 self.machine.send(Command::SetJogSpeed(speed / 100.0));
             }
         });
-        ui.add_space(8.0);
+        ui.add_space(4.0);
 
-        let size = Vec2::new(64.0, 44.0);
+        let size = Vec2::new(64.0, 38.0);
         let mut pad = |ui: &mut egui::Ui, label: &str, axis: usize, positive: bool| {
             let r = ui.add_enabled(
                 ready,
@@ -492,7 +472,7 @@ impl App {
             }
         };
         egui::Grid::new("jogpad")
-            .spacing(Vec2::new(8.0, 8.0))
+            .spacing(Vec2::new(8.0, 6.0))
             .show(ui, |ui| {
                 ui.label("");
                 pad(ui, "Y+", 1, true);
@@ -644,7 +624,7 @@ impl App {
                     self.machine.send(Command::Probe(machine::ProbeJob::ToolTouchOff));
                 }
             });
-            ui.add_space(6.0);
+            ui.add_space(4.0);
         }
         ui.horizontal(|ui| {
             let can_start = matches!(s.mode, Mode::Idle)
@@ -734,8 +714,11 @@ impl App {
                         edit.request_focus();
                     }
                 });
+                // Fixed height so a long log can't push the rest of the window around.
                 ScrollArea::vertical()
-                    .max_height(54.0)
+                    .max_height(36.0)
+                    .min_scrolled_height(36.0)
+                    .auto_shrink([false, true])
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
                         for msg in s
@@ -784,6 +767,9 @@ fn apply_theme(ctx: &egui::Context) {
     }
     style.spacing.button_padding = Vec2::new(12.0, 6.0);
     style.spacing.item_spacing = Vec2::new(8.0, 6.0);
+    // Solid, always-visible scrollbars: thin floating ones are hard to find on a small screen.
+    style.spacing.scroll = egui::style::ScrollStyle::solid();
+    style.spacing.scroll.bar_width = 12.0;
     style
         .text_styles
         .insert(egui::TextStyle::Body, FontId::proportional(15.0));
@@ -832,12 +818,12 @@ fn stat(ui: &mut egui::Ui, label: &str, value: &str) {
     egui::Frame::new()
         .fill(RAISED)
         .corner_radius(CornerRadius::same(6))
-        .inner_margin(Margin::symmetric(10, 6))
+        .inner_margin(Margin::symmetric(6, 4))
         .show(ui, |ui| {
-            ui.set_min_width(148.0);
+            ui.set_width(ui.available_width());
             ui.vertical(|ui| {
-                ui.label(RichText::new(label).size(11.5).color(MUTED));
-                ui.label(RichText::new(value).size(15.0).color(TEXT));
+                ui.label(RichText::new(label).size(11.0).color(MUTED));
+                ui.label(RichText::new(value).size(13.0).color(TEXT));
             });
         });
 }

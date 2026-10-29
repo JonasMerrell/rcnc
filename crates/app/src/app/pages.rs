@@ -69,7 +69,7 @@ impl App {
                     ui.label(RichText::new(format!("T{n}")).strong().color(if current { GREEN } else { TEXT }));
                     changed |= num(ui, &mut t.diameter, 0.01, " mm");
                     changed |= num(ui, &mut t.length, 0.01, " mm");
-                    changed |= ui.add(egui::TextEdit::singleline(&mut t.description).desired_width(140.0)).changed();
+                    changed |= ui.add(egui::TextEdit::singleline(&mut t.description).desired_width(240.0)).changed();
                     if ui.small_button("Remove").clicked() {
                         self.machine.send(Command::SetTool(*n, None));
                     } else if changed {
@@ -150,51 +150,51 @@ impl App {
                 self.machine.send(Command::Probe(job));
             }
         };
-        section_title(ui, "Tool");
-        run(ui, "Touch off tool on setter", ProbeJob::ToolTouchOff, Vec2::new(220.0, 36.0));
-        ui.add_space(8.0);
-        section_title(ui, "Work");
-        let b = Vec2::new(72.0, 30.0);
-        ui.horizontal(|ui| {
-            run(ui, "Z surface", ProbeJob::ZSurface, Vec2::new(100.0, 30.0));
-            run(ui, "Bore", ProbeJob::BoreCentre, b);
-            run(ui, "Boss", ProbeJob::BossCentre, b);
-        });
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Edge").color(MUTED));
-            run(ui, "X+", ProbeJob::Edge { axis: 0, positive: true }, b);
-            run(ui, "X−", ProbeJob::Edge { axis: 0, positive: false }, b);
-            run(ui, "Y+", ProbeJob::Edge { axis: 1, positive: true }, b);
-            run(ui, "Y−", ProbeJob::Edge { axis: 1, positive: false }, b);
-        });
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Corner").color(MUTED));
-            // Named by which corner of the part it is (front = -Y). The probe starts
-            // diagonally outside it, so it probes toward the part.
-            let b = Vec2::new(88.0, 30.0);
-            run(ui, "Front left", ProbeJob::Corner { x_positive: true, y_positive: true }, b);
-            run(ui, "Front right", ProbeJob::Corner { x_positive: false, y_positive: true }, b);
-        });
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Corner").color(PANEL));
-            let b = Vec2::new(88.0, 30.0);
-            run(ui, "Back left", ProbeJob::Corner { x_positive: true, y_positive: false }, b);
-            run(ui, "Back right", ProbeJob::Corner { x_positive: false, y_positive: false }, b);
-        });
-        ui.label(
-            RichText::new(
-                "Edge: start beside the part, above it, within the clearance. Corner: start diagonally off it. \
-                 Bore: start inside at probing height. Boss: start above its middle.",
-            )
-            .size(12.0)
-            .color(MUTED),
-        );
-        ui.add_space(8.0);
-
         let mut c = s.config.clone();
         let p = &mut c.probing;
         let mut changed = false;
-        ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+        // One scroll area for the page so the setter settings are reachable on small screens.
+        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            section_title(ui, "Tool");
+            run(ui, "Touch off tool on setter", ProbeJob::ToolTouchOff, Vec2::new(220.0, 36.0));
+            ui.add_space(8.0);
+            section_title(ui, "Work");
+            let b = Vec2::new(72.0, 30.0);
+            ui.horizontal(|ui| {
+                run(ui, "Z surface", ProbeJob::ZSurface, Vec2::new(100.0, 30.0));
+                run(ui, "Bore", ProbeJob::BoreCentre, b);
+                run(ui, "Boss", ProbeJob::BossCentre, b);
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Edge").color(MUTED));
+                run(ui, "X+", ProbeJob::Edge { axis: 0, positive: true }, b);
+                run(ui, "X−", ProbeJob::Edge { axis: 0, positive: false }, b);
+                run(ui, "Y+", ProbeJob::Edge { axis: 1, positive: true }, b);
+                run(ui, "Y−", ProbeJob::Edge { axis: 1, positive: false }, b);
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Corner").color(MUTED));
+                // Named by which corner of the part it is (front = -Y). The probe starts
+                // diagonally outside it, so it probes toward the part.
+                let b = Vec2::new(88.0, 30.0);
+                run(ui, "Front left", ProbeJob::Corner { x_positive: true, y_positive: true }, b);
+                run(ui, "Front right", ProbeJob::Corner { x_positive: false, y_positive: true }, b);
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Corner").color(PANEL));
+                let b = Vec2::new(88.0, 30.0);
+                run(ui, "Back left", ProbeJob::Corner { x_positive: true, y_positive: false }, b);
+                run(ui, "Back right", ProbeJob::Corner { x_positive: false, y_positive: false }, b);
+            });
+            ui.label(
+                RichText::new(
+                    "Edge: start beside the part, above it, within the clearance. Corner: start diagonally off it. \
+                     Bore: start inside at probing height. Boss: start above its middle.",
+                )
+                .size(12.0)
+                .color(MUTED),
+            );
+            ui.add_space(8.0);
             changed |= ui.checkbox(&mut p.auto_zero, "Set work zero at the result").changed();
             egui::Grid::new("probe-settings").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
                 changed |= labelled(ui, "Search feed", &mut p.fast_feed, 1.0, " mm/min");
@@ -234,22 +234,37 @@ impl App {
     pub(super) fn settings_page(&mut self, ui: &mut egui::Ui) {
         let s = self.snap.clone();
         let idle = matches!(s.mode, Mode::Idle | Mode::EStop | Mode::Disconnected | Mode::Alarm);
+        let draft = self.draft.config.get_or_insert_with(|| s.config.clone());
+        let dirty = *draft != s.config;
+        let (mut apply, mut revert, mut import, mut dismiss) = (false, false, false, false);
+        // Buttons first, so they can't be pushed off the bottom by the import summary.
         ui.horizontal(|ui| {
             section_title(ui, "Machine settings");
-            if ui.button("Import Mach3 profile…").clicked() {
-                self.import_profile(&s.config);
+            import = ui.button("Import Mach3 profile…").clicked();
+            apply = ui.add_enabled(dirty && idle, Button::new("Apply")).clicked();
+            revert = ui.add_enabled(dirty, Button::new("Revert")).clicked();
+            if dirty && !idle {
+                ui.label(RichText::new("Stop the machine to apply").color(MUTED));
             }
         });
-        if !self.draft.import_notes.is_empty() {
-            egui::Frame::new().fill(RAISED).inner_margin(8).corner_radius(6).show(ui, |ui| {
-                ui.label(RichText::new("Imported; check, then Apply").color(AMBER).strong());
-                for n in &self.draft.import_notes {
-                    ui.label(RichText::new(n).size(12.0));
-                }
-            });
-        }
-        let draft = self.draft.config.get_or_insert_with(|| s.config.clone());
-        ScrollArea::vertical().auto_shrink([false, false]).max_height(ui.available_height() - 44.0).show(ui, |ui| {
+        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            if !self.draft.import_notes.is_empty() {
+                egui::Frame::new().fill(RAISED).inner_margin(8).corner_radius(6).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let (text, color) = if dirty {
+                            ("Imported: check the values below, then Apply", AMBER)
+                        } else {
+                            ("Imported: matches the current settings, nothing to apply", GREEN)
+                        };
+                        ui.label(RichText::new(text).color(color).strong());
+                        dismiss = ui.small_button("Dismiss").clicked();
+                    });
+                    for n in &self.draft.import_notes {
+                        ui.label(RichText::new(n).size(12.0));
+                    }
+                });
+                ui.add_space(6.0);
+            }
             egui::Grid::new("axes").num_columns(7).striped(true).spacing([8.0, 4.0]).show(ui, |ui| {
                 for h in ["", "Steps/mm", "mm/s", "mm/s²", "Min", "Max", "Home"] {
                     ui.label(RichText::new(h).color(MUTED).strong());
@@ -286,17 +301,16 @@ impl App {
                 .color(MUTED),
             );
         });
-        let dirty = *draft != s.config;
-        let (mut apply, mut revert) = (false, false);
-        ui.horizontal(|ui| {
-            apply = ui.add_enabled(dirty && idle, Button::new("Apply")).clicked();
-            revert = ui.add_enabled(dirty, Button::new("Revert")).clicked();
-            if dirty && !idle {
-                ui.label(RichText::new("Stop the machine to apply").color(MUTED));
-            }
-        });
+        if import {
+            self.import_profile(&s.config);
+        }
+        if dismiss {
+            self.draft.import_notes.clear();
+        }
         if apply {
-            self.machine.send(Command::SetConfig(Box::new(draft.clone())));
+            if let Some(c) = self.draft.config.clone() {
+                self.machine.send(Command::SetConfig(Box::new(c)));
+            }
             self.draft.import_notes.clear();
         }
         if revert {
