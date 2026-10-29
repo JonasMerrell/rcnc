@@ -61,7 +61,7 @@
 
 Source: static analysis of `BL-UsbMach-100-V325.dll` (SHA256 `FB308109…FDDD79`; the vendor DLL and disassembly
 dumps are not redistributed here). 32-bit MSVC DLL, image base 0x10000000. Capture decoders are in `tools/`
-(`decode.py`, `diffio.py`, `segments.py`), USB captures of Mach3 driving the board in `captures/`.
+(`decode.py`, `diffio.py`, `segments.py`). Raw USB captures are kept out of the repo (they record the whole USB bus); the frames that matter are reproduced as golden tests in `crates/blueskyt/src/protocol.rs`.
 
 Confidence key: **H** = read directly from code, **M** = strong inference from how the value is used,
 **L** = guess / needs the USB capture to confirm.
