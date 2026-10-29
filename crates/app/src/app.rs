@@ -10,6 +10,9 @@ use machine::{Command, ControllerHandle, Mode, Snapshot};
 
 use crate::preview::{self, Camera, Toolpath};
 
+mod pages;
+use pages::{SettingsDraft, Tab};
+
 mod palette {
     use eframe::egui::Color32;
     pub const BG: Color32 = Color32::from_rgb(0x15, 0x17, 0x1c);
@@ -45,6 +48,8 @@ pub struct App {
     mdi_history: Vec<String>,
     mdi_cursor: Option<usize>,
     follow_line: bool,
+    tab: Tab,
+    draft: SettingsDraft,
 }
 
 impl App {
@@ -65,6 +70,8 @@ impl App {
             mdi_history: Vec::new(),
             mdi_cursor: None,
             follow_line: true,
+            tab: Tab::Program,
+            draft: SettingsDraft::default(),
         }
     }
 
@@ -184,7 +191,23 @@ impl eframe::App for App {
             .default_width(380.0)
             .min_width(280.0)
             .frame(panel_frame().inner_margin(Margin::same(14)))
-            .show(ctx, |ui| self.program(ui));
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    for (tab, label) in Tab::ALL {
+                        if ui.selectable_label(self.tab == tab, label).clicked() {
+                            self.tab = tab;
+                        }
+                    }
+                });
+                ui.separator();
+                match self.tab {
+                    Tab::Program => self.program(ui),
+                    Tab::Tools => self.tools_page(ui),
+                    Tab::Offsets => self.offsets_page(ui),
+                    Tab::Probe => self.probe_page(ui),
+                    Tab::Settings => self.settings_page(ui),
+                }
+            });
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG).inner_margin(Margin::same(10)))
             .show(ctx, |ui| self.preview(ui));
@@ -576,6 +599,19 @@ impl App {
 
     fn controls(&mut self, ui: &mut egui::Ui) {
         let s = self.snap.clone();
+        if let (Mode::Running, Some(msg)) = (s.mode, &s.paused) {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(msg).color(AMBER).strong().size(15.0));
+                if ui
+                    .add_enabled(!s.probe_active, Button::new("Touch off tool"))
+                    .on_hover_text("Measure the loaded tool on the tool setter and set work Z")
+                    .clicked()
+                {
+                    self.machine.send(Command::Probe(machine::ProbeJob::ToolTouchOff));
+                }
+            });
+            ui.add_space(6.0);
+        }
         ui.horizontal(|ui| {
             let can_start = matches!(s.mode, Mode::Idle)
                 || (s.mode == Mode::Running && (s.hold || s.paused.is_some()));

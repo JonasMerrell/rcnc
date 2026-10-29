@@ -431,11 +431,23 @@ impl Controller {
             self.info("Stop the machine before changing settings");
             return;
         }
+        if config == self.config {
+            return;
+        }
         let pos = self.machine_position();
+        // The board takes axis and pin settings at connect time.
+        let reconnect = config.axes != self.config.axes
+            || config.probe != self.config.probe
+            || config.estop != self.config.estop;
+        let (feed, rapid) = (self.generator.feed_override, self.generator.rapid_override);
         self.config = config;
         self.generator = Generator::new(self.config.clone(), self.backend.segment_period(), pos);
-        self.info("Settings applied");
-        if self.mode != Mode::Disconnected {
+        self.generator.feed_override = feed;
+        self.generator.rapid_override = rapid;
+        if reconnect {
+            self.info("Settings applied");
+        }
+        if reconnect && self.mode != Mode::Disconnected {
             // The board takes axis settings at connect time.
             self.backend.disconnect();
             self.mode = Mode::Disconnected;
@@ -1407,7 +1419,7 @@ mod tests {
         let mut config = MachineConfig::dmc2();
         config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, ..Default::default() };
         c.handle(Command::SetConfig(Box::new(config)));
-        c.handle(Command::Reset);
+        assert_eq!(c.mode(), Mode::Idle, "probe settings don't need a reconnect");
         c.handle(Command::Probe(ProbeJob::ToolTouchOff));
         run_until_idle(&mut c, &clock, 60.0);
         let s = c.snapshot();
@@ -1423,7 +1435,7 @@ mod tests {
         let mut config = MachineConfig::dmc2();
         config.probing.boss_size = 60.0;
         c.handle(Command::SetConfig(Box::new(config)));
-        c.handle(Command::Reset);
+        assert_eq!(c.mode(), Mode::Idle, "probe settings don't need a reconnect");
         c.handle(Command::Mdi("G53 G0 X128 Y133".into()));
         run_until_idle(&mut c, &clock, 5.0);
         c.handle(Command::Probe(ProbeJob::BossCentre));
@@ -1450,7 +1462,7 @@ mod tests {
         let mut config = MachineConfig::dmc2();
         config.probing.max_distance = 2.0;
         c.handle(Command::SetConfig(Box::new(config)));
-        c.handle(Command::Reset);
+        assert_eq!(c.mode(), Mode::Idle, "probe settings don't need a reconnect");
         c.handle(Command::Probe(ProbeJob::ZSurface));
         run_until_idle(&mut c, &clock, 30.0);
         let s = c.snapshot();
@@ -1566,7 +1578,7 @@ mod tests {
         config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, ..Default::default() };
         config.tool_change_touch_off = true;
         c.handle(Command::SetConfig(Box::new(config)));
-        c.handle(Command::Reset);
+        assert_eq!(c.mode(), Mode::Idle, "probe settings don't need a reconnect");
         c.handle(Command::Load {
             name: "t".into(),
             text: "T3 M6\nG0 Z20\nM30".into(),
