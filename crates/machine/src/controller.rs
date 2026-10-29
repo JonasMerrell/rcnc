@@ -214,12 +214,39 @@ impl Controller {
             Ok(None) => {}
             Err(e) => self.info(format!("Could not load saved state: {e}")),
         }
+        self.load_macros(&dir.join("macros"));
         self.persist = Some(Persist {
             dir,
             state: self.saved_state(),
             config: self.config.clone(),
             checked_at: f64::NEG_INFINITY,
         });
+    }
+
+    /// Load user M-code macros: files named like `M150.nc` (or `.ngc`, `.txt`)
+    /// hold G-code that runs in place of that M-code.
+    pub fn load_macros(&mut self, dir: &std::path::Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        self.interp.macros.clear();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let code = stem.strip_prefix(['M', 'm']).and_then(|n| n.parse::<u32>().ok());
+            if let (Some(code), true) = (code, matches!(ext.as_str(), "nc" | "ngc" | "txt")) {
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => {
+                        self.interp.macros.insert(code, text);
+                    }
+                    Err(e) => self.info(format!("Could not read macro {}: {e}", path.display())),
+                }
+            }
+        }
+        if !self.interp.macros.is_empty() {
+            let mut codes: Vec<_> = self.interp.macros.keys().map(|c| format!("M{c}")).collect();
+            codes.sort();
+            self.info(format!("Macros: {}", codes.join(", ")));
+        }
     }
 
     fn saved_state(&self) -> SavedState {
@@ -821,7 +848,14 @@ impl Controller {
         let wait = match op {
             Op::Dwell { seconds } => Wait::Until(now + seconds),
             Op::Spindle { state, rpm } => {
+                if state == Spindle::Ccw && !self.config.spindle_reversible {
+                    return self.raise(format!(
+                        "line {}: this spindle can't run in reverse (M4 or G84 tapping); use a tapping head",
+                        line + 1
+                    ));
+                }
                 let was_on = self.outputs.spindle_on;
+                let reversing = was_on && state != Spindle::Off && self.outputs.spindle_ccw != (state == Spindle::Ccw);
                 let rpm = rpm * self.spindle_override;
                 self.outputs.spindle_on = state != Spindle::Off;
                 self.outputs.spindle_ccw = state == Spindle::Ccw;
@@ -830,6 +864,9 @@ impl Controller {
                 match (was_on, self.outputs.spindle_on) {
                     (false, true) => Wait::Until(now + self.config.spindle_spin_up),
                     (true, false) => Wait::Until(now + self.config.spindle_spin_down),
+                    _ if reversing => {
+                        Wait::Until(now + self.config.spindle_spin_down + self.config.spindle_spin_up)
+                    }
                     _ => Wait::None,
                 }
             }

@@ -80,6 +80,9 @@ pub struct MachineConfig {
     pub spindle_max_rpm: f64,
     pub spindle_spin_up: f64,
     pub spindle_spin_down: f64,
+    /// The spindle can run counter-clockwise (M4, G84 tapping). The DMC2's
+    /// VFD has one run output, so M4 would silently run it clockwise.
+    pub spindle_reversible: bool,
 }
 
 impl Default for MachineConfig {
@@ -141,6 +144,7 @@ impl MachineConfig {
             spindle_max_rpm: 25000.0,
             spindle_spin_up: 12.0,
             spindle_spin_down: 1.0,
+            spindle_reversible: false,
         }
     }
 
