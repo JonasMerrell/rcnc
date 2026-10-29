@@ -1,17 +1,20 @@
 //! The machine controller: owns the backend, interpreter and planner, runs
 //! programs, MDI, jogging and homing, and publishes a snapshot for the UI.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
-use gcode::{Axes, Interpreter, MotionMode, Op, Plane, Spindle, Units, AXIS_LETTERS};
+use gcode::params::num;
+use gcode::{Axes, Interpreter, MotionMode, Op, Plane, Spindle, Tool, Units, AXIS_LETTERS};
 
 use crate::backend::{AxisMove, Backend, BoardInfo, Outputs, Status};
 use crate::config::MachineConfig;
 use crate::planner::{op_to_moves, Generator};
 use crate::sim::Clock;
+use crate::store::{self, SavedState};
 
 /// Segments kept queued on the board while streaming (240 ms at 4 ms).
 /// Small enough that feed hold reacts quickly, large enough to ride out USB hiccups.
@@ -48,6 +51,12 @@ pub enum Command {
     SetSpindleOverride(f64),
     SetJogSpeed(f64),
     SetSoftLimits(bool),
+    /// Add or replace a tool-table entry; `None` removes it.
+    SetTool(u32, Option<Tool>),
+    /// Set the offsets of a work coordinate system (0 = G54 .. 5 = G59).
+    SetWorkOffset { system: usize, offset: Axes },
+    /// Replace the machine configuration. Reconnects the board so it gets the new settings.
+    SetConfig(Box<MachineConfig>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +104,18 @@ pub struct Snapshot {
     pub alarm: Option<String>,
     pub log: VecDeque<String>,
     pub config: MachineConfig,
+    pub tools: BTreeMap<u32, Tool>,
+    /// G54..G59 offsets.
+    pub work_offsets: [Axes; 6],
+    pub g92: Axes,
+}
+
+/// Where and what was last saved, so only changes get written.
+struct Persist {
+    dir: PathBuf,
+    state: SavedState,
+    config: MachineConfig,
+    checked_at: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -147,6 +168,7 @@ pub struct Controller {
     log: VecDeque<String>,
     program_name: Option<String>,
     program: Arc<String>,
+    persist: Option<Persist>,
 }
 
 impl Controller {
@@ -171,6 +193,70 @@ impl Controller {
             log: VecDeque::new(),
             program_name: None,
             program: Arc::new(String::new()),
+            persist: None,
+        }
+    }
+
+    /// Keep the tool table, work offsets and machine config in `dir`, loading
+    /// what was saved there before. Changes are written within a second.
+    pub fn persist_to(&mut self, dir: PathBuf) {
+        match store::load::<SavedState>(&dir.join("state.json")) {
+            Ok(Some(state)) => {
+                self.interp.tools = state.tools.clone();
+                for (&k, &v) in &state.params {
+                    if num::PERSISTENT.contains(&k) {
+                        self.interp.params.set(k, v);
+                    }
+                }
+                self.interp.state.coord_system =
+                    (self.interp.params.get(num::COORD_SYSTEM) as usize).clamp(1, 6) - 1;
+            }
+            Ok(None) => {}
+            Err(e) => self.info(format!("Could not load saved state: {e}")),
+        }
+        self.persist = Some(Persist {
+            dir,
+            state: self.saved_state(),
+            config: self.config.clone(),
+            checked_at: f64::NEG_INFINITY,
+        });
+    }
+
+    fn saved_state(&self) -> SavedState {
+        SavedState {
+            tools: self.interp.tools.clone(),
+            params: self.interp.params.persistent(),
+        }
+    }
+
+    fn autosave(&mut self) {
+        let now = self.clock.now();
+        let Some(p) = &self.persist else { return };
+        if now - p.checked_at < 1.0 {
+            return;
+        }
+        let state = self.saved_state();
+        let mut errors = Vec::new();
+        let p = self.persist.as_mut().unwrap();
+        p.checked_at = now;
+        if state != p.state {
+            match store::save(&p.dir.join("state.json"), &state) {
+                Ok(()) => p.state = state,
+                Err(e) => errors.push(e),
+            }
+        }
+        if self.config != p.config {
+            match store::save(&p.dir.join("machine.json"), &self.config) {
+                Ok(()) => p.config = self.config.clone(),
+                Err(e) => errors.push(e),
+            }
+        }
+        if !errors.is_empty() {
+            // Retry later rather than flooding the log every second.
+            p.checked_at = now + 30.0;
+        }
+        for e in errors {
+            self.info(format!("Could not save settings: {e}"));
         }
     }
 
@@ -268,6 +354,43 @@ impl Controller {
             Command::SetSpindleOverride(v) => self.spindle_override = v.clamp(0.0, 2.0),
             Command::SetJogSpeed(v) => self.config.jog_speed = v.clamp(0.001, 1.0),
             Command::SetSoftLimits(on) => self.config.soft_limits = on,
+            Command::SetTool(n, tool) => {
+                match tool {
+                    Some(t) => {
+                        // Keep an active G43 offset in step with an edited length.
+                        if n == self.interp.state.tool && self.interp.state.tool_length_offset != 0.0 {
+                            self.interp.state.tool_length_offset = t.length;
+                        }
+                        self.interp.tools.insert(n, t);
+                    }
+                    None => {
+                        self.interp.tools.remove(&n);
+                    }
+                }
+            }
+            Command::SetWorkOffset { system, offset } => {
+                if system < 6 && !matches!(self.mode, Mode::Running) {
+                    self.interp.params.set_coord_offset(system, offset);
+                }
+            }
+            Command::SetConfig(config) => self.set_config(*config),
+        }
+    }
+
+    fn set_config(&mut self, config: MachineConfig) {
+        if matches!(self.mode, Mode::Running | Mode::Homing | Mode::Jog) {
+            self.info("Stop the machine before changing settings");
+            return;
+        }
+        let pos = self.machine_position();
+        self.config = config;
+        self.generator = Generator::new(self.config.clone(), self.backend.segment_period(), pos);
+        self.info("Settings applied");
+        if self.mode != Mode::Disconnected {
+            // The board takes axis settings at connect time.
+            self.backend.disconnect();
+            self.mode = Mode::Disconnected;
+            self.connect();
         }
     }
 
@@ -536,6 +659,7 @@ impl Controller {
 
     /// One controller cycle. Call every few milliseconds.
     pub fn update(&mut self) {
+        self.autosave();
         if self.mode == Mode::Disconnected {
             return;
         }
@@ -880,6 +1004,9 @@ impl Controller {
             alarm: self.alarm.clone(),
             log: self.log.clone(),
             config: self.config.clone(),
+            tools: self.interp.tools.clone(),
+            work_offsets: std::array::from_fn(|i| self.interp.params.coord_offset(i)),
+            g92: self.interp.params.get_axes(num::G92),
         }
     }
 }
@@ -973,6 +1100,32 @@ mod tests {
             }
             assert!(t < max_seconds, "still {:?} after {max_seconds}s", c.mode());
         }
+    }
+
+    #[test]
+    fn saves_and_restores_tools_and_offsets() {
+        let dir = std::env::temp_dir().join(format!("rcnc-persist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut c, clock) = setup();
+        c.persist_to(dir.clone());
+        c.handle(Command::SetTool(4, Some(Tool { length: 12.5, diameter: 6.0, description: "6 mm".into() })));
+        c.handle(Command::Mdi("G10 L2 P2 X10 Y20 Z-30".into()));
+        run_until_idle(&mut c, &clock, 1.0);
+        c.handle(Command::Mdi("G55".into()));
+        run_until_idle(&mut c, &clock, 1.0);
+        c.handle(Command::SetJogSpeed(0.5));
+        clock.advance(2.0);
+        c.update();
+
+        let (mut d, _) = setup();
+        d.persist_to(dir.clone());
+        let s = d.snapshot();
+        assert_eq!(s.tools[&4].diameter, 6.0);
+        assert_eq!(s.work_offsets[1][..3], [10.0, 20.0, -30.0]);
+        assert_eq!(s.coord_system, 1);
+        let config: MachineConfig = store::load(&dir.join("machine.json")).unwrap().unwrap();
+        assert_eq!(config.jog_speed, 0.5);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

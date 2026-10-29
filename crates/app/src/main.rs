@@ -9,6 +9,7 @@ use blueskyt::protocol::BoardSetup;
 use blueskyt::BlueSkyBoard;
 use machine::backend::Backend;
 use machine::sim::{RealClock, Simulator};
+use machine::store;
 use machine::{Controller, ControllerHandle, MachineConfig};
 
 const USAGE: &str = "usage: cnc-controller [--sim] [program.nc]
@@ -39,7 +40,19 @@ fn main() -> eframe::Result<()> {
     } else {
         Box::new(BlueSkyBoard::new(BoardSetup::dmc2()))
     };
-    let controller = Controller::new(MachineConfig::dmc2(), backend, clock);
+    // Settings, tool table and work offsets live in the data folder and are
+    // saved as they change; the DMC2 defaults apply until something is saved.
+    let data = store::data_dir();
+    let config = match store::load::<MachineConfig>(&data.join("machine.json")) {
+        Ok(Some(c)) => c,
+        Ok(None) => MachineConfig::dmc2(),
+        Err(e) => {
+            eprintln!("ignoring unreadable settings ({e}); using DMC2 defaults");
+            MachineConfig::dmc2()
+        }
+    };
+    let mut controller = Controller::new(config, backend, clock);
+    controller.persist_to(data);
     let handle = ControllerHandle::spawn(controller);
     if let Some(path) = program {
         match std::fs::read(&path) {
@@ -58,7 +71,7 @@ fn main() -> eframe::Result<()> {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("CNC Controller")
             .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([960.0, 600.0])
+            .with_min_inner_size([800.0, 480.0])
             .with_maximized(true),
         ..Default::default()
     };

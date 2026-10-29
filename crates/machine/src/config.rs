@@ -1,9 +1,10 @@
 //! Machine configuration: axes, inputs, homing, spindle.
 
 use gcode::Axes;
+use serde::{Deserialize, Serialize};
 
 /// A board input pin and the level that means "active".
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Input {
     pub pin: u8,
     pub active_low: bool,
@@ -21,7 +22,7 @@ impl Input {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AxisConfig {
     pub enabled: bool,
     pub steps_per_unit: f64,
@@ -57,7 +58,8 @@ impl AxisConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MachineConfig {
     pub name: String,
     pub axes: [AxisConfig; 6],
@@ -78,6 +80,12 @@ pub struct MachineConfig {
     pub spindle_max_rpm: f64,
     pub spindle_spin_up: f64,
     pub spindle_spin_down: f64,
+}
+
+impl Default for MachineConfig {
+    fn default() -> Self {
+        MachineConfig::dmc2()
+    }
 }
 
 impl MachineConfig {

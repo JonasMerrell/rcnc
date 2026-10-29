@@ -6,6 +6,7 @@ pub mod config;
 pub mod controller;
 pub mod planner;
 pub mod sim;
+pub mod store;
 
 pub use backend::{Backend, BoardInfo, Outputs, Status};
 pub use config::{AxisConfig, Input, MachineConfig};

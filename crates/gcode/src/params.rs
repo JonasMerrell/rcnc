@@ -18,6 +18,9 @@ pub mod num {
     pub const G54: u32 = 5221;
     /// Stride between coordinate systems.
     pub const COORD_STRIDE: u32 = 20;
+    /// Parameters kept between sessions: G28/G30 homes, G92, the active
+    /// coordinate system and G54..G59 (as in RS274/NGC's parameter file).
+    pub const PERSISTENT: std::ops::RangeInclusive<u32> = 5161..=5390;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -47,6 +50,15 @@ impl Params {
     /// Offsets of work coordinate system `index` (0 = G54 .. 5 = G59).
     pub fn coord_offset(&self, index: usize) -> [f64; 6] {
         self.get_axes(num::G54 + num::COORD_STRIDE * index as u32)
+    }
+
+    /// Non-zero parameters in the persistent range, for saving.
+    pub fn persistent(&self) -> std::collections::BTreeMap<u32, f64> {
+        self.values
+            .iter()
+            .filter(|(k, v)| num::PERSISTENT.contains(k) && **v != 0.0)
+            .map(|(k, v)| (*k, *v))
+            .collect()
     }
 
     pub fn set_coord_offset(&mut self, index: usize, values: [f64; 6]) {

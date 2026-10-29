@@ -55,10 +55,12 @@ pub enum MotionMode {
     Off,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Tool {
     pub length: f64,
     pub diameter: f64,
+    pub description: String,
 }
 
 /// One machine operation. All positions are machine coordinates.
@@ -642,10 +644,7 @@ impl Interpreter {
         match l {
             1 | 10 => {
                 let tool = p as u32;
-                let mut entry = self.tools.get(&tool).copied().unwrap_or(Tool {
-                    length: 0.0,
-                    diameter: 0.0,
-                });
+                let mut entry = self.tools.get(&tool).cloned().unwrap_or_default();
                 if let Some(z) = b.get('Z') {
                     let z = self.linear(z);
                     entry.length = if l == 1 {
