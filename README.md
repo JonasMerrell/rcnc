@@ -10,7 +10,7 @@ The app drives the DMC2's stock BlueSkyT USB board directly, using a protocol ma
 | --- | --- |
 | G-code interpreter (Mach3 dialect) | Done: G0–G3, R and IJK arcs, helix, G4, G10 L1/L2/L10/L20, G17–19, G20/21, G28/G30, G31/G38.2, G40/G41/G42 cutter compensation, G43/G49, G53, G54–G59, G73/G81/G82/G83/G84/G85/G89, G90/91, G90.1/91.1, G92, G93/94, G98/99, M0–M9, M30, M98/M99 subprograms, user M-code macros, `#` parameters, `[ ]` expressions |
 | Motion planner | Done: 4 ms step segments, per-axis velocity and acceleration limits, exact stop (Mach3 "CV off") or blended corners, feed hold, feed and rapid override |
-| Controller | Done: homing (seek, back off, clear), jog, MDI, program run, G31 probing, tool change with optional touch-off, spindle and coolant, E-stop input |
+| Controller | Done: homing (seek, back off, clear), jog, MDI, program run, G31 probing, guided tool change (moves to a change position, shows the next tool, measures it on the tool setter and goes back), spindle and coolant, E-stop input |
 | Probing | Done: tool touch-off on the tool setter, Z surface, X/Y edges, outside corners, bore and boss centres (two-pass, guarded moves, auto zero) |
 | Settings | Done: tool table, work offsets and settings saved between runs; Mach3 profile import |
 | CAM link | Done: CAD/CAM apps can send programs and tools to rcnc on `127.0.0.1:7350`; opened files reload when they change |

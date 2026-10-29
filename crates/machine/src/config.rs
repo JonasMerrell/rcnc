@@ -84,8 +84,33 @@ pub struct MachineConfig {
     /// VFD has one run output, so M4 would silently run it clockwise.
     pub spindle_reversible: bool,
     pub probing: crate::probing::ProbeSettings,
-    /// After a tool change (M6) and Cycle Start, touch the new tool off on the tool setter.
+    /// At a tool change (M6), measure the new tool on the tool setter.
     pub tool_change_touch_off: bool,
+    pub tool_change: ToolChangeSettings,
+}
+
+/// Guided tool change at M6.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolChangeSettings {
+    /// Stop the spindle, move to the change position, wait for the new tool,
+    /// measure it and go back. Off: just pause at M6, like Mach3.
+    pub guided: bool,
+    /// Machine X/Y to change tools at.
+    pub x: f64,
+    pub y: f64,
+    /// Machine Z to travel at, and to change tools at.
+    pub z: f64,
+    /// Go back to where the tool change started, with the spindle and coolant as they were.
+    pub return_to_start: bool,
+}
+
+impl Default for ToolChangeSettings {
+    fn default() -> Self {
+        // Next to the tool setter, at the top of Z.
+        let setter = crate::probing::ToolSetter::default();
+        ToolChangeSettings { guided: true, x: setter.x, y: setter.y, z: 0.0, return_to_start: true }
+    }
 }
 
 impl Default for MachineConfig {
@@ -149,7 +174,8 @@ impl MachineConfig {
             spindle_spin_down: 1.0,
             spindle_reversible: false,
             probing: Default::default(),
-            tool_change_touch_off: false,
+            tool_change_touch_off: true,
+            tool_change: Default::default(),
         }
     }
 

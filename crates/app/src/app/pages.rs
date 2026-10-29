@@ -33,6 +33,8 @@ pub(super) struct SettingsDraft {
     pub config: Option<MachineConfig>,
     pub import_notes: Vec<String>,
     pub new_tool: u32,
+    /// Tool number for "Change tool".
+    pub change_to: u32,
 }
 
 fn num(ui: &mut egui::Ui, v: &mut f64, speed: f64, suffix: &str) -> bool {
@@ -56,7 +58,7 @@ impl App {
                 .color(MUTED),
         );
         ui.add_space(6.0);
-        ScrollArea::vertical().auto_shrink([false, true]).max_height(ui.available_height() - 40.0).show(ui, |ui| {
+        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             egui::Grid::new("tools").num_columns(5).striped(true).spacing([10.0, 6.0]).show(ui, |ui| {
                 for h in ["Tool", "Diameter", "Length", "Description", ""] {
                     ui.label(RichText::new(h).color(MUTED).strong());
@@ -78,18 +80,73 @@ impl App {
                     ui.end_row();
                 }
             });
+            ui.horizontal(|ui| {
+                let next = s.tools.keys().max().map(|m| m + 1).unwrap_or(1);
+                if self.draft.new_tool == 0 || s.tools.contains_key(&self.draft.new_tool) {
+                    self.draft.new_tool = next;
+                }
+                ui.label("T");
+                ui.add(DragValue::new(&mut self.draft.new_tool).range(1..=999));
+                if ui.button("Add tool").clicked() {
+                    self.machine.send(Command::SetTool(self.draft.new_tool, Some(Tool::default())));
+                }
+            });
+            ui.add_space(12.0);
+            self.tool_change_settings(ui);
         });
+    }
+
+    fn tool_change_settings(&mut self, ui: &mut egui::Ui) {
+        let s = self.snap.clone();
+        let idle = s.mode == Mode::Idle;
+        section_title(ui, "Tool change (M6)");
         ui.horizontal(|ui| {
-            let next = s.tools.keys().max().map(|m| m + 1).unwrap_or(1);
-            if self.draft.new_tool == 0 || s.tools.contains_key(&self.draft.new_tool) {
-                self.draft.new_tool = next;
+            if self.draft.change_to == 0 {
+                self.draft.change_to = s.tools.keys().copied().find(|&n| n != s.tool).unwrap_or(1);
             }
-            ui.label("T");
-            ui.add(DragValue::new(&mut self.draft.new_tool).range(1..=999));
-            if ui.button("Add tool").clicked() {
-                self.machine.send(Command::SetTool(self.draft.new_tool, Some(Tool::default())));
+            ui.label("Load T");
+            ui.add(DragValue::new(&mut self.draft.change_to).range(1..=999));
+            if ui
+                .add_enabled(idle, Button::new("Change tool"))
+                .on_hover_text("Runs the tool change now, as M6 would in a program")
+                .clicked()
+            {
+                self.machine.send(Command::Mdi(format!("T{} M6", self.draft.change_to)));
             }
         });
+        ui.add_space(4.0);
+        let mut c = s.config.clone();
+        let mut changed = false;
+        let t = &mut c.tool_change;
+        changed |= ui
+            .checkbox(&mut t.guided, "Guided: move to the change position, measure, and go back")
+            .changed();
+        ui.add_enabled_ui(t.guided, |ui| {
+            egui::Grid::new("tool-change").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                changed |= labelled(ui, "Change position X", &mut t.x, 0.5, " mm");
+                changed |= labelled(ui, "Change position Y", &mut t.y, 0.5, " mm");
+                changed |= labelled(ui, "Safe Z", &mut t.z, 0.5, " mm");
+            });
+            if ui
+                .button("Use the current X/Y")
+                .on_hover_text("Jog to where changing tools is easiest, then press this")
+                .clicked()
+            {
+                t.x = s.machine[0];
+                t.y = s.machine[1];
+                changed = true;
+            }
+            changed |= ui.checkbox(&mut t.return_to_start, "Go back to where the change started").changed();
+        });
+        changed |= ui.checkbox(&mut c.tool_change_touch_off, "Measure the new tool on the tool setter").changed();
+        ui.label(
+            RichText::new("Positions are machine coordinates. The spindle stops during the change and restarts on the way back.")
+                .size(12.0)
+                .color(MUTED),
+        );
+        if changed && idle {
+            self.machine.send(Command::SetConfig(Box::new(c)));
+        }
     }
 
     pub(super) fn offsets_page(&mut self, ui: &mut egui::Ui) {
@@ -222,9 +279,6 @@ impl App {
                 t.y = s.machine[1];
                 changed = true;
             }
-            changed |= ui
-                .checkbox(&mut c.tool_change_touch_off, "At M6, Cycle Start touches the new tool off")
-                .changed();
         });
         if changed && s.mode == Mode::Idle {
             self.machine.send(Command::SetConfig(Box::new(c)));

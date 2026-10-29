@@ -17,6 +17,9 @@ use crate::sim::Clock;
 use crate::probing::{self, ProbeJob, Routine, Step};
 use crate::store::{self, SavedState};
 
+mod toolchange;
+pub use toolchange::{ToolChangeStage, ToolChangeView};
+
 /// Segments kept queued on the board while streaming (240 ms at 4 ms).
 /// Small enough that feed hold reacts quickly, large enough to ride out USB hiccups.
 const TARGET_QUEUE: usize = 60;
@@ -60,6 +63,9 @@ pub enum Command {
     SetConfig(Box<MachineConfig>),
     /// Run a probing routine. Allowed when idle, or while a program is paused (e.g. at M6).
     Probe(ProbeJob),
+    /// The new tool is loaded: carry on with the tool change, measuring it
+    /// or not (`None`: as set up).
+    ToolChangeContinue { measure: Option<bool> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +118,8 @@ pub struct Snapshot {
     /// G54..G59 offsets.
     pub work_offsets: [Axes; 6],
     pub g92: Axes,
+    /// The guided tool change in progress.
+    pub tool_change: Option<ToolChangeView>,
 }
 
 /// Where and what was last saved, so only changes get written.
@@ -139,6 +147,8 @@ enum Wait {
     /// Paused for a tool change; Cycle Start may touch the new tool off first.
     ToolChange(String),
     Probe,
+    /// A routine (the guided tool change) runs in its place.
+    Routine,
 }
 
 enum Source {
@@ -180,6 +190,13 @@ pub struct Controller {
     routine_move: Option<(RoutineMove, f64)>,
     /// Mode to return to when the routine ends.
     routine_return: Mode,
+    /// The routine waits for the operator.
+    routine_waiting: bool,
+    /// The routine waits until this time.
+    routine_until: Option<f64>,
+    tool_change: Option<toolchange::ToolChange>,
+    /// The tool in the spindle, as far as the controller knows (0: unknown).
+    loaded_tool: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -215,6 +232,10 @@ impl Controller {
             routine: None,
             routine_move: None,
             routine_return: Mode::Idle,
+            routine_waiting: false,
+            routine_until: None,
+            tool_change: None,
+            loaded_tool: 0,
         }
     }
 
@@ -323,8 +344,17 @@ impl Controller {
         }
     }
 
+    fn clear_routine(&mut self) {
+        self.routine = None;
+        self.routine_move = None;
+        self.routine_waiting = false;
+        self.routine_until = None;
+        self.tool_change = None;
+    }
+
     fn raise(&mut self, msg: impl Into<String>) {
         let msg = msg.into();
+        self.clear_routine();
         let _ = self.backend.abort();
         self.generator.clear();
         self.exec = None;
@@ -423,6 +453,7 @@ impl Controller {
             }
             Command::SetConfig(config) => self.set_config(*config),
             Command::Probe(job) => self.start_probe(job),
+            Command::ToolChangeContinue { measure } => self.tool_change_continue(measure),
         }
     }
 
@@ -481,6 +512,15 @@ impl Controller {
 
     /// Advance the probing routine; called when the board is idle.
     fn routine_step(&mut self) {
+        if self.routine_waiting {
+            return;
+        }
+        if let Some(t) = self.routine_until {
+            if self.clock.now() < t {
+                return;
+            }
+            self.routine_until = None;
+        }
         let pos = self.machine_position();
         let probe_hit = self.config.probe.is_some_and(|p| p.is_active(self.status.inputs));
         if let Some((m, target)) = self.routine_move.take() {
@@ -521,6 +561,17 @@ impl Controller {
                         }
                         Err(e) => return self.end_routine(Err(e)),
                     }
+                }
+                Step::Wait(seconds) => {
+                    if seconds > 0.0 {
+                        self.routine_until = Some(self.clock.now() + seconds);
+                        return;
+                    }
+                    continue;
+                }
+                Step::Operator => {
+                    self.routine_waiting = true;
+                    return;
                 }
                 Step::MoveTo { axis, to, feed, guarded } => (axis, to, feed, guarded),
                 Step::MoveBy { axis, by, feed, guarded } => (axis, pos[axis] + by, feed, guarded),
@@ -580,10 +631,12 @@ impl Controller {
     fn end_routine(&mut self, result: Result<(), String>) {
         let name = self.routine.take().map(|r| r.name).unwrap_or_default();
         self.routine_move = None;
+        self.routine_waiting = false;
+        self.routine_until = None;
         let _ = self.backend.abort();
         self.sync_position();
         self.mode = self.routine_return;
-        match result {
+        match &result {
             Ok(()) => self.info(format!("{name} done")),
             Err(e) => {
                 // Never let a program carry on after a failed touch-off.
@@ -595,6 +648,7 @@ impl Controller {
                 self.info(format!("{name} stopped: {e}"));
             }
         }
+        self.end_tool_change(&result);
     }
 
     /// Set the active work offset so machine position `machine` on `axis` reads `work`.
@@ -653,8 +707,7 @@ impl Controller {
     }
 
     fn enter_estop(&mut self, why: &str) {
-        self.routine = None;
-        self.routine_move = None;
+        self.clear_routine();
         let _ = self.backend.abort();
         self.generator.clear();
         self.exec = None;
@@ -823,6 +876,7 @@ impl Controller {
 
     fn cycle_start(&mut self) {
         match self.mode {
+            Mode::Probing => self.tool_change_continue(None),
             Mode::Running => {
                 self.generator.hold = false;
                 let tool_change = matches!(&self.exec, Some(Exec { wait: Wait::ToolChange(_), .. }));
@@ -862,8 +916,7 @@ impl Controller {
     }
 
     fn stop(&mut self) {
-        self.routine = None;
-        self.routine_move = None;
+        self.clear_routine();
         match self.mode {
             Mode::Running | Mode::Jog | Mode::Homing | Mode::Probing => {
                 let _ = self.backend.abort();
@@ -1077,6 +1130,15 @@ impl Controller {
                 self.outputs.mist = mist;
                 Wait::None
             }
+            Op::ToolChange { tool } if self.config.tool_change.guided && self.config.probe.is_some() => {
+                if tool == self.loaded_tool {
+                    self.info(format!("T{tool} is already loaded"));
+                    Wait::None
+                } else {
+                    self.start_tool_change(tool);
+                    return;
+                }
+            }
             Op::ToolChange { tool } => Wait::ToolChange(if self.config.tool_change_touch_off {
                 format!("Load tool {tool}, then press Cycle Start to touch it off and carry on")
             } else {
@@ -1248,6 +1310,7 @@ impl Controller {
             tools: self.interp.tools.clone(),
             work_offsets: std::array::from_fn(|i| self.interp.params.coord_offset(i)),
             g92: self.interp.params.get_axes(num::G92),
+            tool_change: self.tool_change.as_ref().map(|t| t.view.clone()),
         }
     }
 }
@@ -1562,6 +1625,10 @@ mod tests {
     #[test]
     fn tool_change_pauses_until_cycle_start() {
         let (mut c, clock) = setup();
+        let mut config = MachineConfig::dmc2();
+        config.tool_change.guided = false;
+        config.tool_change_touch_off = false;
+        c.handle(Command::SetConfig(Box::new(config)));
         c.handle(Command::Load {
             name: "t".into(),
             text: "T2 M6\nG91 G0 X1\nM30".into(),
@@ -1583,6 +1650,7 @@ mod tests {
         let mut config = MachineConfig::dmc2();
         config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, ..Default::default() };
         config.tool_change_touch_off = true;
+        config.tool_change.guided = false;
         c.handle(Command::SetConfig(Box::new(config)));
         assert_eq!(c.mode(), Mode::Idle, "probe settings don't need a reconnect");
         c.handle(Command::Load {
@@ -1602,6 +1670,87 @@ mod tests {
         assert!(s.log.iter().any(|l| l.contains("Tool touch-off done")), "{:?}", s.log);
         // Work Z20 is 20 - 13.31 above the setter top at machine Z30.
         assert!(close(s.machine[2], 30.0 + 20.0 - 13.31), "{:?}", s.machine);
+    }
+
+    fn guided_setup() -> (Controller, Arc<ManualClock>) {
+        let (mut c, clock) = probing_setup();
+        let mut config = MachineConfig::dmc2();
+        config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, ..Default::default() };
+        config.tool_change = crate::config::ToolChangeSettings { x: 10.0, y: 20.0, z: 120.0, ..Default::default() };
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.handle(Command::Mdi("G53 G0 X130 Y130 Z110".into()));
+        run_until_idle(&mut c, &clock, 5.0);
+        c.handle(Command::Load {
+            name: "t".into(),
+            text: "S1000 M3 M8\nT3 M6\nG4 P0.1\nM5 M9\nT3 M6\nM30".into(),
+        });
+        c.handle(Command::CycleStart);
+        // Run up to the operator wait: spindle down, lift, move over.
+        for _ in 0..20_000 {
+            clock.advance(0.005);
+            c.update();
+            if c.snapshot().tool_change.is_some_and(|t| t.stage == ToolChangeStage::Loading) {
+                break;
+            }
+        }
+        (c, clock)
+    }
+
+    #[test]
+    fn guided_tool_change_measures_and_returns() {
+        let (mut c, clock) = guided_setup();
+        let s = c.snapshot();
+        let t = s.tool_change.clone().expect("tool change running");
+        assert_eq!((t.from, t.to, t.measure), (0, 3, true));
+        assert!(close(s.machine[0], 10.0) && close(s.machine[1], 20.0) && close(s.machine[2], 120.0), "{:?}", s.machine);
+        assert_eq!(s.spindle, Spindle::Off, "spindle stops for the change");
+        assert!(!s.flood);
+
+        c.handle(Command::CycleStart);
+        // Back at the start before the program carries on: spindle and coolant on again.
+        for _ in 0..40_000 {
+            clock.advance(0.005);
+            c.update();
+            if c.snapshot().tool_change.is_none() {
+                break;
+            }
+        }
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Tool touched off")), "{:?}", s.log);
+        assert!(s.log.iter().any(|l| l.contains("Tool 3 loaded")), "{:?}", s.log);
+        assert!(close(s.machine[0], 130.0) && close(s.machine[1], 130.0), "{:?}", s.machine);
+        // The setter (sim table) at machine Z30 reads 13.31, so work Z110 is now machine Z126.69.
+        assert!(close(s.work[2], 110.0), "{:?}", s.work);
+        assert!(close(s.machine[2], 126.69), "{:?}", s.machine);
+        assert_eq!(s.mode, Mode::Running);
+        assert!(s.flood);
+
+        run_until_idle(&mut c, &clock, 30.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("T3 is already loaded")), "{:?}", s.log);
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?}", s.log);
+    }
+
+    #[test]
+    fn guided_tool_change_can_skip_measuring_and_be_stopped() {
+        let (mut c, clock) = guided_setup();
+        c.handle(Command::ToolChangeContinue { measure: Some(false) });
+        for _ in 0..40_000 {
+            clock.advance(0.005);
+            c.update();
+            if c.snapshot().tool_change.is_none() {
+                break;
+            }
+        }
+        let s = c.snapshot();
+        assert!(!s.log.iter().any(|l| l.contains("Tool touched off")), "{:?}", s.log);
+        assert!(close(s.machine[2], 110.0), "{:?}", s.machine);
+
+        let (mut c, _clock) = guided_setup();
+        c.handle(Command::Stop);
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Idle);
+        assert!(s.tool_change.is_none());
     }
 
     #[test]

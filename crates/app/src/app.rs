@@ -11,6 +11,7 @@ use machine::{Command, ControllerHandle, Mode, Snapshot};
 use crate::preview::{self, Camera, Toolpath};
 
 mod pages;
+mod toolchange;
 use pages::{SettingsDraft, Tab};
 
 mod palette {
@@ -53,6 +54,8 @@ pub struct App {
     /// The opened file and its modification time, to reload it when the CAM rewrites it.
     program_file: Option<(std::path::PathBuf, Option<std::time::SystemTime>)>,
     file_checked: f64,
+    /// The tool change window's "measure" checkbox.
+    tc_measure: Option<bool>,
 }
 
 impl App {
@@ -77,6 +80,7 @@ impl App {
             draft: SettingsDraft::default(),
             program_file: None,
             file_checked: 0.0,
+            tc_measure: None,
         }
     }
 
@@ -245,6 +249,7 @@ impl eframe::App for App {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG).inner_margin(Margin::same(10)))
             .show(ctx, |ui| self.preview(ui));
+        self.tool_change_window(ctx);
 
         ctx.request_repaint_after(std::time::Duration::from_millis(33));
     }
@@ -267,6 +272,7 @@ impl App {
                 Mode::Running if s.paused.is_some() => ("PAUSED", AMBER),
                 Mode::Running if s.hold => ("FEED HOLD", AMBER),
                 Mode::Running => ("RUNNING", GREEN),
+                Mode::Probing if s.tool_change.is_some() => ("TOOL CHANGE", AMBER),
                 Mode::Probing => ("PROBING", ACCENT),
                 Mode::Alarm => ("ALARM", RED),
             };
@@ -628,7 +634,8 @@ impl App {
         }
         ui.horizontal(|ui| {
             let can_start = matches!(s.mode, Mode::Idle)
-                || (s.mode == Mode::Running && (s.hold || s.paused.is_some()));
+                || (s.mode == Mode::Running && (s.hold || s.paused.is_some()))
+                || s.tool_change.as_ref().is_some_and(|t| t.stage == machine::ToolChangeStage::Loading);
             if ui
                 .add_enabled(
                     can_start,

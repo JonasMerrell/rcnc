@@ -135,6 +135,10 @@ pub(crate) enum Step {
     /// Probe along one axis; an error if nothing is touched. `record` keeps the touch position.
     Probe { axis: usize, by: f64, feed: f64, record: bool },
     Then(Then),
+    /// Wait this many seconds (spindle spin-up/down).
+    Wait(f64),
+    /// Wait for the operator (Cycle Start, or a tool change's Continue).
+    Operator,
 }
 
 pub(crate) struct Routine {
