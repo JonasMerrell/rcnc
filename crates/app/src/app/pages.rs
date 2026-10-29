@@ -69,7 +69,7 @@ impl App {
                     ui.label(RichText::new(format!("T{n}")).strong().color(if current { GREEN } else { TEXT }));
                     changed |= num(ui, &mut t.diameter, 0.01, " mm");
                     changed |= num(ui, &mut t.length, 0.01, " mm");
-                    changed |= ui.add(egui::TextEdit::singleline(&mut t.description).desired_width(240.0)).changed();
+                    changed |= ui.add_sized([240.0, 22.0], egui::TextEdit::singleline(&mut t.description)).changed();
                     if ui.small_button("Remove").clicked() {
                         self.machine.send(Command::SetTool(*n, None));
                     } else if changed {

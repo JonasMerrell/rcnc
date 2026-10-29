@@ -714,10 +714,12 @@ impl App {
                         edit.request_focus();
                     }
                 });
-                // Fixed height so a long log can't push the rest of the window around.
+                // Exactly two lines, so a long log can't push the rest of the window around.
+                let row = ui.fonts_mut(|f| f.row_height(&FontId::proportional(12.0)));
+                let height = 2.0 * row + ui.spacing().item_spacing.y;
                 ScrollArea::vertical()
-                    .max_height(36.0)
-                    .min_scrolled_height(36.0)
+                    .max_height(height)
+                    .min_scrolled_height(height)
                     .auto_shrink([false, true])
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
