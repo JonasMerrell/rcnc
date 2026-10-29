@@ -50,6 +50,9 @@ pub struct App {
     follow_line: bool,
     tab: Tab,
     draft: SettingsDraft,
+    /// The opened file and its modification time, to reload it when the CAM rewrites it.
+    program_file: Option<(std::path::PathBuf, Option<std::time::SystemTime>)>,
+    file_checked: f64,
 }
 
 impl App {
@@ -72,6 +75,46 @@ impl App {
             follow_line: true,
             tab: Tab::Program,
             draft: SettingsDraft::default(),
+            program_file: None,
+            file_checked: 0.0,
+        }
+    }
+
+    pub fn with_program(mut self, program: Option<std::path::PathBuf>) -> Self {
+        if let Some(p) = program {
+            self.load_path(p);
+        }
+        self
+    }
+
+    fn load_path(&mut self, path: std::path::PathBuf) {
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.machine.send(Command::Load { name, text });
+                let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+                self.program_file = Some((path, modified));
+            }
+            Err(e) => eprintln!("could not read {}: {e}", path.display()),
+        }
+    }
+
+    /// Reload the opened file when it changes on disk (the CAM posted it
+    /// again), unless the machine is busy; then it waits until it's idle.
+    fn watch_file(&mut self, now: f64) {
+        if now - self.file_checked < 1.0 || !matches!(self.snap.mode, Mode::Idle | Mode::EStop | Mode::Disconnected) {
+            return;
+        }
+        self.file_checked = now;
+        let Some((path, seen)) = &self.program_file else { return };
+        let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        if modified.is_some() && modified != *seen {
+            let path = path.clone();
+            self.load_path(path);
         }
     }
 
@@ -86,17 +129,7 @@ impl App {
         else {
             return;
         };
-        match std::fs::read(&path) {
-            Ok(bytes) => {
-                let text = String::from_utf8_lossy(&bytes).into_owned();
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                self.machine.send(Command::Load { name, text });
-            }
-            Err(e) => eprintln!("could not read {}: {e}", path.display()),
-        }
+        self.load_path(path);
     }
 
     fn keyboard(&mut self, ctx: &egui::Context) {
@@ -163,6 +196,7 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.snap = self.machine.snapshot();
+        self.watch_file(ctx.input(|i| i.time));
         if Self::program_id(&self.snap) != self.toolpath_for {
             self.toolpath = Toolpath::build(&self.snap.program);
             self.toolpath_for = Self::program_id(&self.snap);

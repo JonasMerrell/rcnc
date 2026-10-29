@@ -1,6 +1,7 @@
 //! CNC controller desktop app: a modern replacement for Mach3.
 
 mod app;
+mod link;
 mod preview;
 
 use std::sync::Arc;
@@ -54,19 +55,7 @@ fn main() -> eframe::Result<()> {
     let mut controller = Controller::new(config, backend, clock);
     controller.persist_to(data);
     let handle = ControllerHandle::spawn(controller);
-    if let Some(path) = program {
-        match std::fs::read(&path) {
-            Ok(bytes) => handle.send(machine::Command::Load {
-                name: std::path::Path::new(&path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or(path.clone()),
-                text: String::from_utf8_lossy(&bytes).into_owned(),
-            }),
-            Err(e) => eprintln!("could not read {path}: {e}"),
-        }
-    }
-
+    link::spawn(handle.clone());
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("CNC Controller")
@@ -78,6 +67,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "CNC Controller",
         options,
-        Box::new(|cc| Ok(Box::new(app::App::new(cc, handle)))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, handle).with_program(program.map(Into::into))))),
     )
 }

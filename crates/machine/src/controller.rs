@@ -373,8 +373,8 @@ impl Controller {
             Command::Home(axis) => self.start_homing(axis),
             Command::Mdi(text) => self.mdi(&text),
             Command::Load { name, text } => {
-                if matches!(self.mode, Mode::Running | Mode::Homing) {
-                    self.info("Cannot load a program while running");
+                if matches!(self.mode, Mode::Running | Mode::Homing | Mode::Probing) {
+                    self.info(format!("Cannot load {name} while the machine is running"));
                     return;
                 }
                 self.interp.load(&text);
@@ -1283,6 +1283,7 @@ fn modal_text(interp: &Interpreter) -> String {
 }
 
 /// Handle to a controller running on its own thread.
+#[derive(Clone)]
 pub struct ControllerHandle {
     tx: mpsc::Sender<Command>,
     snapshot: Arc<RwLock<Snapshot>>,

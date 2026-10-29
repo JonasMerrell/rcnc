@@ -648,6 +648,8 @@ dependencies = [
  "cnc-machine",
  "eframe",
  "rfd",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
