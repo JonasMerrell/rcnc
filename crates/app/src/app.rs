@@ -39,6 +39,8 @@ pub struct App {
     camera: Camera,
     jog_step: JogStep,
     jog_held: Option<(usize, bool)>,
+    /// The held jog came from a key, so the on-screen pad must not end it.
+    jog_by_key: bool,
     mdi: String,
     mdi_history: Vec<String>,
     mdi_cursor: Option<usize>,
@@ -58,6 +60,7 @@ impl App {
             camera: Camera::default(),
             jog_step: JogStep::Continuous,
             jog_held: None,
+            jog_by_key: false,
             mdi: String::new(),
             mdi_history: Vec::new(),
             mdi_cursor: None,
@@ -104,8 +107,13 @@ impl App {
         ];
         let input = ctx.input(|i| i.clone());
         for (key, axis, positive) in keys {
-            if input.key_pressed(key) && self.jog_held.is_none() {
+            // Ignore OS key repeat: a held key is one continuous jog, or one step.
+            let first_press = input.events.iter().any(|e| {
+                matches!(e, egui::Event::Key { key: k, pressed: true, repeat: false, .. } if *k == key)
+            });
+            if first_press && self.jog_held.is_none() {
                 self.start_jog(axis, positive);
+                self.jog_by_key = self.jog_held.is_some();
             }
             if input.key_released(key) && self.jog_held == Some((axis, positive)) {
                 self.stop_jog();
@@ -138,6 +146,7 @@ impl App {
     }
 
     fn stop_jog(&mut self) {
+        self.jog_by_key = false;
         if self.jog_held.take().is_some() {
             self.machine.send(Command::JogStop);
         }
@@ -417,7 +426,7 @@ impl App {
                 if self.jog_step == JogStep::Continuous {
                     self.start_jog(axis, positive);
                 }
-            } else if self.jog_held == Some((axis, positive)) && !r.is_pointer_button_down_on() {
+            } else if self.jog_held == Some((axis, positive)) && !self.jog_by_key && !r.is_pointer_button_down_on() {
                 self.stop_jog();
             }
             if r.clicked() && self.jog_step != JogStep::Continuous {

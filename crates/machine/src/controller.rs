@@ -390,7 +390,7 @@ impl Controller {
             HomePhase::Seek => AxisMove {
                 axis,
                 positive: toward,
-                steps: 9_999_999,
+                steps: 999_999,
                 velocity: seek,
                 acceleration: a.acceleration * spu,
                 stop_on: Some((input, true)),
@@ -407,7 +407,7 @@ impl Controller {
                 axis,
                 positive: !toward,
                 steps: (self.config.home_clearance * spu).round() as u32,
-                velocity: seek / 10.0,
+                velocity: seek,
                 acceleration: a.acceleration * spu,
                 stop_on: None,
             },
@@ -539,6 +539,10 @@ impl Controller {
         if self.mode == Mode::Disconnected {
             return;
         }
+        let off = self.interp.program_offset();
+        let machine = self.machine_position();
+        self.outputs.work_position = std::array::from_fn(|i| machine[i] - off[i]);
+        self.outputs.feed_rate = self.interp.state.feed;
         match self.backend.poll(&self.outputs) {
             Ok(s) => self.status = s,
             Err(e) => {

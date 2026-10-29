@@ -101,6 +101,14 @@ impl MachineConfig {
             home_speed: 0.2,
             home_position,
         };
+        let rotary_unused = || AxisConfig {
+            steps_per_unit: 640.0,
+            max_velocity: 25.0,
+            acceleration: 120.0,
+            soft_min: -100.0,
+            soft_max: 100.0,
+            ..AxisConfig::disabled()
+        };
         MachineConfig {
             name: "Shariff DMC2".into(),
             axes: [
@@ -108,8 +116,9 @@ impl MachineConfig {
                 // Home position from the capture (102400 steps); check against the Mach3 DRO.
                 linear(133.3, Input::new(13, true), true, 512.0, 0.0, 195.0),
                 linear(100.0, Input::new(15, true), true, 8.0, -130.0, 0.0),
-                AxisConfig::disabled(),
-                AxisConfig::disabled(),
+                // A and B are disabled, but the profile keeps settings for them.
+                rotary_unused(),
+                rotary_unused(),
                 AxisConfig::disabled(),
             ],
             probe: Some(Input::new(11, true)),

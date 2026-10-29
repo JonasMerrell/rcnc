@@ -12,5 +12,6 @@ path = "src/main.rs"
 [dependencies]
 gcode.workspace = true
 machine.workspace = true
+blueskyt.workspace = true
 eframe = "0.33"
 rfd = "0.15"
