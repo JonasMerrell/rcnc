@@ -1754,6 +1754,36 @@ mod tests {
     }
 
     #[test]
+    fn runs_cad_rust_app_output() {
+        // Straight from cad-rust-app's rcnc post: G53 retracts, T1 M6, arcs, dwell, coolant.
+        let (mut c, clock) = setup();
+        let mut config = MachineConfig::dmc2();
+        config.tool_change.guided = false;
+        config.tool_change_touch_off = false;
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.handle(Command::Load {
+            name: "cad".into(),
+            text: include_str!("../../../examples/cad-rust-app-contour.nc").into(),
+        });
+        c.handle(Command::CycleStart);
+        for _ in 0..200_000 {
+            clock.advance(0.005);
+            c.update();
+            let s = c.snapshot();
+            if s.paused.is_some() {
+                c.handle(Command::CycleStart);
+            }
+            if s.mode != Mode::Running {
+                break;
+            }
+        }
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Idle, "{:?}", s.log);
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?}", s.log);
+        assert_eq!(s.tool, 1);
+    }
+
+    #[test]
     fn reset_while_jogging_enters_estop() {
         let (mut c, clock) = setup();
         c.handle(Command::Jog {
