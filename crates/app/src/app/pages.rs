@@ -58,7 +58,7 @@ impl App {
                 .color(MUTED),
         );
         ui.add_space(6.0);
-        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
             egui::Grid::new("tools").num_columns(5).striped(true).spacing([10.0, 6.0]).show(ui, |ui| {
                 for h in ["Tool", "Diameter", "Length", "Description", ""] {
                     ui.label(RichText::new(h).color(MUTED).strong());
@@ -71,7 +71,7 @@ impl App {
                     ui.label(RichText::new(format!("T{n}")).strong().color(if current { GREEN } else { TEXT }));
                     changed |= num(ui, &mut t.diameter, 0.01, " mm");
                     changed |= num(ui, &mut t.length, 0.01, " mm");
-                    changed |= ui.add_sized([240.0, 22.0], egui::TextEdit::singleline(&mut t.description)).changed();
+                    changed |= ui.add_sized([200.0, 22.0], egui::TextEdit::singleline(&mut t.description)).changed();
                     if ui.small_button("Remove").clicked() {
                         self.machine.send(Command::SetTool(*n, None));
                     } else if changed {

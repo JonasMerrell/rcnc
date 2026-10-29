@@ -225,12 +225,15 @@ impl eframe::App for App {
                     self.jog(ui);
                 });
             });
+        // Capped so the toolpath preview keeps some room on small screens.
+        let right_max = (ctx.content_rect().width() * 0.36).max(280.0);
         egui::SidePanel::right("program")
-            .default_width(380.0)
+            .default_width(380.0_f32.min(right_max))
+            .max_width(right_max)
             .min_width(280.0)
             .frame(panel_frame().inner_margin(Margin::same(14)))
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     for (tab, label) in Tab::ALL {
                         if ui.selectable_label(self.tab == tab, label).clicked() {
                             self.tab = tab;
@@ -309,7 +312,9 @@ impl App {
             }
             ui.add_space(12.0);
             pill(ui, &format!("G{}", 54 + s.coord_system));
-            pill(ui, &format!("T{}", s.tool));
+            // During a change the interpreter already has the new tool; show what's in the spindle.
+            let tool = s.tool_change.as_ref().map_or(s.tool, |t| t.from);
+            pill(ui, &format!("T{tool}"));
             pill(ui, &s.modal);
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

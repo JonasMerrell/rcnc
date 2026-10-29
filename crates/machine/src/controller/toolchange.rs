@@ -62,7 +62,8 @@ impl Controller {
         if spinning {
             steps.push_back(Step::Wait(self.config.spindle_spin_down));
         }
-        steps.extend([to(2, tc.z.max(start[2])), to(0, tc.x), to(1, tc.y), to(2, tc.z)]);
+        // Z only ever goes up: to the safe height first, then over.
+        steps.extend([to(2, tc.z.max(start[2])), to(0, tc.x), to(1, tc.y)]);
         steps.push_back(Step::Then(Box::new(move |c, _| {
             c.stage(ToolChangeStage::Loading);
             c.info(format!("Load tool {tool}, then press Continue (or Cycle Start)"));

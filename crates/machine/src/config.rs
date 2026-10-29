@@ -99,7 +99,7 @@ pub struct ToolChangeSettings {
     /// Machine X/Y to change tools at.
     pub x: f64,
     pub y: f64,
-    /// Machine Z to travel at, and to change tools at.
+    /// Lowest machine Z to travel and change tools at; Z is raised to it, never lowered.
     pub z: f64,
     /// Go back to where the tool change started, with the spindle and coolant as they were.
     pub return_to_start: bool,
