@@ -4,17 +4,32 @@ A modern replacement for Mach3, written in Rust. The first target machine is the
 
 ## Status
 
-The app drives the DMC2's stock BlueSkyT USB board directly, using a protocol mapped from the Mach3 plugin and from USB captures (see `docs/dmc2-protocol`). The driver matches Mach3's frames byte for byte in tests but has not yet moved the real machine. A built-in simulator is available with `--sim`.
+The app drives the DMC2's stock BlueSkyT USB board directly, using a protocol mapped from the Mach3 plugin and from USB captures (see `docs/dmc2-protocol`). The driver matches Mach3's frames byte for byte in tests and has jogged the real machine. A built-in simulator is available with `--sim`.
 
 | Part | State |
 | --- | --- |
-| G-code interpreter (Mach3 dialect) | Done: G0–G3, R and IJK arcs, helix, G4, G10 L1/L2/L10/L20, G17–19, G20/21, G28/G30, G31/G38.2, G43/G49, G53, G54–G59, G73/G81/G82/G83/G85/G89, G90/91, G90.1/91.1, G92, G93/94, G98/99, M0–M9, M30, M98/M99 subprograms, `#` parameters, `[ ]` expressions |
+| G-code interpreter (Mach3 dialect) | Done: G0–G3, R and IJK arcs, helix, G4, G10 L1/L2/L10/L20, G17–19, G20/21, G28/G30, G31/G38.2, G40/G41/G42 cutter compensation, G43/G49, G53, G54–G59, G73/G81/G82/G83/G84/G85/G89, G90/91, G90.1/91.1, G92, G93/94, G98/99, M0–M9, M30, M98/M99 subprograms, user M-code macros, `#` parameters, `[ ]` expressions |
 | Motion planner | Done: 4 ms step segments, per-axis velocity and acceleration limits, exact stop (Mach3 "CV off") or blended corners, feed hold, feed and rapid override |
-| Controller | Done: homing (seek, back off, clear), jog, MDI, program run, probing, tool-change pause, spindle and coolant, E-stop input |
-| Simulator | Done: behaves like the stock board (4 ms queue, single-axis moves that stop on an input, home switches, probe plate) |
-| Desktop UI (egui) | Done: DRO, jog, toolpath preview, program listing, cycle controls, overrides, MDI |
-| DMC2 stock board driver | Written and tested against captured frames; first runs on the machine pending |
-| Mach3 profile import, macros, tool table UI, probing wizards | Planned |
+| Controller | Done: homing (seek, back off, clear), jog, MDI, program run, G31 probing, guided tool change (moves to a change position, shows the next tool, measures it on the tool setter and goes back), spindle and coolant, E-stop input |
+| Probing | Done: tool touch-off on the tool setter, Z surface, X/Y edges, outside corners, bore and boss centres (two-pass, guarded moves, auto zero) |
+| Settings | Done: tool table, work offsets and settings saved between runs; Mach3 profile import |
+| CAM link | Done: CAD/CAM apps can send programs and tools to rcnc on `127.0.0.1:7350`; opened files reload when they change |
+| Simulator | Done: behaves like the stock board (4 ms queue, single-axis moves that stop on an input, home switches, probe plate and block) |
+| Desktop UI (egui) | Done: DRO, jog, toolpath preview, program listing, cycle controls, overrides, MDI, tool/offset/probe/settings tabs |
+| DMC2 stock board driver | Done: tested against captured frames; jogs the real machine |
+
+## Files
+
+Settings (`machine.json`), the tool table and work offsets (`state.json`) live in `%APPDATA%\rcnc` on Windows (`~/.config/rcnc` elsewhere) and are saved as they change. The simulator (`--sim`) keeps its own in a `sim` folder there. Put macros there as `macros/M<n>.nc`: plain G-code run in place of `M<n>`, with P and Q in `#1` and `#2`.
+
+## CAM link
+
+rcnc listens on `127.0.0.1:7350` for programs from a CAD/CAM app:
+
+- `POST /program` with JSON `{"name": "part.nc", "gcode": "...", "tools": [{"number": 1, "diameter": 6, "description": "6 mm flat"}]}` loads the program and sets those tools' diameters and descriptions (measured lengths are kept). It's refused while the machine runs.
+- `GET /status` returns `{"app": "rcnc", "mode": "Idle", "program": "part.nc"}`.
+
+cad-rust-app's **Send to rcnc** button uses this, with its rcnc (Mach3-dialect) post.
 
 ## Layout
 

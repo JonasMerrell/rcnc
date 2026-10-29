@@ -1,9 +1,10 @@
 //! Machine configuration: axes, inputs, homing, spindle.
 
 use gcode::Axes;
+use serde::{Deserialize, Serialize};
 
 /// A board input pin and the level that means "active".
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Input {
     pub pin: u8,
     pub active_low: bool,
@@ -21,7 +22,7 @@ impl Input {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AxisConfig {
     pub enabled: bool,
     pub steps_per_unit: f64,
@@ -57,7 +58,8 @@ impl AxisConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MachineConfig {
     pub name: String,
     pub axes: [AxisConfig; 6],
@@ -78,6 +80,43 @@ pub struct MachineConfig {
     pub spindle_max_rpm: f64,
     pub spindle_spin_up: f64,
     pub spindle_spin_down: f64,
+    /// The spindle can run counter-clockwise (M4, G84 tapping). The DMC2's
+    /// VFD has one run output, so M4 would silently run it clockwise.
+    pub spindle_reversible: bool,
+    pub probing: crate::probing::ProbeSettings,
+    /// At a tool change (M6), measure the new tool on the tool setter.
+    pub tool_change_touch_off: bool,
+    pub tool_change: ToolChangeSettings,
+}
+
+/// Guided tool change at M6.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolChangeSettings {
+    /// Stop the spindle, move to the change position, wait for the new tool,
+    /// measure it and go back. Off: just pause at M6, like Mach3.
+    pub guided: bool,
+    /// Machine X/Y to change tools at.
+    pub x: f64,
+    pub y: f64,
+    /// Lowest machine Z to travel and change tools at; Z is raised to it, never lowered.
+    pub z: f64,
+    /// Go back to where the tool change started, with the spindle and coolant as they were.
+    pub return_to_start: bool,
+}
+
+impl Default for ToolChangeSettings {
+    fn default() -> Self {
+        // Next to the tool setter, at the top of Z.
+        let setter = crate::probing::ToolSetter::default();
+        ToolChangeSettings { guided: true, x: setter.x, y: setter.y, z: 0.0, return_to_start: true }
+    }
+}
+
+impl Default for MachineConfig {
+    fn default() -> Self {
+        MachineConfig::dmc2()
+    }
 }
 
 impl MachineConfig {
@@ -133,6 +172,10 @@ impl MachineConfig {
             spindle_max_rpm: 25000.0,
             spindle_spin_up: 12.0,
             spindle_spin_down: 1.0,
+            spindle_reversible: false,
+            probing: Default::default(),
+            tool_change_touch_off: true,
+            tool_change: Default::default(),
         }
     }
 

@@ -10,3 +10,4 @@ name = "gcode"
 
 [dependencies]
 thiserror.workspace = true
+serde.workspace = true

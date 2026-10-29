@@ -4,6 +4,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use crate::comp::Comp;
+
 use crate::params::{num, Params};
 use crate::parse::{parse_line, Block};
 
@@ -55,10 +57,12 @@ pub enum MotionMode {
     Off,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Tool {
     pub length: f64,
     pub diameter: f64,
+    pub description: String,
 }
 
 /// One machine operation. All positions are machine coordinates.
@@ -151,6 +155,8 @@ pub struct ModalState {
     pub mist: bool,
     pub tool: u32,
     pub next_tool: u32,
+    /// 400, 410 or 420 for G40/G41/G42.
+    pub cutter_comp: u32,
     canned: CannedSticky,
 }
 
@@ -183,6 +189,7 @@ impl Default for ModalState {
             mist: false,
             tool: 0,
             next_tool: 0,
+            cutter_comp: 400,
             canned: CannedSticky::default(),
         }
     }
@@ -209,6 +216,12 @@ pub struct Interpreter {
     pub block_delete: bool,
     /// Honour M1 optional stop.
     pub optional_stop: bool,
+    /// User M-code macros: G-code run in place of `M<code>`, with P and Q in #1 and #2.
+    pub macros: HashMap<u32, String>,
+    macro_depth: u32,
+    comp: Option<Comp>,
+    /// Set by G40/G41/G42 on the current block: None = off, Some((left, radius)).
+    comp_change: Option<Option<(bool, f64)>>,
 }
 
 /// Arc endpoint radius mismatch that is still accepted, in mm.
@@ -236,6 +249,10 @@ impl Interpreter {
             tools: BTreeMap::new(),
             block_delete: true,
             optional_stop: true,
+            macros: HashMap::new(),
+            macro_depth: 0,
+            comp: None,
+            comp_change: None,
         }
     }
 
@@ -248,6 +265,9 @@ impl Interpreter {
     }
 
     pub fn rewind(&mut self) {
+        self.comp = None;
+        self.comp_change = None;
+        self.state.cutter_comp = 400;
         self.pc = 0;
         self.stack.clear();
         self.finished = false;
@@ -414,7 +434,32 @@ impl Interpreter {
         })
     }
 
+    /// Execute a block, then apply cutter compensation to its moves.
     fn execute(&mut self, b: &Block) -> Result<Vec<Op>, String> {
+        let before = self.position;
+        let ops = self.execute_raw(b)?;
+        let mut out = Vec::new();
+        if let Some(change) = self.comp_change.take() {
+            // G40, or a new G41/G42: finish the old compensation first.
+            let mut actual = before;
+            if let Some(mut comp) = self.comp.take() {
+                actual = comp.actual();
+                out.extend(comp.flush());
+            }
+            if let Some((left, radius)) = change {
+                if radius > 0.0 {
+                    self.comp = Some(Comp::new(left, radius, &before, &actual));
+                }
+            }
+        }
+        match &mut self.comp {
+            Some(comp) => out.extend(comp.process(ops)?),
+            None => out.extend(ops),
+        }
+        Ok(out)
+    }
+
+    fn execute_raw(&mut self, b: &Block) -> Result<Vec<Op>, String> {
         let mut ops = Vec::new();
         let gs: Vec<u32> = b.codes('G').collect();
         let ms: Vec<u32> = b.codes('M').collect();
@@ -506,9 +551,25 @@ impl Interpreter {
                 190 => self.state.plane = Plane::YZ,
                 200 => self.state.units = Units::Inch,
                 210 => self.state.units = Units::Mm,
-                400 => {}
+                400 => {
+                    self.state.cutter_comp = 400;
+                    self.comp_change = Some(None);
+                }
                 410 | 420 => {
-                    return Err("cutter radius compensation (G41/G42) is not supported yet".into())
+                    if self.state.plane != Plane::XY {
+                        return Err("cutter compensation needs the XY plane (G17)".into());
+                    }
+                    let d = b.get('D').map(|d| d as u32).unwrap_or(self.state.tool);
+                    let diameter = if d == 0 {
+                        0.0
+                    } else {
+                        self.tools
+                            .get(&d)
+                            .map(|t| t.diameter)
+                            .ok_or_else(|| format!("tool {d} is not in the tool table (needed for G41/G42 D{d})"))?
+                    };
+                    self.state.cutter_comp = *g;
+                    self.comp_change = Some(Some((*g == 410, diameter / 2.0)));
                 }
                 430 => {
                     let h = b.get('H').map(|h| h as u32).unwrap_or(self.state.tool);
@@ -580,7 +641,7 @@ impl Interpreter {
                 20 => MotionMode::ArcCw,
                 30 => MotionMode::ArcCcw,
                 310 | 382 => MotionMode::Probe,
-                730 | 810 | 820 | 830 | 850 | 890 => MotionMode::Canned(*g),
+                730 | 810 | 820 | 830 | 840 | 850 | 890 => MotionMode::Canned(*g),
                 800 => MotionMode::Off,
                 _ => continue,
             };
@@ -607,11 +668,17 @@ impl Interpreter {
                     self.end_program();
                     ops.push(Op::ProgramEnd);
                 }
-                m if m % 10 == 0 && !is_builtin_m(m / 10) => ops.push(Op::UserMCode {
-                    code: m / 10,
-                    p: b.get('P'),
-                    q: b.get('Q'),
-                }),
+                m if m % 10 == 0 && !is_builtin_m(m / 10) => {
+                    let code = m / 10;
+                    match self.macros.get(&code).cloned() {
+                        Some(text) => ops.extend(self.run_macro(code, &text, b)?),
+                        None => ops.push(Op::UserMCode {
+                            code,
+                            p: b.get('P'),
+                            q: b.get('Q'),
+                        }),
+                    }
+                }
                 _ => {}
             }
         }
@@ -636,16 +703,46 @@ impl Interpreter {
         self.state.mist = false;
     }
 
+    /// Expand a user M-code macro in place. Macros are straight-line G-code
+    /// (no subprograms) and may call other macros, up to a few levels deep.
+    fn run_macro(&mut self, code: u32, text: &str, b: &Block) -> Result<Vec<Op>, String> {
+        if self.macro_depth >= 8 {
+            return Err(format!("M{code}: macros nested too deeply"));
+        }
+        self.params.set(1, b.get('P').unwrap_or(0.0));
+        self.params.set(2, b.get('Q').unwrap_or(0.0));
+        self.macro_depth += 1;
+        let mut ops = Vec::new();
+        let mut result = Ok(());
+        for (i, line) in text.lines().enumerate() {
+            let step = parse_line(line, &self.params).and_then(|block| {
+                if block.block_delete && self.block_delete {
+                    return Ok(Vec::new());
+                }
+                if block.label.is_some() || block.codes('M').any(|m| matches!(m, 980 | 990 | 300 | 20)) {
+                    return Err("subprograms and program end are not allowed in macros".into());
+                }
+                self.execute_raw(&block)
+            });
+            match step {
+                Ok(o) => ops.extend(o),
+                Err(e) => {
+                    result = Err(format!("M{code} macro line {}: {e}", i + 1));
+                    break;
+                }
+            }
+        }
+        self.macro_depth -= 1;
+        result.map(|()| ops)
+    }
+
     fn g10(&mut self, b: &Block) -> Result<(), String> {
         let l = b.get('L').ok_or("G10 needs L")? as u32;
         let p = b.get('P').ok_or("G10 needs P")?;
         match l {
             1 | 10 => {
                 let tool = p as u32;
-                let mut entry = self.tools.get(&tool).copied().unwrap_or(Tool {
-                    length: 0.0,
-                    diameter: 0.0,
-                });
+                let mut entry = self.tools.get(&tool).cloned().unwrap_or_default();
                 if let Some(z) = b.get('Z') {
                     let z = self.linear(z);
                     entry.length = if l == 1 {
@@ -822,6 +919,9 @@ impl Interpreter {
     }
 
     fn canned(&mut self, b: &Block, code: u32) -> Result<Vec<Op>, String> {
+        if self.comp.is_some() || matches!(self.comp_change, Some(Some(_))) {
+            return Err("canned cycles can't run with cutter compensation on (G40 first)".into());
+        }
         if self.state.plane != Plane::XY {
             return Err("canned cycles are only supported in the XY plane (G17)".into());
         }
@@ -915,6 +1015,17 @@ impl Interpreter {
                         }
                     }
                 }
+                840 => {
+                    // Tapping: feed in, reverse the spindle, feed out, restore it.
+                    let rpm = self.state.rpm;
+                    feed_to(&mut pos, bottom, &mut ops);
+                    if st.p > 0.0 {
+                        ops.push(Op::Dwell { seconds: st.p });
+                    }
+                    ops.push(Op::Spindle { state: Spindle::Ccw, rpm });
+                    feed_to(&mut pos, r_z, &mut ops);
+                    ops.push(Op::Spindle { state: self.state.spindle, rpm });
+                }
                 850 | 890 => {
                     feed_to(&mut pos, bottom, &mut ops);
                     if code == 890 && st.p > 0.0 {
@@ -946,7 +1057,7 @@ fn check_known_codes(gs: &[u32], _ms: &[u32]) -> Result<(), String> {
     const KNOWN: &[u32] = &[
         0, 10, 20, 30, 40, 100, 170, 180, 190, 200, 210, 280, 281, 300, 301, 310, 382, 400, 410,
         420, 430, 490, 530, 540, 550, 560, 570, 580, 590, 610, 611, 640, 730, 800, 810, 820, 830,
-        850, 890, 900, 901, 910, 911, 920, 921, 922, 930, 940, 980, 990,
+        840, 850, 890, 900, 901, 910, 911, 920, 921, 922, 930, 940, 980, 990,
     ];
     for g in gs {
         if !KNOWN.contains(g) {
@@ -1174,6 +1285,31 @@ mod tests {
         // Z10, XY at Z10, down to R2, feed to -3, back to 10; then second hole.
         assert_eq!(zs, vec![10.0, 10.0, 2.0, -3.0, 10.0, 10.0, 2.0, -3.0, 10.0]);
         assert!(close(i.position[0], 10.0));
+    }
+
+    #[test]
+    fn tapping_g84_reverses_spindle() {
+        let (_, ops) = run("M3 S500\nG0 Z5\nG98 G84 X0 Y0 Z-6 R1 F500\nG80\nM30");
+        let spindle: Vec<Spindle> = ops
+            .iter()
+            .filter_map(|o| match o {
+                Op::Spindle { state, .. } => Some(*state),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(spindle, vec![Spindle::Cw, Spindle::Ccw, Spindle::Cw]);
+        let ccw = ops.iter().position(|o| matches!(o, Op::Spindle { state: Spindle::Ccw, .. })).unwrap();
+        assert!(matches!(ops[ccw - 1], Op::Linear { to, .. } if to[2] == -6.0));
+    }
+
+    #[test]
+    fn user_macros_expand_in_place() {
+        let mut i = Interpreter::new("G0 X1\nM150 P7\nG0 X3\nM30");
+        i.macros.insert(150, "G0 X#1\n(MSG,from macro)".into());
+        let ops: Vec<Op> = std::iter::from_fn(|| i.next_step().unwrap()).flat_map(|s| s.ops).collect();
+        assert!(matches!(ops[1], Op::Rapid { to } if to[0] == 7.0));
+        assert_eq!(ops[2], Op::Message("from macro".into()));
+        assert!(matches!(ops[3], Op::Rapid { to } if to[0] == 3.0));
     }
 
     #[test]
