@@ -58,28 +58,48 @@ impl App {
                 .color(MUTED),
         );
         ui.add_space(6.0);
-        ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Grid::new("tools").num_columns(5).striped(true).spacing([10.0, 6.0]).show(ui, |ui| {
-                for h in ["Tool", "Diameter", "Length", "Description", ""] {
-                    ui.label(RichText::new(h).color(MUTED).strong());
-                }
-                ui.end_row();
-                for (n, tool) in &s.tools {
-                    let mut t = tool.clone();
-                    let mut changed = false;
-                    let current = *n == s.tool;
-                    ui.label(RichText::new(format!("T{n}")).strong().color(if current { GREEN } else { TEXT }));
-                    changed |= num(ui, &mut t.diameter, 0.01, " mm");
-                    changed |= num(ui, &mut t.length, 0.01, " mm");
-                    changed |= ui.add_sized([200.0, 22.0], egui::TextEdit::singleline(&mut t.description)).changed();
-                    if ui.small_button("Remove").clicked() {
-                        self.machine.send(Command::SetTool(*n, None));
-                    } else if changed {
-                        self.machine.send(Command::SetTool(*n, Some(t)));
-                    }
-                    ui.end_row();
+        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            // The description gets its own line, so the table fits a narrow panel.
+            let (tw, nw) = (40.0, 86.0);
+            ui.horizontal(|ui| {
+                for (h, w) in [("Tool", tw), ("Diameter", nw), ("Length", nw)] {
+                    ui.add_sized([w, 18.0], egui::Label::new(RichText::new(h).color(MUTED).strong()));
                 }
             });
+            for (n, tool) in &s.tools {
+                let mut t = tool.clone();
+                let mut changed = false;
+                let mut remove = false;
+                let current = *n == s.tool;
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [tw, 22.0],
+                        egui::Label::new(RichText::new(format!("T{n}")).strong().color(if current { GREEN } else { TEXT })),
+                    );
+                    for v in [&mut t.diameter, &mut t.length] {
+                        changed |= ui
+                            .add_sized([nw, 22.0], DragValue::new(v).speed(0.01).max_decimals(4).suffix(" mm"))
+                            .changed();
+                    }
+                    remove = ui.small_button("Remove").clicked();
+                });
+                ui.horizontal(|ui| {
+                    ui.add_space(tw + ui.spacing().item_spacing.x);
+                    changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut t.description)
+                                .hint_text("Description")
+                                .desired_width(ui.available_width()),
+                        )
+                        .changed();
+                });
+                ui.add_space(4.0);
+                if remove {
+                    self.machine.send(Command::SetTool(*n, None));
+                } else if changed {
+                    self.machine.send(Command::SetTool(*n, Some(t)));
+                }
+            }
             ui.horizontal(|ui| {
                 let next = s.tools.keys().max().map(|m| m + 1).unwrap_or(1);
                 if self.draft.new_tool == 0 || s.tools.contains_key(&self.draft.new_tool) {
@@ -98,6 +118,7 @@ impl App {
 
     fn tool_change_settings(&mut self, ui: &mut egui::Ui) {
         let s = self.snap.clone();
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
         let idle = s.mode == Mode::Idle;
         section_title(ui, "Tool change (M6)");
         ui.horizontal(|ui| {
@@ -119,12 +140,13 @@ impl App {
         let mut changed = false;
         let t = &mut c.tool_change;
         changed |= ui
-            .checkbox(&mut t.guided, "Guided: move to the change position, measure, and go back")
+            .checkbox(&mut t.guided, "Guided: go to the change position, measure, come back")
             .changed();
         ui.add_enabled_ui(t.guided, |ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             egui::Grid::new("tool-change").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                changed |= labelled(ui, "Change position X", &mut t.x, 0.5, " mm");
-                changed |= labelled(ui, "Change position Y", &mut t.y, 0.5, " mm");
+                changed |= labelled(ui, "Change X", &mut t.x, 0.5, " mm");
+                changed |= labelled(ui, "Change Y", &mut t.y, 0.5, " mm");
                 changed |= labelled(ui, "Safe Z", &mut t.z, 0.5, " mm");
             });
             if ui
