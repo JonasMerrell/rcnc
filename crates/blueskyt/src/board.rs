@@ -66,7 +66,14 @@ pub struct BlueSkyBoard {
     /// Lines of segments sent but not yet played, oldest first: (segment count, line).
     in_flight: VecDeque<(usize, usize)>,
     line: usize,
+    /// Last real status exchange, reused by polls inside `POLL_INTERVAL`.
+    cached: Option<(Instant, Outputs, Status)>,
 }
+
+/// Shortest time between status exchanges. The controller polls every few
+/// milliseconds; asking the board that often floods the USB bus (Mach3 polls
+/// at about 9 Hz). 25 ms still reacts to E-stop and probe inputs quickly.
+const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 impl BlueSkyBoard {
     pub fn new(setup: BoardSetup) -> Self {
@@ -88,6 +95,7 @@ impl BlueSkyBoard {
             queue_free: proto::QUEUE_CAPACITY,
             in_flight: VecDeque::new(),
             line: 0,
+            cached: None,
         }
     }
 
@@ -155,7 +163,15 @@ impl BlueSkyBoard {
         }
     }
 
+    /// After sending motion, the cached status no longer says idle.
+    fn mark_busy(&mut self) {
+        if let Some((_, _, status)) = &mut self.cached {
+            status.idle = false;
+        }
+    }
+
     fn send_frames(&mut self, frames: Vec<Payload>) -> Result<()> {
+        self.mark_busy();
         for f in frames {
             self.send(&f)?;
             self.queue_free = self.queue_free.saturating_sub(f[62] as usize);
@@ -174,6 +190,7 @@ impl Backend for BlueSkyBoard {
             self.transport = Some((self.open)()?);
         }
         self.config = Some(config.clone());
+        self.cached = None;
         // Same order as the Mach3 plugin: abort, handshake, positions, configuration, status.
         self.send(&proto::simple(cmd::ABORT))?;
         let hello = proto::handshake(config, &self.setup);
@@ -208,6 +225,7 @@ impl Backend for BlueSkyBoard {
             let _ = self.send(&proto::simple(cmd::DISCONNECT));
         }
         self.transport = None;
+        self.cached = None;
         self.config = None;
     }
 
@@ -220,6 +238,13 @@ impl Backend for BlueSkyBoard {
     }
 
     fn poll(&mut self, outputs: &Outputs) -> Result<Status> {
+        if let Some((at, sent, status)) = &self.cached {
+            // Position and feed only feed the pendant display; they can wait for the next exchange.
+            let same = Outputs { work_position: sent.work_position, feed_rate: sent.feed_rate, ..*outputs } == *sent;
+            if at.elapsed() < POLL_INTERVAL && same {
+                return Ok(Status { queue_free: self.queue_free, line: self.line, ..status.clone() });
+            }
+        }
         let status = self.exchange_status(outputs, !outputs.enable)?;
         let board_free = status.queue_free as usize;
         self.track_played(board_free);
@@ -231,13 +256,15 @@ impl Backend for BlueSkyBoard {
             position[i] = status.position[i] as i64;
         }
         let _ = config;
-        Ok(Status {
+        let status = Status {
             position,
             inputs: status.inputs,
             queue_free: self.queue_free,
             idle: status.idle && self.encoder.pending() == 0,
             line: self.line,
-        })
+        };
+        self.cached = Some((Instant::now(), *outputs, status.clone()));
+        Ok(status)
     }
 
     fn push_segments(&mut self, segments: &[Segment], last: bool) -> Result<()> {
@@ -282,6 +309,7 @@ impl Backend for BlueSkyBoard {
             stop_pin,
             stop_high,
         };
+        self.mark_busy();
         self.send(&proto::axis_move(&frame))
     }
 
@@ -290,6 +318,7 @@ impl Backend for BlueSkyBoard {
     }
 
     fn abort(&mut self) -> Result<()> {
+        self.cached = None;
         self.encoder.clear();
         self.in_flight.clear();
         self.send(&proto::simple(cmd::ABORT))
@@ -298,6 +327,7 @@ impl Backend for BlueSkyBoard {
     fn set_position(&mut self, steps: [i64; 6]) -> Result<()> {
         let s: [i32; 5] = std::array::from_fn(|i| steps[i] as i32);
         let p = proto::set_position(&self.last_status, s);
+        self.cached = None;
         self.send(&p)
     }
 }
@@ -404,6 +434,25 @@ mod tests {
         assert_eq!(last[63], cmd::MOTION_END);
         assert_eq!(last[62], 3);
         assert_eq!(last[20], 0x20);
+    }
+
+    #[test]
+    fn polls_the_board_at_most_every_25_ms() {
+        let (mut b, fake) = board();
+        b.connect(&MachineConfig::dmc2()).unwrap();
+        let polls = |fake: &Arc<Mutex<FakeBoard>>| fake.lock().unwrap().sent.iter().filter(|p| p[63] == cmd::STATUS).count();
+        let out = Outputs { enable: true, ..Default::default() };
+        let before = polls(&fake);
+        for i in 0..10 {
+            b.poll(&Outputs { work_position: [i as f64; 6], ..out }).unwrap();
+        }
+        assert_eq!(polls(&fake), before + 1);
+        // Changed outputs (spindle on) go out at once.
+        b.poll(&Outputs { spindle_on: true, ..out }).unwrap();
+        assert_eq!(polls(&fake), before + 2);
+        // Motion sent between exchanges clears the cached idle flag.
+        b.push_segments(&[Segment { steps: [4, 0, 0, 0, 0, 0], line: 0 }], true).unwrap();
+        assert!(!b.poll(&Outputs { spindle_on: true, ..out }).unwrap().idle);
     }
 
     #[test]
