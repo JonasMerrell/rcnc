@@ -52,6 +52,10 @@ pub struct Outputs {
     pub spindle_rpm: f64,
     pub flood: bool,
     pub mist: bool,
+    /// Programmed feed in mm/min, for boards that show it on a pendant.
+    pub feed_rate: f64,
+    /// Work position, for boards that show it on a pendant.
+    pub work_position: [f64; 6],
 }
 
 /// Single-axis move that stops after `steps` or when `stop_on` becomes active.

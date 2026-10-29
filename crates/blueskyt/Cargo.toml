@@ -1,0 +1,13 @@
+[package]
+name = "cnc-blueskyt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Driver for the BlueSkyT BL-UsbMach USB motion board (stock Shariff DMC2 controller)"
+
+[lib]
+name = "blueskyt"
+
+[dependencies]
+machine.workspace = true
+hidapi = "2.6"
