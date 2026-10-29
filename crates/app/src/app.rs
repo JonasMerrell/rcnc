@@ -210,6 +210,7 @@ impl App {
                 Mode::Running if s.paused.is_some() => ("PAUSED", AMBER),
                 Mode::Running if s.hold => ("FEED HOLD", AMBER),
                 Mode::Running => ("RUNNING", GREEN),
+                Mode::Probing => ("PROBING", ACCENT),
                 Mode::Alarm => ("ALARM", RED),
             };
             badge(ui, label, color);
@@ -596,7 +597,7 @@ impl App {
             {
                 self.machine.send(Command::FeedHold);
             }
-            let can_stop = matches!(s.mode, Mode::Running | Mode::Jog | Mode::Homing);
+            let can_stop = matches!(s.mode, Mode::Running | Mode::Jog | Mode::Homing | Mode::Probing);
             if ui
                 .add_enabled(
                     can_stop,

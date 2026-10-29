@@ -14,6 +14,7 @@ use crate::backend::{AxisMove, Backend, BoardInfo, Outputs, Status};
 use crate::config::MachineConfig;
 use crate::planner::{op_to_moves, Generator};
 use crate::sim::Clock;
+use crate::probing::{self, ProbeJob, Routine, Step};
 use crate::store::{self, SavedState};
 
 /// Segments kept queued on the board while streaming (240 ms at 4 ms).
@@ -57,6 +58,8 @@ pub enum Command {
     SetWorkOffset { system: usize, offset: Axes },
     /// Replace the machine configuration. Reconnects the board so it gets the new settings.
     SetConfig(Box<MachineConfig>),
+    /// Run a probing routine. Allowed when idle, or while a program is paused (e.g. at M6).
+    Probe(ProbeJob),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +70,7 @@ pub enum Mode {
     Jog,
     Homing,
     Running,
+    Probing,
     Alarm,
 }
 
@@ -132,6 +136,8 @@ enum Wait {
     Motion,
     Until(f64),
     Pause(String),
+    /// Paused for a tool change; Cycle Start may touch the new tool off first.
+    ToolChange(String),
     Probe,
 }
 
@@ -169,6 +175,18 @@ pub struct Controller {
     program_name: Option<String>,
     program: Arc<String>,
     persist: Option<Persist>,
+    routine: Option<Routine>,
+    /// The single-axis move a routine step is waiting on: (step, target).
+    routine_move: Option<(RoutineMove, f64)>,
+    /// Mode to return to when the routine ends.
+    routine_return: Mode,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RoutineMove {
+    Guarded(usize),
+    Free,
+    Probe(usize, bool),
 }
 
 impl Controller {
@@ -194,6 +212,9 @@ impl Controller {
             program_name: None,
             program: Arc::new(String::new()),
             persist: None,
+            routine: None,
+            routine_move: None,
+            routine_return: Mode::Idle,
         }
     }
 
@@ -401,11 +422,12 @@ impl Controller {
                 }
             }
             Command::SetConfig(config) => self.set_config(*config),
+            Command::Probe(job) => self.start_probe(job),
         }
     }
 
     fn set_config(&mut self, config: MachineConfig) {
-        if matches!(self.mode, Mode::Running | Mode::Homing | Mode::Jog) {
+        if matches!(self.mode, Mode::Running | Mode::Homing | Mode::Jog | Mode::Probing) {
             self.info("Stop the machine before changing settings");
             return;
         }
@@ -419,6 +441,161 @@ impl Controller {
             self.mode = Mode::Disconnected;
             self.connect();
         }
+    }
+
+    fn start_probe(&mut self, job: ProbeJob) {
+        let paused = self.mode == Mode::Running
+            && matches!(&self.exec, Some(Exec { wait: Wait::Pause(_) | Wait::ToolChange(_), .. }))
+            && self.generator.is_idle()
+            && self.status.idle;
+        if !(self.is_ready() || paused) {
+            self.info("Probing needs the machine idle, or a program paused");
+            return;
+        }
+        let Some(probe) = self.config.probe else {
+            return self.info("No probe input is configured");
+        };
+        if probe.is_active(self.status.inputs) {
+            return self.info("Probe is already touching; check its connection");
+        }
+        self.sync_position();
+        self.info(format!("{} started", job.name()));
+        self.routine = Some(probing::build(job, &self.config.probing, self.machine_position()));
+        self.routine_move = None;
+        self.routine_return = self.mode;
+        self.mode = Mode::Probing;
+        self.routine_step();
+    }
+
+    /// Advance the probing routine; called when the board is idle.
+    fn routine_step(&mut self) {
+        let pos = self.machine_position();
+        let probe_hit = self.config.probe.is_some_and(|p| p.is_active(self.status.inputs));
+        if let Some((m, target)) = self.routine_move.take() {
+            match m {
+                RoutineMove::Guarded(axis) if probe_hit && (pos[axis] - target).abs() > 0.01 => {
+                    return self.end_routine(Err(format!(
+                        "Probe touched during a {} move",
+                        AXIS_LETTERS[axis]
+                    )));
+                }
+                RoutineMove::Probe(axis, record) => {
+                    if !probe_hit {
+                        return self.end_routine(Err("Probe search finished without touching".into()));
+                    }
+                    if record {
+                        self.routine.as_mut().unwrap().hits.push(pos[axis]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        loop {
+            let pos = self.machine_position();
+            let Some(routine) = &mut self.routine else { return };
+            let Some(step) = routine.steps.pop_front() else {
+                return self.end_routine(Ok(()));
+            };
+            let hits = routine.hits.clone();
+            let (axis, to, feed, kind) = match step {
+                Step::Then(f) => {
+                    match f(self, &hits) {
+                        Ok(more) => {
+                            let routine = self.routine.as_mut().unwrap();
+                            for s in more.into_iter().rev() {
+                                routine.steps.push_front(s);
+                            }
+                            continue;
+                        }
+                        Err(e) => return self.end_routine(Err(e)),
+                    }
+                }
+                Step::MoveTo { axis, to, feed, guarded } => (axis, to, feed, guarded),
+                Step::MoveBy { axis, by, feed, guarded } => (axis, pos[axis] + by, feed, guarded),
+                Step::Probe { axis, by, feed, record } => {
+                    match self.routine_axis_move(axis, pos[axis] + by, feed, true) {
+                        Ok(()) => self.routine_move = Some((RoutineMove::Probe(axis, record), pos[axis] + by)),
+                        Err(e) => return self.end_routine(Err(e)),
+                    }
+                    return;
+                }
+            };
+            if (to - pos[axis]).abs() < 1e-6 {
+                continue;
+            }
+            if let Some(violation) = {
+                let mut p = pos;
+                p[axis] = to;
+                self.config.soft_limit_violation(&p)
+            } {
+                return self.end_routine(Err(format!("move outside {} soft limit", AXIS_LETTERS[violation])));
+            }
+            match self.routine_axis_move(axis, to, feed, kind) {
+                Ok(()) => {
+                    let m = if kind { RoutineMove::Guarded(axis) } else { RoutineMove::Free };
+                    self.routine_move = Some((m, to));
+                }
+                Err(e) => return self.end_routine(Err(e)),
+            }
+            return;
+        }
+    }
+
+    fn routine_axis_move(&mut self, axis: usize, to: f64, feed: f64, stop_on_probe: bool) -> Result<(), String> {
+        let from = self.machine_position()[axis];
+        let probe = self.config.probe.ok_or("no probe input configured")?;
+        if stop_on_probe && probe.is_active(self.status.inputs) {
+            return Err("Probe is touching before the move".into());
+        }
+        let a = &self.config.axes[axis];
+        let spu = a.steps_per_unit;
+        let m = AxisMove {
+            axis,
+            positive: to > from,
+            steps: ((to - from).abs() * spu).round() as u32,
+            velocity: (feed / 60.0).min(a.max_velocity) * spu,
+            acceleration: a.acceleration * spu,
+            stop_on: stop_on_probe.then_some((probe, true)),
+        };
+        if m.steps == 0 {
+            return Ok(());
+        }
+        self.backend.axis_move(&m).map_err(|e| e.to_string())?;
+        self.status.idle = false;
+        Ok(())
+    }
+
+    fn end_routine(&mut self, result: Result<(), String>) {
+        let name = self.routine.take().map(|r| r.name).unwrap_or_default();
+        self.routine_move = None;
+        let _ = self.backend.abort();
+        self.sync_position();
+        self.mode = self.routine_return;
+        match result {
+            Ok(()) => self.info(format!("{name} done")),
+            Err(e) => {
+                // Never let a program carry on after a failed touch-off.
+                if let Some(exec) = &mut self.exec {
+                    if matches!(exec.wait, Wait::None) {
+                        exec.wait = Wait::Pause(format!("{name} failed: {e}"));
+                    }
+                }
+                self.info(format!("{name} stopped: {e}"));
+            }
+        }
+    }
+
+    /// Set the active work offset so machine position `machine` on `axis` reads `work`.
+    pub(crate) fn set_work_axis(&mut self, axis: usize, machine: f64, work: f64) {
+        let cs = self.interp.state.coord_system;
+        let mut coord = self.interp.params.coord_offset(cs);
+        let others = self.interp.program_offset()[axis] - coord[axis];
+        coord[axis] = machine - work - others;
+        self.interp.params.set_coord_offset(cs, coord);
+    }
+
+    pub(crate) fn report(&mut self, msg: String) {
+        self.info(msg);
     }
 
     fn connect(&mut self) {
@@ -464,6 +641,8 @@ impl Controller {
     }
 
     fn enter_estop(&mut self, why: &str) {
+        self.routine = None;
+        self.routine_move = None;
         let _ = self.backend.abort();
         self.generator.clear();
         self.exec = None;
@@ -634,8 +813,16 @@ impl Controller {
         match self.mode {
             Mode::Running => {
                 self.generator.hold = false;
+                let tool_change = matches!(&self.exec, Some(Exec { wait: Wait::ToolChange(_), .. }));
+                if tool_change && self.config.tool_change_touch_off {
+                    // Touch off first; the program carries on when it succeeds.
+                    self.start_probe(ProbeJob::ToolTouchOff);
+                    if self.mode != Mode::Probing {
+                        return;
+                    }
+                }
                 if let Some(exec) = &mut self.exec {
-                    if matches!(exec.wait, Wait::Pause(_)) {
+                    if matches!(exec.wait, Wait::Pause(_) | Wait::ToolChange(_)) {
                         exec.wait = Wait::None;
                     }
                 }
@@ -663,8 +850,10 @@ impl Controller {
     }
 
     fn stop(&mut self) {
+        self.routine = None;
+        self.routine_move = None;
         match self.mode {
-            Mode::Running | Mode::Jog | Mode::Homing => {
+            Mode::Running | Mode::Jog | Mode::Homing | Mode::Probing => {
                 let _ = self.backend.abort();
                 self.generator.clear();
                 self.exec = None;
@@ -717,6 +906,7 @@ impl Controller {
                 self.sync_position();
             }
             Mode::Homing if self.status.idle => self.homing_step_done(),
+            Mode::Probing if self.status.idle => self.routine_step(),
             Mode::Running => self.run(),
             _ => {}
         }
@@ -875,9 +1065,11 @@ impl Controller {
                 self.outputs.mist = mist;
                 Wait::None
             }
-            Op::ToolChange { tool } => {
-                Wait::Pause(format!("Load tool {tool}, then press Cycle Start"))
-            }
+            Op::ToolChange { tool } => Wait::ToolChange(if self.config.tool_change_touch_off {
+                format!("Load tool {tool}, then press Cycle Start to touch it off and carry on")
+            } else {
+                format!("Load tool {tool}, touch it off if needed, then press Cycle Start")
+            }),
             Op::Pause { optional } => Wait::Pause(if optional {
                 "Optional stop (M1)".into()
             } else {
@@ -990,7 +1182,7 @@ impl Controller {
         };
         let paused = match &self.exec {
             Some(Exec {
-                wait: Wait::Pause(msg),
+                wait: Wait::Pause(msg) | Wait::ToolChange(msg),
                 ..
             }) => Some(msg.clone()),
             _ => None,
@@ -1165,6 +1357,107 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// Simulator with a 60 mm block, X/Y 100..160 mm, top at Z 100, probe at X180 Y130 Z103.
+    fn probing_setup() -> (Controller, Arc<ManualClock>) {
+        let clock = Arc::new(ManualClock::default());
+        let mut sim = Simulator::new(clock.clone());
+        sim.world.block = Some(([20_000, 32_000], [20_000, 32_000], 20_000));
+        let mut c = Controller::new(MachineConfig::dmc2(), Box::new(sim), clock.clone());
+        c.handle(Command::Connect);
+        c.handle(Command::Reset);
+        c.handle(Command::Mdi("G53 G0 Z103".into()));
+        run_until_idle(&mut c, &clock, 5.0);
+        (c, clock)
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 0.02
+    }
+
+    #[test]
+    fn probes_z_surface_and_sets_zero() {
+        let (mut c, clock) = probing_setup();
+        c.handle(Command::Mdi("G53 G0 X130 Y130".into()));
+        run_until_idle(&mut c, &clock, 5.0);
+        c.handle(Command::Probe(ProbeJob::ZSurface));
+        assert_eq!(c.mode(), Mode::Probing);
+        run_until_idle(&mut c, &clock, 60.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Z surface done")), "{:?}", s.log);
+        assert!(close(s.machine[2], 103.0), "{:?}", s.machine);
+        assert!(close(s.work[2], 3.0), "{:?}", s.work);
+    }
+
+    #[test]
+    fn probes_edge_with_stylus_radius() {
+        let (mut c, clock) = probing_setup();
+        c.handle(Command::Probe(ProbeJob::Edge { axis: 0, positive: false }));
+        run_until_idle(&mut c, &clock, 60.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("X- edge done")), "{:?}", s.log);
+        // The sim's probe is a point touching at X160; the 2 mm stylus edge is 1 mm in.
+        assert!(close(s.machine[0], 159.0), "{:?}", s.machine);
+        assert!(close(s.work[0], 0.0), "{:?}", s.work);
+        assert!(close(s.machine[2], 103.0));
+    }
+
+    #[test]
+    fn tool_touch_off_sets_z_from_setter() {
+        let (mut c, clock) = probing_setup();
+        let mut config = MachineConfig::dmc2();
+        config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, ..Default::default() };
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.handle(Command::Reset);
+        c.handle(Command::Probe(ProbeJob::ToolTouchOff));
+        run_until_idle(&mut c, &clock, 60.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Tool touch-off done")), "{:?}", s.log);
+        // The table (sim probe plane) is at machine Z30, so Z30 now reads 13.31.
+        assert!(close(s.work[2] - s.machine[2], 13.31 - 30.0), "{:?} {:?}", s.work, s.machine);
+        assert!(close(s.machine[2], 40.0));
+    }
+
+    #[test]
+    fn finds_boss_centre_and_corner() {
+        let (mut c, clock) = probing_setup();
+        let mut config = MachineConfig::dmc2();
+        config.probing.boss_size = 60.0;
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.handle(Command::Reset);
+        c.handle(Command::Mdi("G53 G0 X128 Y133".into()));
+        run_until_idle(&mut c, &clock, 5.0);
+        c.handle(Command::Probe(ProbeJob::BossCentre));
+        run_until_idle(&mut c, &clock, 120.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Boss centre done")), "{:?}", s.log);
+        assert!(close(s.machine[0], 130.0) && close(s.machine[1], 130.0), "{:?}", s.machine);
+        assert!(close(s.work[0], 0.0) && close(s.work[1], 0.0));
+
+        // Outside corner at X160 Y160, from just outside it.
+        c.handle(Command::Mdi("G53 G0 X163 Y163".into()));
+        run_until_idle(&mut c, &clock, 5.0);
+        c.handle(Command::Probe(ProbeJob::Corner { x_positive: false, y_positive: false }));
+        run_until_idle(&mut c, &clock, 120.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("corner done")), "{:?}", s.log);
+        assert!(close(s.machine[0], 159.0) && close(s.machine[1], 159.0), "{:?}", s.machine);
+        assert!(close(s.work[0], 0.0) && close(s.work[1], 0.0));
+    }
+
+    #[test]
+    fn probe_without_contact_stops_cleanly() {
+        let (mut c, clock) = probing_setup();
+        let mut config = MachineConfig::dmc2();
+        config.probing.max_distance = 2.0;
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.handle(Command::Reset);
+        c.handle(Command::Probe(ProbeJob::ZSurface));
+        run_until_idle(&mut c, &clock, 30.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("without touching")), "{:?}", s.log);
+        assert_eq!(s.mode, Mode::Idle);
+    }
+
     #[test]
     fn homes_all_axes() {
         let (mut c, clock) = setup();
@@ -1264,6 +1557,33 @@ mod tests {
         c.handle(Command::CycleStart);
         run_until_idle(&mut c, &clock, 10.0);
         assert_eq!(c.snapshot().tool, 2);
+    }
+
+    #[test]
+    fn tool_change_touches_off_then_continues() {
+        let (mut c, clock) = probing_setup();
+        let mut config = MachineConfig::dmc2();
+        config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, ..Default::default() };
+        config.tool_change_touch_off = true;
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.handle(Command::Reset);
+        c.handle(Command::Load {
+            name: "t".into(),
+            text: "T3 M6\nG0 Z20\nM30".into(),
+        });
+        c.handle(Command::CycleStart);
+        for _ in 0..10 {
+            clock.advance(0.005);
+            c.update();
+        }
+        assert!(c.snapshot().paused.unwrap().contains("touch it off"));
+        c.handle(Command::CycleStart);
+        assert_eq!(c.mode(), Mode::Probing);
+        run_until_idle(&mut c, &clock, 60.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Tool touch-off done")), "{:?}", s.log);
+        // Work Z20 is 20 - 13.31 above the setter top at machine Z30.
+        assert!(close(s.machine[2], 30.0 + 20.0 - 13.31), "{:?}", s.machine);
     }
 
     #[test]

@@ -83,6 +83,9 @@ pub struct MachineConfig {
     /// The spindle can run counter-clockwise (M4, G84 tapping). The DMC2's
     /// VFD has one run output, so M4 would silently run it clockwise.
     pub spindle_reversible: bool,
+    pub probing: crate::probing::ProbeSettings,
+    /// After a tool change (M6) and Cycle Start, touch the new tool off on the tool setter.
+    pub tool_change_touch_off: bool,
 }
 
 impl Default for MachineConfig {
@@ -145,6 +148,8 @@ impl MachineConfig {
             spindle_spin_up: 12.0,
             spindle_spin_down: 1.0,
             spindle_reversible: false,
+            probing: Default::default(),
+            tool_change_touch_off: false,
         }
     }
 

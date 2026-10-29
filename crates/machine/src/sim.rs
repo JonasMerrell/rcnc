@@ -69,12 +69,15 @@ pub struct SimWorld {
     pub travel: [i64; 6],
     /// Probe trips when physical Z is at or below this, in steps.
     pub probe_z: i64,
+    /// A block on the table the probe can touch from the side or above:
+    /// X and Y ranges and top Z, physical steps.
+    pub block: Option<([i64; 2], [i64; 2], i64)>,
 }
 
 pub struct Simulator {
     clock: Arc<dyn Clock>,
     config: Option<MachineConfig>,
-    world: SimWorld,
+    pub world: SimWorld,
     /// Physical position in steps, 0 at the negative end of travel.
     physical: [i64; 6],
     /// Counter = physical + offset.
@@ -95,6 +98,7 @@ impl Simulator {
         let world = SimWorld {
             travel: [72_000, 52_000, 33_000, 0, 0, 0],
             probe_z: 6_000,
+            block: None,
         };
         let physical = [36_000, 26_000, 30_000, 0, 0, 0];
         let last_time = clock.now();
@@ -122,7 +126,11 @@ impl Simulator {
     fn input_active(&self, input: &Input) -> bool {
         let Some(c) = &self.config else { return false };
         if Some(*input) == c.probe {
-            return self.probe_override || self.physical[2] <= self.world.probe_z;
+            let p = &self.physical;
+            let in_block = self.world.block.is_some_and(|(x, y, top)| {
+                (x[0]..=x[1]).contains(&p[0]) && (y[0]..=y[1]).contains(&p[1]) && p[2] <= top
+            });
+            return self.probe_override || p[2] <= self.world.probe_z || in_block;
         }
         if Some(*input) == c.estop {
             return self.estop_pressed;
