@@ -1,0 +1,47 @@
+(Sample job: rounded-rectangle pocket and a drilled bolt circle)
+(Fusion 360 / Mach3 style post output)
+G21 G90 G17 G94 G54
+T1 M6
+S18000 M3
+G0 Z10
+G0 X-30 Y-20
+G1 Z-1 F300
+G1 X30 F800
+G3 X40 Y-10 I0 J10
+G1 Y10
+G3 X30 Y20 I-10 J0
+G1 X-30
+G3 X-40 Y10 I0 J-10
+G1 Y-10
+G3 X-30 Y-20 I10 J0
+G1 Z-2 F300
+G1 X30 F800
+G3 X40 Y-10 I0 J10
+G1 Y10
+G3 X30 Y20 I-10 J0
+G1 X-30
+G3 X-40 Y10 I0 J-10
+G1 Y-10
+G3 X-30 Y-20 I10 J0
+G0 Z10
+(Helical entry for a centre bore)
+G0 X6 Y0
+G1 Z0 F300
+G3 X6 Y0 I-6 J0 Z-1 F600
+G3 X6 Y0 I-6 J0 Z-2
+G3 X6 Y0 I-6 J0 Z-3
+G3 X6 Y0 I-6 J0
+G0 Z10
+(Bolt circle, peck drilled)
+T2 M6
+S9000 M3
+G98 G83 X25 Y0 Z-6 R2 Q2 F150
+X12.5 Y21.651
+X-12.5 Y21.651
+X-25 Y0
+X-12.5 Y-21.651
+X12.5 Y-21.651
+G80
+G0 Z25
+M5 M9
+M30

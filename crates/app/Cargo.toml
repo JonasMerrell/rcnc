@@ -1,0 +1,16 @@
+[package]
+name = "cnc-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Desktop CNC controller (Mach3 replacement)"
+
+[[bin]]
+name = "cnc-controller"
+path = "src/main.rs"
+
+[dependencies]
+gcode.workspace = true
+machine.workspace = true
+eframe = "0.33"
+rfd = "0.15"

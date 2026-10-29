@@ -1,0 +1,13 @@
+[package]
+name = "cnc-machine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Machine controller: trajectory planning, motion backends, machine state"
+
+[lib]
+name = "machine"
+
+[dependencies]
+gcode.workspace = true
+thiserror.workspace = true
