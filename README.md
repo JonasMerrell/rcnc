@@ -8,7 +8,7 @@ The app drives the DMC2's stock BlueSkyT USB board directly, using a protocol ma
 
 | Part | State |
 | --- | --- |
-| G-code interpreter (Mach3 dialect) | Done: G0–G3, R and IJK arcs, helix, G4, G10 L1/L2/L10/L20, G17–19, G20/21, G28/G30, G31/G38.2, G43/G49, G53, G54–G59, G73/G81/G82/G83/G85/G89, G90/91, G90.1/91.1, G92, G93/94, G98/99, M0–M9, M30, M98/M99 subprograms, `#` parameters, `[ ]` expressions |
+| G-code interpreter (Mach3 dialect) | Done: G0–G3, R and IJK arcs, helix, G4, G10 L1/L2/L10/L20, G17–19, G20/21, G28/G30, G31/G38.2, G43/G49, G53, G54–G59, G73/G81/G82/G83/G84/G85/G89, G90/91, G90.1/91.1, G92, G93/94, G98/99, M0–M9, M30, M98/M99 subprograms, `#` parameters, `[ ]` expressions |
 | Motion planner | Done: 4 ms step segments, per-axis velocity and acceleration limits, exact stop (Mach3 "CV off") or blended corners, feed hold, feed and rapid override |
 | Controller | Done: homing (seek, back off, clear), jog, MDI, program run, probing, tool-change pause, spindle and coolant, E-stop input |
 | Simulator | Done: behaves like the stock board (4 ms queue, single-axis moves that stop on an input, home switches, probe plate) |

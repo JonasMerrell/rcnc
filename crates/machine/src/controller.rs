@@ -1271,8 +1271,13 @@ fn modal_text(interp: &Interpreter) -> String {
     let units = if st.units == Units::Mm { "G21" } else { "G20" };
     let dist = if st.absolute { "G90" } else { "G91" };
     let feed = if st.inverse_time { "G93" } else { "G94" };
+    let comp = match st.cutter_comp {
+        410 => " G41",
+        420 => " G42",
+        _ => "",
+    };
     format!(
-        "{motion} {plane} {units} {dist} {feed} G{}",
+        "{motion} {plane} {units} {dist} {feed} G{}{comp}",
         54 + st.coord_system
     )
 }

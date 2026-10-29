@@ -4,6 +4,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use crate::comp::Comp;
+
 use crate::params::{num, Params};
 use crate::parse::{parse_line, Block};
 
@@ -153,6 +155,8 @@ pub struct ModalState {
     pub mist: bool,
     pub tool: u32,
     pub next_tool: u32,
+    /// 400, 410 or 420 for G40/G41/G42.
+    pub cutter_comp: u32,
     canned: CannedSticky,
 }
 
@@ -185,6 +189,7 @@ impl Default for ModalState {
             mist: false,
             tool: 0,
             next_tool: 0,
+            cutter_comp: 400,
             canned: CannedSticky::default(),
         }
     }
@@ -214,6 +219,9 @@ pub struct Interpreter {
     /// User M-code macros: G-code run in place of `M<code>`, with P and Q in #1 and #2.
     pub macros: HashMap<u32, String>,
     macro_depth: u32,
+    comp: Option<Comp>,
+    /// Set by G40/G41/G42 on the current block: None = off, Some((left, radius)).
+    comp_change: Option<Option<(bool, f64)>>,
 }
 
 /// Arc endpoint radius mismatch that is still accepted, in mm.
@@ -243,6 +251,8 @@ impl Interpreter {
             optional_stop: true,
             macros: HashMap::new(),
             macro_depth: 0,
+            comp: None,
+            comp_change: None,
         }
     }
 
@@ -255,6 +265,9 @@ impl Interpreter {
     }
 
     pub fn rewind(&mut self) {
+        self.comp = None;
+        self.comp_change = None;
+        self.state.cutter_comp = 400;
         self.pc = 0;
         self.stack.clear();
         self.finished = false;
@@ -421,7 +434,32 @@ impl Interpreter {
         })
     }
 
+    /// Execute a block, then apply cutter compensation to its moves.
     fn execute(&mut self, b: &Block) -> Result<Vec<Op>, String> {
+        let before = self.position;
+        let ops = self.execute_raw(b)?;
+        let mut out = Vec::new();
+        if let Some(change) = self.comp_change.take() {
+            // G40, or a new G41/G42: finish the old compensation first.
+            let mut actual = before;
+            if let Some(mut comp) = self.comp.take() {
+                actual = comp.actual();
+                out.extend(comp.flush());
+            }
+            if let Some((left, radius)) = change {
+                if radius > 0.0 {
+                    self.comp = Some(Comp::new(left, radius, &before, &actual));
+                }
+            }
+        }
+        match &mut self.comp {
+            Some(comp) => out.extend(comp.process(ops)?),
+            None => out.extend(ops),
+        }
+        Ok(out)
+    }
+
+    fn execute_raw(&mut self, b: &Block) -> Result<Vec<Op>, String> {
         let mut ops = Vec::new();
         let gs: Vec<u32> = b.codes('G').collect();
         let ms: Vec<u32> = b.codes('M').collect();
@@ -513,9 +551,25 @@ impl Interpreter {
                 190 => self.state.plane = Plane::YZ,
                 200 => self.state.units = Units::Inch,
                 210 => self.state.units = Units::Mm,
-                400 => {}
+                400 => {
+                    self.state.cutter_comp = 400;
+                    self.comp_change = Some(None);
+                }
                 410 | 420 => {
-                    return Err("cutter radius compensation (G41/G42) is not supported yet".into())
+                    if self.state.plane != Plane::XY {
+                        return Err("cutter compensation needs the XY plane (G17)".into());
+                    }
+                    let d = b.get('D').map(|d| d as u32).unwrap_or(self.state.tool);
+                    let diameter = if d == 0 {
+                        0.0
+                    } else {
+                        self.tools
+                            .get(&d)
+                            .map(|t| t.diameter)
+                            .ok_or_else(|| format!("tool {d} is not in the tool table (needed for G41/G42 D{d})"))?
+                    };
+                    self.state.cutter_comp = *g;
+                    self.comp_change = Some(Some((*g == 410, diameter / 2.0)));
                 }
                 430 => {
                     let h = b.get('H').map(|h| h as u32).unwrap_or(self.state.tool);
@@ -668,7 +722,7 @@ impl Interpreter {
                 if block.label.is_some() || block.codes('M').any(|m| matches!(m, 980 | 990 | 300 | 20)) {
                     return Err("subprograms and program end are not allowed in macros".into());
                 }
-                self.execute(&block)
+                self.execute_raw(&block)
             });
             match step {
                 Ok(o) => ops.extend(o),
@@ -865,6 +919,9 @@ impl Interpreter {
     }
 
     fn canned(&mut self, b: &Block, code: u32) -> Result<Vec<Op>, String> {
+        if self.comp.is_some() || matches!(self.comp_change, Some(Some(_))) {
+            return Err("canned cycles can't run with cutter compensation on (G40 first)".into());
+        }
         if self.state.plane != Plane::XY {
             return Err("canned cycles are only supported in the XY plane (G17)".into());
         }

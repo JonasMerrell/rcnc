@@ -1,5 +1,6 @@
 //! Mach3-dialect G-code: parsing and interpretation into machine operations.
 
+pub mod comp;
 pub mod interp;
 pub mod params;
 pub mod parse;
