@@ -4,6 +4,7 @@
 pub mod backend;
 pub mod config;
 pub mod controller;
+pub mod mach3;
 pub mod planner;
 pub mod probing;
 pub mod sim;
