@@ -314,8 +314,8 @@ impl App {
         let dirty = *draft != s.config;
         let (mut apply, mut revert, mut import, mut dismiss) = (false, false, false, false);
         // Buttons first, so they can't be pushed off the bottom by the import summary.
-        ui.horizontal(|ui| {
-            section_title(ui, "Machine settings");
+        section_title(ui, "Machine settings");
+        ui.horizontal_wrapped(|ui| {
             import = ui.button("Import Mach3 profile…").clicked();
             apply = ui.add_enabled(dirty && idle, Button::new("Apply")).clicked();
             revert = ui.add_enabled(dirty, Button::new("Revert")).clicked();
@@ -341,21 +341,25 @@ impl App {
                 });
                 ui.add_space(6.0);
             }
-            egui::Grid::new("axes").num_columns(7).striped(true).spacing([8.0, 4.0]).show(ui, |ui| {
-                for h in ["", "Steps/mm", "mm/s", "mm/s²", "Min", "Max", "Home"] {
-                    ui.label(RichText::new(h).color(MUTED).strong());
-                }
-                ui.end_row();
-                for (i, a) in draft.axes.iter_mut().enumerate().filter(|(_, a)| a.enabled) {
-                    ui.label(RichText::new(AXIS_LETTERS[i].to_string()).strong());
-                    num(ui, &mut a.steps_per_unit, 0.1, "");
-                    num(ui, &mut a.max_velocity, 0.5, "");
-                    num(ui, &mut a.acceleration, 10.0, "");
-                    num(ui, &mut a.soft_min, 0.5, "");
-                    num(ui, &mut a.soft_max, 0.5, "");
-                    num(ui, &mut a.home_position, 0.1, "");
+            // Narrow fields so the table fits the panel; scrolls sideways if it still can't.
+            ScrollArea::horizontal().id_salt("axes-scroll").show(ui, |ui| {
+                ui.spacing_mut().interact_size.x = 48.0;
+                egui::Grid::new("axes").num_columns(7).striped(true).spacing([4.0, 4.0]).show(ui, |ui| {
+                    for h in ["", "Steps/mm", "mm/s", "mm/s²", "Min", "Max", "Home"] {
+                        ui.label(RichText::new(h).color(MUTED).strong());
+                    }
                     ui.end_row();
-                }
+                    for (i, a) in draft.axes.iter_mut().enumerate().filter(|(_, a)| a.enabled) {
+                        ui.label(RichText::new(AXIS_LETTERS[i].to_string()).strong());
+                        num(ui, &mut a.steps_per_unit, 0.1, "");
+                        num(ui, &mut a.max_velocity, 0.5, "");
+                        num(ui, &mut a.acceleration, 10.0, "");
+                        num(ui, &mut a.soft_min, 0.5, "");
+                        num(ui, &mut a.soft_max, 0.5, "");
+                        num(ui, &mut a.home_position, 0.1, "");
+                        ui.end_row();
+                    }
+                });
             });
             ui.add_space(6.0);
             ui.checkbox(&mut draft.soft_limits, "Soft limits");
