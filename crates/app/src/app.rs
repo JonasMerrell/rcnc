@@ -337,7 +337,16 @@ impl eframe::App for App {
             }
             _ => self.sheet_view.hide(),
         }
-        self.sheet_view.keep_keyboard(frame);
+        if self.sheet_view.keep_keyboard(frame) {
+            // A click in the sheet is a click away from any text box, as it
+            // would be on the rest of the window: Space is feed hold again, not
+            // a space typed into MDI.
+            ctx.memory_mut(|m| {
+                if let Some(id) = m.focused() {
+                    m.surrender_focus(id);
+                }
+            });
+        }
 
         ctx.request_repaint_after(std::time::Duration::from_millis(33));
     }
