@@ -201,6 +201,17 @@ struct Frame {
     remaining: u32,
 }
 
+/// The rest of a macro, parked after a probe so later lines see its result.
+struct MacroFrame {
+    code: u32,
+    lines: Vec<String>,
+    next: usize,
+    /// Nesting depth the macro runs at.
+    depth: u32,
+    /// Program line that called it.
+    line: usize,
+}
+
 pub struct Interpreter {
     lines: Vec<String>,
     labels: HashMap<u32, usize>,
@@ -219,6 +230,10 @@ pub struct Interpreter {
     /// User M-code macros: G-code run in place of `M<code>`, with P and Q in #1 and #2.
     pub macros: HashMap<u32, String>,
     macro_depth: u32,
+    /// Parked macros, innermost last.
+    macro_rest: Vec<MacroFrame>,
+    /// Program line being executed (0 for MDI).
+    exec_line: usize,
     comp: Option<Comp>,
     /// Set by G40/G41/G42 on the current block: None = off, Some((left, radius)).
     comp_change: Option<Option<(bool, f64)>>,
@@ -251,6 +266,8 @@ impl Interpreter {
             optional_stop: true,
             macros: HashMap::new(),
             macro_depth: 0,
+            macro_rest: Vec::new(),
+            exec_line: 0,
             comp: None,
             comp_change: None,
         }
@@ -270,6 +287,8 @@ impl Interpreter {
         self.state.cutter_comp = 400;
         self.pc = 0;
         self.stack.clear();
+        self.macro_rest.clear();
+        self.macro_depth = 0;
         self.finished = false;
     }
 
@@ -283,7 +302,7 @@ impl Interpreter {
     }
 
     pub fn is_finished(&self) -> bool {
-        self.finished || self.pc >= self.lines.len()
+        (self.finished || self.pc >= self.lines.len()) && self.macro_rest.is_empty()
     }
 
     /// Offset from program to machine coordinates for the active state.
@@ -310,6 +329,8 @@ impl Interpreter {
 
     /// Execute one MDI line immediately (not part of the loaded program).
     pub fn execute_line(&mut self, text: &str) -> Result<Vec<Op>, Error> {
+        self.macro_rest.clear();
+        self.exec_line = 0;
         let block = parse_line(text, &self.params).map_err(|message| Error { line: 0, message })?;
         let ops = self
             .execute(&block)
@@ -319,11 +340,15 @@ impl Interpreter {
 
     /// Execute the next program line. `None` once the program has ended.
     pub fn next_step(&mut self) -> Result<Option<Step>, Error> {
+        if let Some(step) = self.resume_macro()? {
+            return Ok(Some(step));
+        }
         if self.is_finished() {
             return Ok(None);
         }
         let line = self.pc;
         self.pc += 1;
+        self.exec_line = line;
         let err = |message| Error { line, message };
         let block = parse_line(&self.lines[line], &self.params).map_err(err)?;
         if block.block_delete && self.block_delete {
@@ -705,34 +730,78 @@ impl Interpreter {
 
     /// Expand a user M-code macro in place. Macros are straight-line G-code
     /// (no subprograms) and may call other macros, up to a few levels deep.
+    /// Lines after a probe are parked and run by later steps, once the probe
+    /// result is known.
     fn run_macro(&mut self, code: u32, text: &str, b: &Block) -> Result<Vec<Op>, String> {
         if self.macro_depth >= 8 {
             return Err(format!("M{code}: macros nested too deeply"));
         }
         self.params.set(1, b.get('P').unwrap_or(0.0));
         self.params.set(2, b.get('Q').unwrap_or(0.0));
-        self.macro_depth += 1;
+        let frame = MacroFrame {
+            code,
+            lines: text.lines().map(str::to_owned).collect(),
+            next: 0,
+            depth: self.macro_depth,
+            line: self.exec_line,
+        };
+        self.macro_lines(frame, false)
+    }
+
+    /// Run the next lines of a parked macro, if any.
+    pub fn resume_macro(&mut self) -> Result<Option<Step>, Error> {
+        let Some(frame) = self.macro_rest.pop() else {
+            return Ok(None);
+        };
+        let line = frame.line;
+        let ops = self
+            .macro_lines(frame, true)
+            .map_err(|message| Error { line, message })?;
+        Ok(Some(Step { line, ops }))
+    }
+
+    /// Run macro lines until one probes; park the rest. `comp` applies cutter
+    /// compensation, which the calling block does for lines run in place.
+    fn macro_lines(&mut self, mut frame: MacroFrame, comp: bool) -> Result<Vec<Op>, String> {
+        let outer_depth = self.macro_depth;
+        self.macro_depth = frame.depth + 1;
         let mut ops = Vec::new();
         let mut result = Ok(());
-        for (i, line) in text.lines().enumerate() {
-            let step = parse_line(line, &self.params).and_then(|block| {
+        while frame.next < frame.lines.len() {
+            let i = frame.next;
+            frame.next += 1;
+            // A nested macro that probes parks itself at this index.
+            let parked = self.macro_rest.len();
+            let step = parse_line(&frame.lines[i], &self.params).and_then(|block| {
                 if block.block_delete && self.block_delete {
                     return Ok(Vec::new());
                 }
                 if block.label.is_some() || block.codes('M').any(|m| matches!(m, 980 | 990 | 300 | 20)) {
                     return Err("subprograms and program end are not allowed in macros".into());
                 }
-                self.execute_raw(&block)
+                if comp {
+                    self.execute(&block)
+                } else {
+                    self.execute_raw(&block)
+                }
             });
             match step {
-                Ok(o) => ops.extend(o),
+                Ok(o) => {
+                    let probes = o.iter().any(|op| matches!(op, Op::Probe { .. }));
+                    ops.extend(o);
+                    if (probes || self.macro_rest.len() > parked) && frame.next < frame.lines.len() {
+                        // Run the rest after anything the nested macro parked.
+                        self.macro_rest.insert(parked, frame);
+                        break;
+                    }
+                }
                 Err(e) => {
-                    result = Err(format!("M{code} macro line {}: {e}", i + 1));
+                    result = Err(format!("M{} macro line {}: {e}", frame.code, i + 1));
                     break;
                 }
             }
         }
-        self.macro_depth -= 1;
+        self.macro_depth = outer_depth;
         result.map(|()| ops)
     }
 
@@ -1310,6 +1379,38 @@ mod tests {
         assert!(matches!(ops[1], Op::Rapid { to } if to[0] == 7.0));
         assert_eq!(ops[2], Op::Message("from macro".into()));
         assert!(matches!(ops[3], Op::Rapid { to } if to[0] == 3.0));
+    }
+
+    #[test]
+    fn macro_lines_after_a_probe_see_its_result() {
+        let mut i = Interpreter::new("M150\nG0 X1\nM30");
+        i.macros.insert(150, "G31 Z-10 F100\n#100=#2002\nG0 Z#100".into());
+        let first = i.next_step().unwrap().unwrap();
+        assert!(matches!(first.ops[..], [Op::Probe { .. }]));
+        // The probe stopped early, at Z-3.
+        i.probe_result([0.0, 0.0, -3.0, 0.0, 0.0, 0.0]);
+        let rest = i.next_step().unwrap().unwrap();
+        assert_eq!(rest.line, 0);
+        assert_eq!(i.params.get(100), -3.0);
+        assert!(matches!(rest.ops[..], [Op::Rapid { to }] if to[2] == -3.0));
+        let next = i.next_step().unwrap().unwrap();
+        assert_eq!(next.line, 1);
+    }
+
+    #[test]
+    fn nested_macro_resumes_inner_first() {
+        let mut i = Interpreter::new("M150\nM30");
+        i.macros.insert(150, "M151\n(MSG,outer)".into());
+        i.macros.insert(151, "G31 Z-10 F100\n(MSG,inner)".into());
+        let ops: Vec<Op> = std::iter::from_fn(|| i.next_step().unwrap()).flat_map(|s| s.ops).collect();
+        let msgs: Vec<&str> = ops
+            .iter()
+            .filter_map(|o| match o {
+                Op::Message(m) => Some(m.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(msgs, vec!["inner", "outer"]);
     }
 
     #[test]

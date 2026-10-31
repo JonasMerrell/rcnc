@@ -25,6 +25,8 @@ pub use toolchange::{ToolChangeStage, ToolChangeView};
 const TARGET_QUEUE: usize = 60;
 /// Moves kept buffered in the planner for look-ahead.
 const LOOKAHEAD_MOVES: usize = 200;
+/// Missed status replies in a row before the link counts as lost.
+const POLL_RETRIES: u32 = 3;
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -197,6 +199,8 @@ pub struct Controller {
     tool_change: Option<toolchange::ToolChange>,
     /// The tool in the spindle, as far as the controller knows (0: unknown).
     loaded_tool: u32,
+    /// Status polls that failed in a row.
+    poll_failures: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -236,6 +240,7 @@ impl Controller {
             routine_until: None,
             tool_change: None,
             loaded_tool: 0,
+            poll_failures: 0,
         }
     }
 
@@ -352,16 +357,29 @@ impl Controller {
         self.tool_change = None;
     }
 
-    fn raise(&mut self, msg: impl Into<String>) {
-        let msg = msg.into();
+    /// Abort all motion, switch the spindle and coolant off and rewind the
+    /// program. The interpreter forgets the spindle and coolant too, so a
+    /// later S word or Cycle Start doesn't quietly turn them back on.
+    fn drop_motion(&mut self) {
         self.clear_routine();
         let _ = self.backend.abort();
         self.generator.clear();
+        self.generator.hold = false;
         self.exec = None;
         self.home.clear();
         self.outputs.spindle_on = false;
         self.outputs.flood = false;
         self.outputs.mist = false;
+        let st = &mut self.interp.state;
+        st.spindle = Spindle::Off;
+        st.flood = false;
+        st.mist = false;
+        self.interp.rewind();
+    }
+
+    fn raise(&mut self, msg: impl Into<String>) {
+        let msg = msg.into();
+        self.drop_motion();
         self.info(format!("Alarm: {msg}"));
         self.alarm = Some(msg);
         self.mode = Mode::Alarm;
@@ -385,6 +403,8 @@ impl Controller {
         match cmd {
             Command::Connect => self.connect(),
             Command::Disconnect => {
+                self.drop_motion();
+                self.outputs = Outputs::default();
                 self.backend.disconnect();
                 self.mode = Mode::Disconnected;
                 self.board = None;
@@ -671,6 +691,10 @@ impl Controller {
                 self.board = Some(info);
                 self.mode = Mode::EStop;
                 self.homed = [false; 6];
+                self.poll_failures = 0;
+                // Whatever was on before the link went down stays off.
+                self.drop_motion();
+                self.outputs = Outputs::default();
                 if let Ok(s) = self.backend.poll(&self.outputs) {
                     self.status = s;
                     self.sync_position();
@@ -682,7 +706,8 @@ impl Controller {
 
     fn reset(&mut self) {
         match self.mode {
-            Mode::Disconnected => self.info("Not connected"),
+            // Reconnect into E-stop; a second Reset enables the drives.
+            Mode::Disconnected => self.connect(),
             Mode::EStop | Mode::Alarm => {
                 if self
                     .config
@@ -707,11 +732,7 @@ impl Controller {
     }
 
     fn enter_estop(&mut self, why: &str) {
-        self.clear_routine();
-        let _ = self.backend.abort();
-        self.generator.clear();
-        self.exec = None;
-        self.home.clear();
+        self.drop_motion();
         self.outputs = Outputs::default();
         self.mode = Mode::EStop;
         self.info(format!("E-stop: {why}"));
@@ -919,14 +940,7 @@ impl Controller {
         self.clear_routine();
         match self.mode {
             Mode::Running | Mode::Jog | Mode::Homing | Mode::Probing => {
-                let _ = self.backend.abort();
-                self.generator.clear();
-                self.exec = None;
-                self.home.clear();
-                self.outputs.spindle_on = false;
-                self.outputs.flood = false;
-                self.outputs.mist = false;
-                self.interp.rewind();
+                self.drop_motion();
                 self.mode = Mode::Idle;
                 if let Ok(s) = self.backend.poll(&self.outputs) {
                     self.status = s;
@@ -934,8 +948,27 @@ impl Controller {
                 self.sync_position();
                 self.info("Stopped");
             }
+            // The link may be gone, but try anyway.
+            Mode::Disconnected => {
+                let _ = self.backend.abort();
+            }
             _ => {}
         }
+    }
+
+    /// The board stopped answering. Make a best effort to stop it and switch
+    /// everything off, then wait for the operator to reconnect.
+    fn lose_link(&mut self, why: &str) {
+        self.drop_motion();
+        self.outputs = Outputs::default();
+        self.homed = [false; 6];
+        // Sends abort and outputs off before closing, if the board still listens.
+        self.backend.disconnect();
+        self.board = None;
+        self.mode = Mode::Disconnected;
+        self.info(format!(
+            "Lost connection: {why}. Motion was aborted if the board could still hear us; check the machine, then Reset to reconnect"
+        ));
     }
 
     /// One controller cycle. Call every few milliseconds.
@@ -944,15 +977,24 @@ impl Controller {
         if self.mode == Mode::Disconnected {
             return;
         }
+        if self.mode == Mode::EStop {
+            self.outputs = Outputs::default();
+        }
         let off = self.interp.program_offset();
         let machine = self.machine_position();
         self.outputs.work_position = std::array::from_fn(|i| machine[i] - off[i]);
         self.outputs.feed_rate = self.interp.state.feed;
         match self.backend.poll(&self.outputs) {
-            Ok(s) => self.status = s,
+            Ok(s) => {
+                self.status = s;
+                self.poll_failures = 0;
+            }
             Err(e) => {
-                self.info(format!("Lost connection: {e}"));
-                self.mode = Mode::Disconnected;
+                // One missed reply is not a lost link; try again next cycle.
+                self.poll_failures += 1;
+                if self.poll_failures >= POLL_RETRIES {
+                    self.lose_link(&e.to_string());
+                }
                 return;
             }
         }
@@ -1002,7 +1044,12 @@ impl Controller {
                 self.interp.probe_result(pos);
                 self.generator.reset_position(pos);
                 if !tripped {
-                    self.info("Probe reached the end of its move without touching");
+                    // Carrying on would set zeros or cut from a probe result that never happened.
+                    let line = exec.line;
+                    return self.raise(format!(
+                        "line {}: probe reached the end of its move without touching",
+                        line + 1
+                    ));
                 }
             }
             _ => {}
@@ -1044,10 +1091,21 @@ impl Controller {
                     return;
                 }
                 match exec.source {
-                    Source::Mdi => {
-                        exec.exhausted = true;
-                        return;
-                    }
+                    // A macro that probes runs its remaining lines after the probe.
+                    Source::Mdi => match self.interp.resume_macro() {
+                        Ok(Some(step)) => {
+                            let line = step.line;
+                            exec.pending.extend(step.ops.into_iter().map(|op| (line, op)));
+                        }
+                        Ok(None) => {
+                            exec.exhausted = true;
+                            return;
+                        }
+                        Err(e) => {
+                            let msg = e.to_string();
+                            return self.raise(msg);
+                        }
+                    },
                     Source::Program => match self.interp.next_step() {
                         Ok(Some(step)) => {
                             let line = step.line;
@@ -1410,6 +1468,163 @@ mod tests {
             }
             assert!(t < max_seconds, "still {:?} after {max_seconds}s", c.mode());
         }
+    }
+
+    /// Wraps the simulator so a test can drop status replies and see what was sent.
+    #[derive(Default)]
+    struct Wire {
+        fail_polls: bool,
+        aborts: usize,
+        last_poll: Option<Outputs>,
+    }
+
+    struct Flaky(Simulator, Arc<std::sync::Mutex<Wire>>);
+
+    impl Backend for Flaky {
+        fn name(&self) -> &str {
+            "flaky"
+        }
+        fn connect(&mut self, config: &MachineConfig) -> crate::backend::Result<BoardInfo> {
+            self.0.connect(config)
+        }
+        fn disconnect(&mut self) {
+            self.1.lock().unwrap().aborts += 1;
+            self.0.disconnect()
+        }
+        fn segment_period(&self) -> f64 {
+            self.0.segment_period()
+        }
+        fn queue_capacity(&self) -> usize {
+            self.0.queue_capacity()
+        }
+        fn poll(&mut self, outputs: &Outputs) -> crate::backend::Result<Status> {
+            let mut w = self.1.lock().unwrap();
+            w.last_poll = Some(*outputs);
+            if w.fail_polls {
+                return Err(crate::backend::BackendError::Io("no reply".into()));
+            }
+            self.0.poll(outputs)
+        }
+        fn push_segments(&mut self, segments: &[crate::planner::Segment], last: bool) -> crate::backend::Result<()> {
+            self.0.push_segments(segments, last)
+        }
+        fn axis_move(&mut self, m: &AxisMove) -> crate::backend::Result<()> {
+            self.0.axis_move(m)
+        }
+        fn stop_axis_move(&mut self) -> crate::backend::Result<()> {
+            self.0.stop_axis_move()
+        }
+        fn abort(&mut self) -> crate::backend::Result<()> {
+            self.1.lock().unwrap().aborts += 1;
+            self.0.abort()
+        }
+        fn set_position(&mut self, steps: [i64; 6]) -> crate::backend::Result<()> {
+            self.0.set_position(steps)
+        }
+    }
+
+    fn flaky_setup() -> (Controller, Arc<ManualClock>, Arc<std::sync::Mutex<Wire>>) {
+        let clock = Arc::new(ManualClock::default());
+        let wire = Arc::new(std::sync::Mutex::new(Wire::default()));
+        let sim = Flaky(Simulator::new(clock.clone()), wire.clone());
+        let mut c = Controller::new(MachineConfig::dmc2(), Box::new(sim), clock.clone());
+        c.handle(Command::Connect);
+        c.handle(Command::Reset);
+        assert_eq!(c.mode(), Mode::Idle);
+        (c, clock, wire)
+    }
+
+    fn tick(c: &mut Controller, clock: &ManualClock, n: usize) {
+        for _ in 0..n {
+            clock.advance(0.005);
+            c.update();
+        }
+    }
+
+    #[test]
+    fn lost_link_aborts_and_reconnects_with_outputs_off() {
+        let (mut c, clock, wire) = flaky_setup();
+        c.handle(Command::Mdi("M3 S10000".into()));
+        run_until_idle(&mut c, &clock, 30.0);
+        c.handle(Command::Jog { axis: 0, positive: true, step: None });
+        tick(&mut c, &clock, 10);
+        assert_eq!(c.mode(), Mode::Jog);
+        wire.lock().unwrap().fail_polls = true;
+        // One missed reply is retried.
+        tick(&mut c, &clock, 1);
+        assert_eq!(c.mode(), Mode::Jog);
+        let aborts = wire.lock().unwrap().aborts;
+        tick(&mut c, &clock, POLL_RETRIES as usize);
+        assert_eq!(c.mode(), Mode::Disconnected);
+        assert!(wire.lock().unwrap().aborts > aborts, "no abort sent");
+        assert_eq!(c.interpreter().state.spindle, Spindle::Off);
+        // Stop still tries to abort while disconnected.
+        let aborts = wire.lock().unwrap().aborts;
+        c.handle(Command::Stop);
+        assert!(wire.lock().unwrap().aborts > aborts);
+
+        // Reset reconnects into E-stop with everything off.
+        wire.lock().unwrap().fail_polls = false;
+        c.handle(Command::Reset);
+        assert_eq!(c.mode(), Mode::EStop);
+        let sent = wire.lock().unwrap().last_poll.unwrap();
+        assert!(!sent.enable && !sent.spindle_on, "{sent:?}");
+        tick(&mut c, &clock, 5);
+        let sent = wire.lock().unwrap().last_poll.unwrap();
+        assert!(!sent.enable && !sent.spindle_on, "{sent:?}");
+    }
+
+    #[test]
+    fn estop_rewinds_and_forgets_the_spindle() {
+        let (mut c, clock) = setup();
+        c.handle(Command::Load {
+            name: "t".into(),
+            text: "M3 S10000\nG91\nG1 X10 F600\nG1 X10\nG1 X10\nG1 X10\nG1 X10\nM30".into(),
+        });
+        c.handle(Command::CycleStart);
+        // Past the spin-up and into the moves.
+        tick(&mut c, &clock, 2600);
+        assert_eq!(c.mode(), Mode::Running);
+        assert!(c.interpreter().pc() > 2);
+        c.handle(Command::Reset);
+        assert_eq!(c.mode(), Mode::EStop);
+        assert_eq!(c.interpreter().pc(), 0);
+        assert_eq!(c.interpreter().state.spindle, Spindle::Off);
+        c.handle(Command::Reset);
+        assert_eq!(c.mode(), Mode::Idle);
+        // An S word alone must not start the spindle again.
+        c.handle(Command::Mdi("S12000".into()));
+        run_until_idle(&mut c, &clock, 5.0);
+        assert_eq!(c.snapshot().spindle, Spindle::Off);
+    }
+
+    #[test]
+    fn stop_clears_feed_hold() {
+        let (mut c, clock) = setup();
+        c.handle(Command::Mdi("G91 G1 X20 F600".into()));
+        tick(&mut c, &clock, 100);
+        c.handle(Command::FeedHold);
+        tick(&mut c, &clock, 100);
+        c.handle(Command::Stop);
+        let x = c.snapshot().machine[0];
+        c.handle(Command::Mdi("G91 G1 X5 F600".into()));
+        run_until_idle(&mut c, &clock, 10.0);
+        assert!((c.snapshot().machine[0] - x - 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn probe_without_contact_raises_an_alarm() {
+        let (mut c, clock) = setup();
+        c.handle(Command::Load {
+            name: "t".into(),
+            text: "G91 G31 Z-5 F300\nG10 L20 P1 Z0\nM30".into(),
+        });
+        c.handle(Command::CycleStart);
+        run_until_idle(&mut c, &clock, 30.0);
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Alarm);
+        assert!(s.alarm.unwrap().contains("without touching"));
+        assert_eq!(c.interpreter().params.coord_offset(0)[2], 0.0, "G10 must not run");
     }
 
     #[test]

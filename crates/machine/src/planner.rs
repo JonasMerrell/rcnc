@@ -32,7 +32,10 @@ struct Planned {
     to: Axes,
     length: f64,
     unit: Axes,
+    /// Programmed speed, capped by the axis velocities.
     max_speed: f64,
+    /// Fastest the axes allow along this move, whatever the override.
+    axis_speed: f64,
     accel: f64,
     rapid: bool,
     line: usize,
@@ -132,14 +135,15 @@ impl Generator {
             return;
         }
         let unit: Axes = std::array::from_fn(|i| delta[i] / length);
-        let mut max_speed = m.speed;
+        let mut axis_speed = f64::INFINITY;
         let mut accel = f64::INFINITY;
         for (i, a) in self.config.axes.iter().enumerate() {
             if unit[i].abs() > 1e-12 {
-                max_speed = max_speed.min(a.max_velocity / unit[i].abs());
+                axis_speed = axis_speed.min(a.max_velocity / unit[i].abs());
                 accel = accel.min(a.acceleration / unit[i].abs());
             }
         }
+        let max_speed = m.speed.min(axis_speed);
         // Corner between the previous move and this one.
         if let Some(prev) = self.moves.back_mut() {
             let blend = self.config.constant_velocity || m.continues;
@@ -162,6 +166,7 @@ impl Generator {
             length,
             unit,
             max_speed,
+            axis_speed,
             accel,
             rapid: m.rapid,
             line: m.line,
@@ -203,10 +208,16 @@ impl Generator {
                 break;
             }
         }
-        let target = if self.hold {
+        // A 0% override stops the move like a feed hold.
+        let held = self.hold || self.speed_scale(front) <= 0.0;
+        let target = if held {
             0.0
         } else {
-            (front.max_speed * self.speed_scale(front)).min(allowed)
+            // Scale the programmed speed, then cap it: an override above 100%
+            // must not drive an axis past its maximum velocity.
+            (front.max_speed * self.speed_scale(front))
+                .min(front.axis_speed)
+                .min(allowed)
         };
         let new_speed = if target > self.speed {
             (self.speed + accel * dt).min(target)
@@ -217,14 +228,15 @@ impl Generator {
         let mut travel = (self.speed + new_speed) / 2.0 * dt;
         self.speed = new_speed;
         let mut line = front.line;
-        if self.hold && new_speed == 0.0 && travel == 0.0 {
+        if held && new_speed == 0.0 && travel == 0.0 {
             return Some(Segment {
                 steps: [0; 6],
                 line,
             });
         }
         // Avoid creeping forever towards a stop point.
-        if new_speed == 0.0 && travel < 1e-6 {
+        // Not while held, or a stop would jump the rest of the move in one segment.
+        if !held && new_speed == 0.0 && travel < 1e-6 {
             travel = front.length - self.progress;
         }
 
@@ -338,6 +350,43 @@ mod tests {
 
     fn gen() -> Generator {
         Generator::new(MachineConfig::dmc2(), 0.004, [0.0; 6])
+    }
+
+    fn feed_move(g: &mut Generator, x: f64, speed: f64) {
+        g.push(Move { to: [x, 0.0, 0.0, 0.0, 0.0, 0.0], speed, rapid: false, line: 0, continues: false });
+    }
+
+    #[test]
+    fn zero_feed_override_stops_without_jumping() {
+        let mut g = gen();
+        feed_move(&mut g, 100.0, 20.0);
+        for _ in 0..50 {
+            g.tick();
+        }
+        g.feed_override = 0.0;
+        let mut biggest = 0;
+        for _ in 0..1000 {
+            let s = g.tick().unwrap();
+            biggest = biggest.max(s.steps[0].abs());
+        }
+        // At 20 mm/s, a 4 ms segment is 16 steps; nothing may jump ahead.
+        assert!(biggest <= 17, "segment of {biggest} steps");
+        assert!(g.remaining_length() > 90.0);
+        g.feed_override = 1.0;
+        while g.tick().is_some() {}
+        assert_eq!(g.steps[0], 20_000);
+    }
+
+    #[test]
+    fn feed_override_does_not_exceed_axis_velocity() {
+        let mut g = gen();
+        let max = g.config.axes[0].max_velocity;
+        feed_move(&mut g, 200.0, 8000.0 / 60.0);
+        g.feed_override = 2.0;
+        let limit = (max * 0.004 * 200.0).ceil() as i32;
+        while let Some(s) = g.tick() {
+            assert!(s.steps[0].abs() <= limit, "{} steps > {limit}", s.steps[0]);
+        }
     }
 
     fn run(g: &mut Generator) -> Vec<Segment> {
