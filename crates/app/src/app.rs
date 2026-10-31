@@ -7,8 +7,10 @@ use eframe::egui::{
 };
 use gcode::{Spindle, AXIS_LETTERS};
 use machine::{Command, ControllerHandle, Mode, Snapshot};
+use std::sync::Arc;
 
 use crate::preview::{self, Camera, Toolpath};
+use crate::sheet::{self, Sheets, SheetView};
 
 mod pages;
 mod toolchange;
@@ -28,6 +30,13 @@ mod palette {
     pub const RED: Color32 = Color32::from_rgb(0xe5, 0x48, 0x4d);
 }
 use palette::*;
+
+/// What the big centre area shows.
+#[derive(Clone, Copy, PartialEq)]
+enum View {
+    Toolpath,
+    Sheet,
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum JogStep {
@@ -56,10 +65,22 @@ pub struct App {
     file_checked: f64,
     /// The tool change window's "measure" checkbox.
     tc_measure: Option<bool>,
+    view: View,
+    sheets: Arc<Sheets>,
+    /// The loaded program's setup sheet and its modification time.
+    sheet: Option<(std::path::PathBuf, Option<std::time::SystemTime>)>,
+    sheet_view: SheetView,
+    /// Where the sheet goes this frame, if it's on show.
+    sheet_rect: Option<egui::Rect>,
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, machine: ControllerHandle) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        machine: ControllerHandle,
+        sheets: Arc<Sheets>,
+        web_data: std::path::PathBuf,
+    ) -> Self {
         apply_theme(&cc.egui_ctx);
         machine.send(Command::Connect);
         let snap = machine.snapshot();
@@ -81,6 +102,11 @@ impl App {
             program_file: None,
             file_checked: 0.0,
             tc_measure: None,
+            view: View::Toolpath,
+            sheets,
+            sheet: None,
+            sheet_view: SheetView::new(web_data),
+            sheet_rect: None,
         }
     }
 
@@ -114,11 +140,54 @@ impl App {
             return;
         }
         self.file_checked = now;
+        if let Some((path, seen)) = &mut self.sheet {
+            let modified = std::fs::metadata(&*path).and_then(|m| m.modified()).ok();
+            if modified.is_some() && modified != *seen {
+                *seen = modified;
+                self.sheet_view.reload();
+            }
+        }
         let Some((path, seen)) = &self.program_file else { return };
         let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
         if modified.is_some() && modified != *seen {
             let path = path.clone();
             self.load_path(path);
+        }
+    }
+
+    /// Find the setup sheet for a newly loaded program: the one sent with
+    /// it, or one saved next to its file.
+    fn find_sheet(&mut self) {
+        let name = self.snap.program_name.clone().unwrap_or_default();
+        let path = match self.sheets.take(&name) {
+            Some(sent) => sent,
+            None => self
+                .program_file
+                .as_ref()
+                .filter(|(p, _)| p.file_name().is_some_and(|n| n.to_string_lossy() == name))
+                .and_then(|(p, _)| sheet::beside(p)),
+        };
+        if path.is_some() && path.as_ref() != self.sheet.as_ref().map(|(p, _)| p) {
+            self.view = View::Sheet;
+        }
+        self.set_sheet(path);
+    }
+
+    fn set_sheet(&mut self, path: Option<std::path::PathBuf>) {
+        self.sheet = path.map(|p| {
+            let modified = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+            (p, modified)
+        });
+    }
+
+    fn open_sheet(&mut self) {
+        let mut dialog = rfd::FileDialog::new().add_filter("Web page", &["html", "htm"]);
+        if let Some(dir) = self.program_file.as_ref().and_then(|(p, _)| p.parent()) {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(path) = dialog.pick_file() {
+            self.set_sheet(Some(path));
+            self.view = View::Sheet;
         }
     }
 
@@ -198,13 +267,14 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.snap = self.machine.snapshot();
         self.watch_file(ctx.input(|i| i.time));
         if Self::program_id(&self.snap) != self.toolpath_for {
             self.toolpath = Toolpath::build(&self.snap.program);
             self.toolpath_for = Self::program_id(&self.snap);
             self.camera.fit();
+            self.find_sheet();
         }
         self.keyboard(ctx);
 
@@ -251,8 +321,22 @@ impl eframe::App for App {
             });
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG).inner_margin(Margin::same(10)))
-            .show(ctx, |ui| self.preview(ui));
+            .show(ctx, |ui| match self.view {
+                View::Toolpath => self.preview(ui),
+                View::Sheet => self.sheet_page(ui),
+            });
         self.tool_change_window(ctx);
+
+        // The sheet is a native window over the centre area, drawn above
+        // anything egui puts there: keep it out of the way of the tool change
+        // window and of open menus.
+        let covered = self.snap.tool_change.is_some() || egui::Popup::is_any_open(ctx);
+        match (self.sheet_rect.take(), &self.sheet) {
+            (Some(rect), Some((path, _))) if !covered => {
+                self.sheet_view.show(frame, ctx, rect, path, &self.machine)
+            }
+            _ => self.sheet_view.hide(),
+        }
 
         ctx.request_repaint_after(std::time::Duration::from_millis(33));
     }
@@ -570,8 +654,55 @@ impl App {
             });
     }
 
+    fn view_switch(&mut self, ui: &mut egui::Ui) {
+        for (view, label) in [(View::Toolpath, "Toolpath"), (View::Sheet, "Setup sheet")] {
+            if ui.selectable_label(self.view == view, label).clicked() {
+                self.view = view;
+            }
+        }
+        ui.separator();
+    }
+
+    fn sheet_page(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            self.view_switch(ui);
+            if ui.button("Open sheet…").clicked() {
+                self.open_sheet();
+            }
+            if let Some((path, _)) = self.sheet.clone() {
+                if self.sheet_view.error().is_none() && ui.button("Print").clicked() {
+                    self.sheet_view.print();
+                }
+                if ui.button("Open in browser").clicked() {
+                    sheet::open_in_browser(&path);
+                }
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                ui.add(egui::Label::new(RichText::new(name).size(12.0).color(MUTED)).truncate());
+            }
+        });
+        ui.add_space(4.0);
+        let rect = ui.available_rect_before_wrap();
+        ui.allocate_rect(rect, egui::Sense::hover());
+        let note = |ui: &mut egui::Ui, text: &str| {
+            ui.put(rect, egui::Label::new(RichText::new(text).color(MUTED)).wrap());
+        };
+        if self.sheet.is_none() {
+            note(
+                ui,
+                "No setup sheet for this program.\n\nSend it from the CAM with its setup sheet, save the sheet next to the G-code \
+                 (part.html or \"part setup sheet.html\" for part.nc), or open one.",
+            );
+        } else if let Some(e) = self.sheet_view.error() {
+            note(ui, &format!("{e}\n\nUse Open in browser to see it."));
+        } else {
+            ui.painter().rect_filled(rect, CornerRadius::same(6), Color32::WHITE);
+            self.sheet_rect = Some(rect);
+        }
+    }
+
     fn preview(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            self.view_switch(ui);
             for (label, f) in [
                 ("Top", Camera::top as fn(&mut Camera)),
                 ("Front", Camera::front),

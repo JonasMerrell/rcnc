@@ -26,10 +26,16 @@ Settings (`machine.json`), the tool table and work offsets (`state.json`) live i
 
 rcnc listens on `127.0.0.1:7350` for programs from a CAD/CAM app:
 
-- `POST /program` with JSON `{"name": "part.nc", "gcode": "...", "tools": [{"number": 1, "diameter": 6, "description": "6 mm flat"}]}` loads the program and sets those tools' diameters and descriptions (measured lengths are kept). It's refused while the machine runs.
+- `POST /program` with JSON `{"name": "part.nc", "gcode": "...", "tools": [{"number": 1, "diameter": 6, "description": "6 mm flat"}], "setup_sheet": "<!doctype html>..."}` loads the program and sets those tools' diameters and descriptions (measured lengths are kept). The optional `setup_sheet` is shown with the program. It's refused while the machine runs.
 - `GET /status` returns `{"app": "rcnc", "mode": "Idle", "program": "part.nc"}`.
 
 cad-rust-app's **Send to rcnc** button uses this, with its rcnc (Mach3-dialect) post.
+
+## Setup sheets
+
+The centre area switches between the toolpath and the program's **setup sheet**, an HTML page from the CAM (stock, work zero, fixtures, tools). A sheet comes with a program sent over the CAM link, or is found next to an opened file: `part.html`, `part.htm` or `part setup sheet.html` for `part.nc`. **Open sheet…** picks one by hand. The sheet reloads when its file changes.
+
+On Windows the sheet is shown inside rcnc by WebView2, the Chromium-based engine that comes with Windows 10 and 11, with Print and Open in browser buttons. Elsewhere it opens in the browser. The web view renders in its own processes and the machine is polled on the controller thread, so a page can't hold up motion; while the page has the keyboard, Esc still stops the machine and Space still holds the feed. The sheet is hidden while the tool change window is up.
 
 ## Layout
 
