@@ -8,8 +8,10 @@
 //!
 //! The web view lives on the UI thread but renders in its own browser
 //! processes, and the machine is polled on the controller's thread, so
-//! nothing a page does can hold up motion. While the page has the keyboard,
-//! Esc still stops the machine and Space still holds the feed.
+//! nothing a page does can hold up motion. The sheet never keeps the
+//! keyboard: a click in it takes the focus, and rcnc takes it straight back,
+//! so Esc, Space and the jog keys always reach rcnc and its buttons keep
+//! working.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -88,7 +90,8 @@ pub fn open_in_browser(path: &Path) {
     }
 }
 
-/// Esc and Space pressed inside the page, sent on as they would be from rcnc's own window.
+/// Esc and Space pressed inside the page in the moment before rcnc takes the
+/// keyboard back, sent on as they would be from rcnc's own window.
 #[cfg_attr(not(windows), allow(dead_code))]
 const KEYS_SCRIPT: &str = r#"
 window.addEventListener('keydown', function (e) {
@@ -104,6 +107,7 @@ mod view {
     use eframe::egui;
     use machine::{Command, ControllerHandle, Mode};
     use wry::dpi::{PhysicalPosition, PhysicalSize};
+    use wry::raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use wry::{NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder};
 
     /// The web view showing the sheet, made the first time a sheet is shown.
@@ -167,6 +171,21 @@ mod view {
             }
         }
 
+        /// Take the keyboard back from the page. Called every frame: a click
+        /// in the page gives it the focus, and while it has it, Esc wouldn't
+        /// reach rcnc and egui would ignore clicks on its own buttons.
+        pub fn keep_keyboard(&self, frame: &eframe::Frame) {
+            let Some((web, _)) = &self.web else { return };
+            let Ok(handle) = frame.window_handle() else { return };
+            let RawWindowHandle::Win32(h) = handle.as_raw() else { return };
+            let ours = h.hwnd.get();
+            // Only while rcnc is the active window, so another program never loses the keyboard to it.
+            let (active, focus) = unsafe { (GetForegroundWindow(), GetFocus()) };
+            if active == ours && focus != ours {
+                let _ = web.focus_parent();
+            }
+        }
+
         pub fn hide(&mut self) {
             if let (Some((web, _)), true) = (&self.web, self.visible) {
                 let _ = web.set_visible(false);
@@ -213,6 +232,12 @@ mod view {
         }
     }
 
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetForegroundWindow() -> isize;
+        fn GetFocus() -> isize;
+    }
+
     fn file_url(path: &Path) -> Option<String> {
         let path = std::path::absolute(path).ok()?;
         let mut url = String::from("file:///");
@@ -248,6 +273,23 @@ mod view {
         }
 
         pub fn show(&mut self, _: &eframe::Frame, _: &egui::Context, _: egui::Rect, _: &Path, _: &ControllerHandle) {}
+
+        /// Take the keyboard back from the page. Called every frame: a click
+        /// in the page gives it the focus, and while it has it, Esc wouldn't
+        /// reach rcnc and egui would ignore clicks on its own buttons.
+        pub fn keep_keyboard(&self, frame: &eframe::Frame) {
+            let Some((web, _)) = &self.web else { return };
+            let Ok(handle) = frame.window_handle() else { return };
+            let RawWindowHandle::Win32(h) = handle.as_raw() else { return };
+            let ours = h.hwnd.get();
+            // Only while rcnc is the active window, so another program never loses the keyboard to it.
+            let (active, focus) = unsafe { (GetForegroundWindow(), GetFocus()) };
+            if active == ours && focus != ours {
+                let _ = web.focus_parent();
+            }
+        }
+
+        pub fn keep_keyboard(&self, _: &eframe::Frame) {}
 
         pub fn hide(&mut self) {}
 

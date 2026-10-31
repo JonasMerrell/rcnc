@@ -337,6 +337,7 @@ impl eframe::App for App {
             }
             _ => self.sheet_view.hide(),
         }
+        self.sheet_view.keep_keyboard(frame);
 
         ctx.request_repaint_after(std::time::Duration::from_millis(33));
     }
@@ -664,7 +665,8 @@ impl App {
     }
 
     fn sheet_page(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        // Wraps rather than widening the panel: the sheet takes the panel's width.
+        ui.horizontal_wrapped(|ui| {
             self.view_switch(ui);
             if ui.button("Open sheet…").clicked() {
                 self.open_sheet();
@@ -677,11 +679,12 @@ impl App {
                     sheet::open_in_browser(&path);
                 }
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                ui.add(egui::Label::new(RichText::new(name).size(12.0).color(MUTED)).truncate());
+                ui.label(RichText::new(name).size(12.0).color(MUTED));
             }
         });
         ui.add_space(4.0);
-        let rect = ui.available_rect_before_wrap();
+        // Kept inside the panel: the sheet is a native window and would cover the panels beside it.
+        let rect = ui.available_rect_before_wrap().intersect(ui.clip_rect());
         ui.allocate_rect(rect, egui::Sense::hover());
         let note = |ui: &mut egui::Ui, text: &str| {
             ui.put(rect, egui::Label::new(RichText::new(text).color(MUTED)).wrap());

@@ -35,7 +35,7 @@ cad-rust-app's **Send to rcnc** button uses this, with its rcnc (Mach3-dialect) 
 
 The centre area switches between the toolpath and the program's **setup sheet**, an HTML page from the CAM (stock, work zero, fixtures, tools). A sheet comes with a program sent over the CAM link, or is found next to an opened file: `part.html`, `part.htm` or `part setup sheet.html` for `part.nc`. **Open sheet…** picks one by hand. The sheet reloads when its file changes.
 
-On Windows the sheet is shown inside rcnc by WebView2, the Chromium-based engine that comes with Windows 10 and 11, with Print and Open in browser buttons. Elsewhere it opens in the browser. The web view renders in its own processes and the machine is polled on the controller thread, so a page can't hold up motion; while the page has the keyboard, Esc still stops the machine and Space still holds the feed. The sheet is hidden while the tool change window is up.
+On Windows the sheet is shown inside rcnc by WebView2, the Chromium-based engine that comes with Windows 10 and 11, with Print and Open in browser buttons. Elsewhere it opens in the browser. The web view renders in its own processes and the machine is polled on the controller thread, so a page can't hold up motion. The sheet never keeps the keyboard, so Esc, Space and the jog keys always reach rcnc; scroll it with the mouse. The sheet is hidden while the tool change window is up.
 
 ## Layout
 
