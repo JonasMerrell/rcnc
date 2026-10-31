@@ -274,21 +274,6 @@ mod view {
 
         pub fn show(&mut self, _: &eframe::Frame, _: &egui::Context, _: egui::Rect, _: &Path, _: &ControllerHandle) {}
 
-        /// Take the keyboard back from the page. Called every frame: a click
-        /// in the page gives it the focus, and while it has it, Esc wouldn't
-        /// reach rcnc and egui would ignore clicks on its own buttons.
-        pub fn keep_keyboard(&self, frame: &eframe::Frame) {
-            let Some((web, _)) = &self.web else { return };
-            let Ok(handle) = frame.window_handle() else { return };
-            let RawWindowHandle::Win32(h) = handle.as_raw() else { return };
-            let ours = h.hwnd.get();
-            // Only while rcnc is the active window, so another program never loses the keyboard to it.
-            let (active, focus) = unsafe { (GetForegroundWindow(), GetFocus()) };
-            if active == ours && focus != ours {
-                let _ = web.focus_parent();
-            }
-        }
-
         pub fn keep_keyboard(&self, _: &eframe::Frame) {}
 
         pub fn hide(&mut self) {}
