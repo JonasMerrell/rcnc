@@ -1,7 +1,7 @@
 //! The machine controller: owns the backend, interpreter and planner, runs
 //! programs, MDI, jogging and homing, and publishes a snapshot for the UI.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
@@ -27,12 +27,23 @@ const TARGET_QUEUE: usize = 60;
 const LOOKAHEAD_MOVES: usize = 200;
 /// Missed status replies in a row before the link counts as lost.
 const POLL_RETRIES: u32 = 3;
+/// A continuous jog stops unless the UI says the key or button is still
+/// held this often (a lost key-up, a hung or minimised window).
+const JOG_KEEPALIVE: f64 = 0.5;
+/// Longest a decelerating Stop waits for the machine to come to rest before
+/// it aborts anyway.
+const STOP_TIMEOUT: f64 = 1.5;
+/// Board and planner positions may differ by this many steps (rounding).
+const POSITION_SLACK: i64 = 2;
 
 #[derive(Debug, Clone)]
 pub enum Command {
     Connect,
     Disconnect,
-    /// Toggle E-stop/reset, like Mach3's Reset button.
+    /// Enter E-stop: drives and outputs off. Always safe to send.
+    EStop,
+    /// Leave E-stop or an alarm and enable the drives. Does nothing in any
+    /// other mode, so a repeated or late Reset can't skip a state.
     Reset,
     Jog {
         axis: usize,
@@ -40,6 +51,8 @@ pub enum Command {
         step: Option<f64>,
     },
     JogStop,
+    /// A continuous jog's key or button is still held (see `JOG_KEEPALIVE`).
+    JogAlive,
     /// Home one axis, or all axes in the configured order.
     Home(Option<usize>),
     Mdi(String),
@@ -122,14 +135,25 @@ pub struct Snapshot {
     pub g92: Axes,
     /// The guided tool change in progress.
     pub tool_change: Option<ToolChangeView>,
+    /// User M-code macros, for the preview.
+    pub macros: Arc<HashMap<u32, String>>,
+    /// The spindle can run in reverse (M4, G84).
+    pub spindle_reversible: bool,
+    /// Controller clock when this snapshot was taken; it stops moving if the
+    /// controller thread dies.
+    pub time: f64,
+    /// A Stop is waiting for the machine to slow down.
+    pub stopping: bool,
 }
 
 /// Where and what was last saved, so only changes get written.
 struct Persist {
     dir: PathBuf,
-    state: SavedState,
-    config: MachineConfig,
+    /// What was last handed to the saver (None: write it again).
+    state: Option<SavedState>,
+    config: Option<MachineConfig>,
     checked_at: f64,
+    saver: store::Saver,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -165,6 +189,9 @@ struct Exec {
     /// Planner received the last move of the program/MDI.
     exhausted: bool,
     line: usize,
+    /// An error found while reading ahead: the moves before it still run,
+    /// then the alarm is raised with the machine at rest.
+    fault: Option<String>,
 }
 
 pub struct Controller {
@@ -201,6 +228,15 @@ pub struct Controller {
     loaded_tool: u32,
     /// Status polls that failed in a row.
     poll_failures: u32,
+    /// A Stop is decelerating; abort at this time if it hasn't stopped by then.
+    stopping: Option<f64>,
+    /// Last time the UI said a continuous jog is still held.
+    jog_alive: f64,
+    jog_continuous: bool,
+    /// Where a probe job started while a program was paused, and the Z
+    /// program offset then, to go back before the program carries on.
+    routine_resume: Option<(Axes, f64)>,
+    macros: Arc<HashMap<u32, String>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -241,7 +277,18 @@ impl Controller {
             tool_change: None,
             loaded_tool: 0,
             poll_failures: 0,
+            stopping: None,
+            jog_alive: 0.0,
+            jog_continuous: false,
+            routine_resume: None,
+            macros: Arc::new(HashMap::new()),
         }
+        .with_interp_config()
+    }
+
+    fn with_interp_config(mut self) -> Self {
+        self.interp.spindle_reversible = self.config.spindle_reversible;
+        self
     }
 
     /// Keep the tool table, work offsets and machine config in `dir`, loading
@@ -259,14 +306,21 @@ impl Controller {
                     (self.interp.params.get(num::COORD_SYSTEM) as usize).clamp(1, 6) - 1;
             }
             Ok(None) => {}
-            Err(e) => self.info(format!("Could not load saved state: {e}")),
+            Err(e) => {
+                // Keep the unreadable file: the next save would overwrite the
+                // tool table and offsets in it.
+                let kept = store::set_aside(&dir.join("state.json"));
+                self.info(format!("Alarm: could not load the saved tools and offsets ({e}); {kept}"));
+                self.alarm = Some("Saved tools and offsets could not be loaded; check the tool table and work offsets".into());
+            }
         }
         self.load_macros(&dir.join("macros"));
         self.persist = Some(Persist {
             dir,
-            state: self.saved_state(),
-            config: self.config.clone(),
+            state: Some(self.saved_state()),
+            config: Some(self.config.clone()),
             checked_at: f64::NEG_INFINITY,
+            saver: store::Saver::new(),
         });
     }
 
@@ -289,6 +343,7 @@ impl Controller {
                 }
             }
         }
+        self.macros = Arc::new(self.interp.macros.clone());
         if !self.interp.macros.is_empty() {
             let mut codes: Vec<_> = self.interp.macros.keys().map(|c| format!("M{c}")).collect();
             codes.sort();
@@ -310,24 +365,27 @@ impl Controller {
             return;
         }
         let state = self.saved_state();
-        let mut errors = Vec::new();
         let p = self.persist.as_mut().unwrap();
         p.checked_at = now;
-        if state != p.state {
-            match store::save(&p.dir.join("state.json"), &state) {
-                Ok(()) => p.state = state,
-                Err(e) => errors.push(e),
-            }
-        }
-        if self.config != p.config {
-            match store::save(&p.dir.join("machine.json"), &self.config) {
-                Ok(()) => p.config = self.config.clone(),
-                Err(e) => errors.push(e),
-            }
-        }
+        let mut errors = p.saver.errors();
         if !errors.is_empty() {
-            // Retry later rather than flooding the log every second.
+            // Write both again, later rather than flooding the log every second.
+            p.state = None;
+            p.config = None;
             p.checked_at = now + 30.0;
+        } else {
+            if p.state.as_ref() != Some(&state) {
+                match p.saver.save(&p.dir.join("state.json"), &state) {
+                    Ok(()) => p.state = Some(state),
+                    Err(e) => errors.push(e),
+                }
+            }
+            if p.config.as_ref() != Some(&self.config) {
+                match p.saver.save(&p.dir.join("machine.json"), &self.config) {
+                    Ok(()) => p.config = Some(self.config.clone()),
+                    Err(e) => errors.push(e),
+                }
+            }
         }
         for e in errors {
             self.info(format!("Could not save settings: {e}"));
@@ -336,6 +394,13 @@ impl Controller {
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// Wait until settings handed to the saver are on disk.
+    pub fn wait_for_saves(&self) {
+        if let Some(p) = &self.persist {
+            p.saver.wait();
+        }
     }
 
     pub fn interpreter(&self) -> &Interpreter {
@@ -354,6 +419,7 @@ impl Controller {
         self.routine_move = None;
         self.routine_waiting = false;
         self.routine_until = None;
+        self.routine_resume = None;
         self.tool_change = None;
     }
 
@@ -366,6 +432,8 @@ impl Controller {
         self.generator.clear();
         self.generator.hold = false;
         self.exec = None;
+        self.stopping = None;
+        self.jog_continuous = false;
         self.home.clear();
         self.outputs.spindle_on = false;
         self.outputs.flood = false;
@@ -401,7 +469,19 @@ impl Controller {
 
     pub fn handle(&mut self, cmd: Command) {
         match cmd {
-            Command::Connect => self.connect(),
+            Command::Connect => {
+                if self.mode == Mode::Disconnected {
+                    self.connect();
+                }
+            }
+            Command::EStop => {
+                if self.mode == Mode::Disconnected {
+                    // The link may be gone, but try anyway.
+                    let _ = self.backend.abort();
+                } else {
+                    self.enter_estop("E-stop pressed");
+                }
+            }
             Command::Disconnect => {
                 self.drop_motion();
                 self.outputs = Outputs::default();
@@ -416,10 +496,14 @@ impl Controller {
                 step,
             } => self.jog(axis, positive, step),
             Command::JogStop => {
-                if self.mode == Mode::Jog {
+                // Sent even if the mode already reads Idle: a stale status can
+                // make a jog look finished while the axis still runs.
+                if matches!(self.mode, Mode::Jog | Mode::Idle) {
                     let _ = self.backend.stop_axis_move();
                 }
+                self.jog_continuous = false;
             }
+            Command::JogAlive => self.jog_alive = self.clock.now(),
             Command::Home(axis) => self.start_homing(axis),
             Command::Mdi(text) => self.mdi(&text),
             Command::Load { name, text } => {
@@ -433,11 +517,7 @@ impl Controller {
                 self.program_name = Some(name);
             }
             Command::CycleStart => self.cycle_start(),
-            Command::FeedHold => {
-                if self.mode == Mode::Running {
-                    self.generator.hold = true;
-                }
-            }
+            Command::FeedHold => self.feed_hold(),
             Command::Stop => self.stop(),
             Command::ZeroAxis(axis) => {
                 if self.is_ready() {
@@ -447,16 +527,34 @@ impl Controller {
                     }
                 }
             }
-            Command::SetFeedOverride(v) => self.generator.feed_override = v.clamp(0.0, 3.0),
+            Command::SetFeedOverride(v) => {
+                self.generator.feed_override = v.clamp(0.0, 3.0);
+                if self.generator.feed_override == 0.0 {
+                    // Single-axis moves can't slow down to 0%; hold them like Feed Hold.
+                    self.hold_axis_move("feed override at 0%");
+                }
+            }
             Command::SetRapidOverride(v) => self.generator.rapid_override = v.clamp(0.0, 1.0),
             Command::SetSpindleOverride(v) => self.spindle_override = v.clamp(0.0, 2.0),
             Command::SetJogSpeed(v) => self.config.jog_speed = v.clamp(0.001, 1.0),
-            Command::SetSoftLimits(on) => self.config.soft_limits = on,
+            Command::SetSoftLimits(on) => {
+                if on {
+                    let mut c = self.config.clone();
+                    c.soft_limits = true;
+                    if let Err(e) = c.validate() {
+                        return self.info(format!("Soft limits not turned on: {e}"));
+                    }
+                }
+                self.config.soft_limits = on;
+            }
             Command::SetTool(n, tool) => {
+                if !(self.is_ready() || self.paused_at_rest() || matches!(self.mode, Mode::EStop | Mode::Disconnected | Mode::Alarm)) {
+                    return self.info("Stop the machine (or pause at M0/M6) before changing the tool table");
+                }
                 match tool {
                     Some(t) => {
                         // Keep an active G43 offset in step with an edited length.
-                        if n == self.interp.state.tool && self.interp.state.tool_length_offset != 0.0 {
+                        if self.interp.state.tlo_tool == Some(n) {
                             self.interp.state.tool_length_offset = t.length;
                         }
                         self.interp.tools.insert(n, t);
@@ -485,6 +583,11 @@ impl Controller {
         if config == self.config {
             return;
         }
+        if let Err(e) = config.validate() {
+            self.info(format!("Settings not applied: {e}"));
+            return;
+        }
+        self.interp.spindle_reversible = config.spindle_reversible;
         let pos = self.machine_position();
         // The board takes axis and pin settings at connect time.
         let reconnect = config.axes != self.config.axes
@@ -506,11 +609,19 @@ impl Controller {
         }
     }
 
-    fn start_probe(&mut self, job: ProbeJob) {
-        let paused = self.mode == Mode::Running
+    /// A program is paused (M0, M1, M6 or a failed touch-off) with the machine at rest.
+    fn paused_at_rest(&self) -> bool {
+        self.mode == Mode::Running
             && matches!(&self.exec, Some(Exec { wait: Wait::Pause(_) | Wait::ToolChange(_), .. }))
             && self.generator.is_idle()
-            && self.status.idle;
+            && self.status.idle
+    }
+
+    fn start_probe(&mut self, job: ProbeJob) {
+        let paused = self.paused_at_rest();
+        if self.generator.feed_override == 0.0 {
+            return self.info("Feed override is at 0%");
+        }
         if !(self.is_ready() || paused) {
             self.info("Probing needs the machine idle, or a program paused");
             return;
@@ -523,6 +634,8 @@ impl Controller {
         }
         self.sync_position();
         self.info(format!("{} started", job.name()));
+        // A paused program carries on from where it stopped, not from the probe's end position.
+        self.routine_resume = paused.then(|| (self.machine_position(), self.interp.program_offset()[2]));
         self.routine = Some(probing::build(job, &self.config.probing, self.machine_position()));
         self.routine_move = None;
         self.routine_return = self.mode;
@@ -596,6 +709,11 @@ impl Controller {
                 Step::MoveTo { axis, to, feed, guarded } => (axis, to, feed, guarded),
                 Step::MoveBy { axis, by, feed, guarded } => (axis, pos[axis] + by, feed, guarded),
                 Step::Probe { axis, by, feed, record } => {
+                    let mut p = pos;
+                    p[axis] += by;
+                    if let Some(violation) = self.config.soft_limit_violation(&p) {
+                        return self.end_routine(Err(format!("probe move outside {} soft limit", AXIS_LETTERS[violation])));
+                    }
                     match self.routine_axis_move(axis, pos[axis] + by, feed, true) {
                         Ok(()) => self.routine_move = Some((RoutineMove::Probe(axis, record), pos[axis] + by)),
                         Err(e) => return self.end_routine(Err(e)),
@@ -636,7 +754,7 @@ impl Controller {
             axis,
             positive: to > from,
             steps: ((to - from).abs() * spu).round() as u32,
-            velocity: (feed / 60.0).min(a.max_velocity) * spu,
+            velocity: (feed / 60.0 * self.axis_override()).min(a.max_velocity) * spu,
             acceleration: a.acceleration * spu,
             stop_on: stop_on_probe.then_some((probe, true)),
         };
@@ -655,6 +773,25 @@ impl Controller {
         self.routine_until = None;
         let _ = self.backend.abort();
         self.sync_position();
+        if let Some((start, z_offset)) = self.routine_resume.take() {
+            if result.is_err() {
+                // The program can't carry on from wherever the probe stopped.
+                return self.raise(format!("{name} failed while the program was paused: {}", result.unwrap_err()));
+            }
+            self.info(format!("{name} done; going back to where the program paused"));
+            // Up first, then over, then down to the same work height (a re-measured tool stops where its tip was).
+            let feed = self.config.probing.travel_feed;
+            let to = |axis, to| Step::MoveTo { axis, to, feed, guarded: true };
+            let pos = self.machine_position();
+            let z = start[2] - z_offset + self.interp.program_offset()[2];
+            let up = pos[2].max(start[2]).max(z);
+            self.routine = Some(Routine {
+                name: "Return to the paused program".into(),
+                steps: [to(2, up), to(0, start[0]), to(1, start[1]), to(2, z)].into(),
+                hits: Vec::new(),
+            });
+            return self.routine_step();
+        }
         self.mode = self.routine_return;
         match &result {
             Ok(()) => self.info(format!("{name} done")),
@@ -690,6 +827,7 @@ impl Controller {
                 self.info(format!("Connected to {} ({})", info.name, info.firmware));
                 self.board = Some(info);
                 self.mode = Mode::EStop;
+                self.alarm = None;
                 self.homed = [false; 6];
                 self.poll_failures = 0;
                 // Whatever was on before the link went down stays off.
@@ -706,8 +844,7 @@ impl Controller {
 
     fn reset(&mut self) {
         match self.mode {
-            // Reconnect into E-stop; a second Reset enables the drives.
-            Mode::Disconnected => self.connect(),
+            Mode::Disconnected => self.info("Not connected: press Connect first"),
             Mode::EStop | Mode::Alarm => {
                 if self
                     .config
@@ -726,8 +863,10 @@ impl Controller {
                 self.outputs.enable = true;
                 self.mode = Mode::Idle;
                 self.sync_position();
+                self.info("Reset: drives enabled");
             }
-            _ => self.enter_estop("Reset"),
+            // Already out of reset: a second Reset (a double click) must not do anything.
+            _ => {}
         }
     }
 
@@ -735,7 +874,48 @@ impl Controller {
         self.drop_motion();
         self.outputs = Outputs::default();
         self.mode = Mode::EStop;
+        // With the drives off the motors coast: the position is no longer trusted.
+        self.unhome();
         self.info(format!("E-stop: {why}"));
+    }
+
+    fn unhome(&mut self) {
+        if self.homed.iter().any(|h| *h) {
+            self.homed = [false; 6];
+            self.info("Axes need homing again");
+        }
+    }
+
+    /// Single-axis moves (probing, homing, routines) follow the feed override up to 100%.
+    fn axis_override(&self) -> f64 {
+        self.generator.feed_override.clamp(0.01, 1.0)
+    }
+
+    fn feed_hold(&mut self) {
+        match self.mode {
+            Mode::Running if !matches!(&self.exec, Some(Exec { wait: Wait::Probe, .. })) => self.generator.hold = true,
+            _ => self.hold_axis_move("Feed hold"),
+        }
+    }
+
+    /// A single-axis move (a probe, homing, a probing or tool-change move)
+    /// can't pause and resume; Feed Hold stops it and its job.
+    fn hold_axis_move(&mut self, why: &str) {
+        match self.mode {
+            Mode::Probing if !self.routine_waiting => {
+                let _ = self.backend.stop_axis_move();
+                self.end_routine(Err(format!("{why} stopped the move")));
+            }
+            Mode::Homing => {
+                let _ = self.backend.stop_axis_move();
+                self.raise(format!("Homing stopped: {why}"));
+            }
+            Mode::Running if matches!(&self.exec, Some(Exec { wait: Wait::Probe, .. })) => {
+                let _ = self.backend.stop_axis_move();
+                self.raise(format!("Probe move stopped: {why}"));
+            }
+            _ => {}
+        }
     }
 
     fn jog(&mut self, axis: usize, positive: bool, step: Option<f64>) {
@@ -744,9 +924,11 @@ impl Controller {
         }
         let a = &self.config.axes[axis];
         let spu = a.steps_per_unit;
+        // Even unhomed, a continuous jog never runs further than the axis is long.
+        let travel = ((a.soft_max - a.soft_min).abs() + 10.0) * spu;
         let mut steps: u32 = match step {
             Some(d) => (d.abs() * spu).round() as u32,
-            None => 9_999_999,
+            None => travel.min(u32::MAX as f64) as u32,
         };
         if self.config.soft_limits && self.homed[axis] {
             let pos = self.machine_position()[axis];
@@ -769,7 +951,11 @@ impl Controller {
             stop_on: None,
         };
         match self.backend.axis_move(&m) {
-            Ok(()) => self.mode = Mode::Jog,
+            Ok(()) => {
+                self.mode = Mode::Jog;
+                self.jog_continuous = step.is_none();
+                self.jog_alive = self.clock.now();
+            }
             Err(e) => self.info(format!("Jog failed: {e}")),
         }
     }
@@ -777,6 +963,9 @@ impl Controller {
     fn start_homing(&mut self, axis: Option<usize>) {
         if !self.is_ready() {
             return;
+        }
+        if self.generator.feed_override == 0.0 {
+            return self.info("Feed override is at 0%");
         }
         self.home = match axis {
             Some(a) => [a].into(),
@@ -799,13 +988,15 @@ impl Controller {
         let a = &self.config.axes[axis];
         let spu = a.steps_per_unit;
         let input = a.home_input.unwrap();
-        let seek = a.max_velocity * a.home_speed * spu;
+        let seek = a.max_velocity * a.home_speed * self.axis_override() * spu;
         let toward = a.home_positive;
+        // No further than the axis is long: a broken switch wire must not drive it into its stop.
+        let travel = (((a.soft_max - a.soft_min).abs() + 10.0) * spu).min(u32::MAX as f64) as u32;
         let m = match self.home_phase {
             HomePhase::Seek => AxisMove {
                 axis,
                 positive: toward,
-                steps: 999_999,
+                steps: travel,
                 velocity: seek,
                 acceleration: a.acceleration * spu,
                 stop_on: Some((input, true)),
@@ -879,20 +1070,35 @@ impl Controller {
             return;
         }
         self.sync_position();
-        self.info(format!("> {text}"));
-        match self.interp.execute_line(text) {
-            Ok(ops) => {
-                self.exec = Some(Exec {
-                    source: Source::Mdi,
-                    pending: ops.into_iter().map(|op| (0, op)).collect(),
-                    wait: Wait::None,
-                    exhausted: false,
-                    line: 0,
-                });
-                self.mode = Mode::Running;
+        self.info(format!("> {}", text.replace('\n', " / ")));
+        // Several lines run one after the other (the UI's "Go to Work Zero").
+        let mut pending = VecDeque::new();
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            match self.interp.execute_line(line) {
+                Ok(ops) => {
+                    if i + 1 < lines.len() && ops.iter().any(|op| matches!(op, Op::Probe { .. })) {
+                        self.sync_position();
+                        return self.info("A probe must be the last line of a multi-line MDI");
+                    }
+                    pending.extend(ops.into_iter().map(|op| (0, op)));
+                }
+                Err(e) => {
+                    // Nothing has moved yet; the interpreter's idea of the position goes back too.
+                    self.sync_position();
+                    return self.info(e.message);
+                }
             }
-            Err(e) => self.info(e.message),
         }
+        self.exec = Some(Exec {
+            source: Source::Mdi,
+            pending,
+            wait: Wait::None,
+            exhausted: false,
+            line: 0,
+            fault: None,
+        });
+        self.mode = Mode::Running;
     }
 
     fn cycle_start(&mut self) {
@@ -929,6 +1135,7 @@ impl Controller {
                     wait: Wait::None,
                     exhausted: false,
                     line: self.interp.pc(),
+                    fault: None,
                 });
                 self.mode = Mode::Running;
             }
@@ -936,24 +1143,54 @@ impl Controller {
         }
     }
 
+    /// Stop, slowing down first: an abort at full speed can lose steps.
+    /// A second Stop (or the timeout) aborts at once.
     fn stop(&mut self) {
-        self.clear_routine();
         match self.mode {
-            Mode::Running | Mode::Jog | Mode::Homing | Mode::Probing => {
-                self.drop_motion();
-                self.mode = Mode::Idle;
-                if let Ok(s) = self.backend.poll(&self.outputs) {
-                    self.status = s;
-                }
-                self.sync_position();
-                self.info("Stopped");
+            // Nothing moving (a pause, a tool change waiting for the operator): stop now.
+            Mode::Running | Mode::Jog | Mode::Homing | Mode::Probing if self.status.idle && self.generator.is_idle() => {
+                self.finish_stop(false)
             }
+            Mode::Running | Mode::Jog | Mode::Homing | Mode::Probing if self.stopping.is_none() => {
+                self.clear_routine();
+                self.home.clear();
+                if self.mode == Mode::Running {
+                    // The planner ramps down; streaming stops once it's at rest.
+                    self.generator.hold = true;
+                    // Nothing more is read from the program.
+                    if let Some(exec) = &mut self.exec {
+                        exec.exhausted = true;
+                        exec.pending.clear();
+                    }
+                } else {
+                    // Single-axis moves stop with the board's own deceleration.
+                    let _ = self.backend.stop_axis_move();
+                }
+                self.stopping = Some(self.clock.now() + STOP_TIMEOUT);
+                self.info("Stopping");
+            }
+            Mode::Running | Mode::Jog | Mode::Homing | Mode::Probing => self.finish_stop(false),
             // The link may be gone, but try anyway.
             Mode::Disconnected => {
                 let _ = self.backend.abort();
             }
             _ => {}
         }
+    }
+
+    /// The machine has stopped after a Stop (or `forced`: it didn't in time).
+    fn finish_stop(&mut self, forced: bool) {
+        self.drop_motion();
+        self.mode = Mode::Idle;
+        if let Ok(s) = self.backend.poll(&self.outputs) {
+            self.status = s;
+        }
+        self.sync_position();
+        if forced {
+            // Aborted while still moving: steps may have been lost.
+            self.unhome();
+        }
+        self.info("Stopped");
     }
 
     /// The board stopped answering. Make a best effort to stop it and switch
@@ -1007,10 +1244,27 @@ impl Controller {
             self.enter_estop("E-stop input");
             return;
         }
+        if let Some(deadline) = self.stopping {
+            let at_rest = self.status.idle && self.generator.speed() == 0.0;
+            if at_rest || self.clock.now() >= deadline {
+                return self.finish_stop(!at_rest);
+            }
+            if self.mode == Mode::Running {
+                self.stream();
+            }
+            return;
+        }
         match self.mode {
             Mode::Jog if self.status.idle => {
                 self.mode = Mode::Idle;
+                self.jog_continuous = false;
                 self.sync_position();
+            }
+            Mode::Jog if self.jog_continuous && self.clock.now() - self.jog_alive > JOG_KEEPALIVE => {
+                // The UI stopped saying the key is held: lost key-up, lost focus or a hung window.
+                let _ = self.backend.stop_axis_move();
+                self.jog_continuous = false;
+                self.info("Jog stopped: the jog key or button is no longer held");
             }
             Mode::Homing if self.status.idle => self.homing_step_done(),
             Mode::Probing if self.status.idle => self.routine_step(),
@@ -1029,8 +1283,18 @@ impl Controller {
             return;
         }
         let now = self.clock.now();
-        let Some(exec) = &mut self.exec else { return };
         let motion_done = self.generator.is_idle() && self.status.idle;
+        // Only after streamed motion: probes and routines resync the planner themselves.
+        let streamed = matches!(&self.exec, Some(Exec { wait: Wait::Motion | Wait::None, .. }));
+        if motion_done && streamed && !self.position_matches() {
+            return;
+        }
+        let Some(exec) = &mut self.exec else { return };
+        if motion_done {
+            if let Some(fault) = exec.fault.take() {
+                return self.raise(fault);
+            }
+        }
         match &exec.wait {
             Wait::Motion if motion_done => exec.wait = Wait::None,
             Wait::Until(t) if now >= *t => exec.wait = Wait::None,
@@ -1062,6 +1326,24 @@ impl Controller {
         {
             self.finish();
         }
+    }
+
+    /// At rest, the board's step counters must be where the planner put
+    /// them. If not, motion was lost (a dropped frame, a buffer underrun or a
+    /// stall): alarm rather than carry on from a position that is wrong.
+    fn position_matches(&mut self) -> bool {
+        let planned = self.generator.steps();
+        let board = self.status.position;
+        let Some(axis) = (0..6).find(|&i| (planned[i] - board[i]).abs() > POSITION_SLACK) else {
+            return true;
+        };
+        let off = board[axis] - planned[axis];
+        self.raise(format!(
+            "the board's {} position is {off} steps off where rcnc sent it; motion may have been lost. Check the machine and home again",
+            AXIS_LETTERS[axis]
+        ));
+        self.unhome();
+        false
     }
 
     fn finish(&mut self) {
@@ -1102,8 +1384,9 @@ impl Controller {
                             return;
                         }
                         Err(e) => {
-                            let msg = e.to_string();
-                            return self.raise(msg);
+                            exec.fault = Some(e.to_string());
+                            exec.exhausted = true;
+                            return;
                         }
                     },
                     Source::Program => match self.interp.next_step() {
@@ -1120,8 +1403,10 @@ impl Controller {
                             return;
                         }
                         Err(e) => {
-                            let msg = e.to_string();
-                            return self.raise(msg);
+                            // Run what was read before the bad line, then alarm at rest.
+                            exec.fault = Some(e.to_string());
+                            exec.exhausted = true;
+                            return;
                         }
                     },
                 }
@@ -1131,16 +1416,23 @@ impl Controller {
             let from = self.generator.end_position();
             let moves = op_to_moves(&op, &from, line, self.config.arc_tolerance);
             if !moves.is_empty() {
+                // Check the whole op before any of it is queued, and stop
+                // reading: what is queued runs, then the alarm comes at rest.
+                let bad = moves.iter().find_map(|m| {
+                    if m.to.iter().any(|v| !v.is_finite()) {
+                        Some("invalid coordinate".to_string())
+                    } else {
+                        self.config.soft_limit_violation(&m.to).map(|a| format!("move outside {} soft limit", AXIS_LETTERS[a]))
+                    }
+                });
+                if let Some(why) = bad {
+                    exec.fault = Some(format!("line {}: {why}", line + 1));
+                    exec.exhausted = true;
+                    exec.pending.clear();
+                    return;
+                }
                 exec.pending.pop_front();
                 for m in moves {
-                    if let Some(axis) = self.config.soft_limit_violation(&m.to) {
-                        let msg = format!(
-                            "line {}: move outside {} soft limit",
-                            line + 1,
-                            AXIS_LETTERS[axis]
-                        );
-                        return self.raise(msg);
-                    }
                     self.generator.push(m);
                 }
                 continue;
@@ -1148,6 +1440,10 @@ impl Controller {
             // A non-motion op: wait until everything before it has run.
             if !(self.generator.is_idle() && self.status.idle) {
                 exec.wait = Wait::Motion;
+                return;
+            }
+            // A probe move can't creep at 0%: wait until the override is raised.
+            if matches!(op, Op::Probe { .. }) && self.generator.feed_override == 0.0 {
                 return;
             }
             exec.pending.pop_front();
@@ -1245,13 +1541,16 @@ impl Controller {
         let [axis] = moving[..] else {
             return Err("this board can only probe along one axis at a time".into());
         };
+        if let Some(v) = self.config.soft_limit_violation(to) {
+            return Err(format!("probe move outside {} soft limit", AXIS_LETTERS[v]));
+        }
         let a = &self.config.axes[axis];
         let spu = a.steps_per_unit;
         let m = AxisMove {
             axis,
             positive: to[axis] > from[axis],
             steps: ((to[axis] - from[axis]).abs() * spu).round() as u32,
-            velocity: (feed / 60.0).min(a.max_velocity) * spu,
+            velocity: (feed / 60.0 * self.axis_override()).min(a.max_velocity) * spu,
             acceleration: a.acceleration * spu,
             stop_on: Some((probe, true)),
         };
@@ -1265,6 +1564,16 @@ impl Controller {
         let queued = self.backend.queue_capacity() - self.status.queue_free;
         if queued >= TARGET_QUEUE || self.generator.is_empty() {
             return;
+        }
+        // A Stop has ramped down: let the board finish what it has, then abort.
+        if self.stopping.is_some() && self.generator.speed() == 0.0 {
+            return;
+        }
+        // The board ran out of segments in the middle of a move: it stopped
+        // dead and restarted with no ramp, which can lose steps. The position
+        // check at the next stop catches lost steps; say what happened.
+        if self.status.idle && self.status.queue_free == self.backend.queue_capacity() && self.generator.speed() > 1.0 {
+            self.info("Warning: the motion buffer ran empty mid-move (the PC was too slow); check the part");
         }
         let mut segments = Vec::with_capacity(TARGET_QUEUE - queued);
         while segments.len() < TARGET_QUEUE - queued {
@@ -1332,7 +1641,7 @@ impl Controller {
             program: self.program.clone(),
             feed_rate: st.feed,
             velocity: self.generator.speed() * 60.0,
-            hold: self.generator.hold,
+            hold: self.generator.hold || (self.mode == Mode::Running && self.generator.feed_override == 0.0),
             paused,
             spindle: if self.outputs.spindle_on {
                 if self.outputs.spindle_ccw {
@@ -1369,7 +1678,28 @@ impl Controller {
             work_offsets: std::array::from_fn(|i| self.interp.params.coord_offset(i)),
             g92: self.interp.params.get_axes(num::G92),
             tool_change: self.tool_change.as_ref().map(|t| t.view.clone()),
+            macros: self.macros.clone(),
+            spindle_reversible: self.config.spindle_reversible,
+            time: self.clock.now(),
+            stopping: self.stopping.is_some(),
         }
+    }
+
+    /// After a panic inside the controller: try to stop the board and switch
+    /// everything off, and wait in E-stop.
+    fn recover(&mut self, what: &str) {
+        let _ = self.backend.abort();
+        self.exec = None;
+        self.clear_routine();
+        self.generator.clear();
+        self.outputs = Outputs::default();
+        let _ = self.backend.poll(&self.outputs);
+        self.homed = [false; 6];
+        if self.mode != Mode::Disconnected {
+            self.mode = Mode::EStop;
+        }
+        self.alarm = Some(format!("Internal error: {what}"));
+        self.info(format!("Alarm: internal error ({what}); motion aborted and outputs off"));
     }
 }
 
@@ -1418,15 +1748,36 @@ impl ControllerHandle {
         thread::Builder::new()
             .name("machine-controller".into())
             .spawn(move || loop {
-                loop {
-                    match rx.try_recv() {
-                        Ok(cmd) => controller.handle(cmd),
-                        Err(mpsc::TryRecvError::Empty) => break,
-                        Err(mpsc::TryRecvError::Disconnected) => return,
+                // A bug that panics must not leave the board running with
+                // nothing listening: catch it, stop the machine and carry on in E-stop.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    loop {
+                        match rx.try_recv() {
+                            Ok(cmd) => controller.handle(cmd),
+                            Err(mpsc::TryRecvError::Empty) => break,
+                            Err(mpsc::TryRecvError::Disconnected) => return false,
+                        }
+                    }
+                    controller.update();
+                    true
+                }));
+                match result {
+                    Ok(true) => {}
+                    Ok(false) => return,
+                    Err(panic) => {
+                        let what = panic
+                            .downcast_ref::<String>()
+                            .cloned()
+                            .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                            .unwrap_or_else(|| "unknown".into());
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.recover(&what)));
                     }
                 }
-                controller.update();
-                *shared.write().unwrap() = controller.snapshot();
+                let snap = controller.snapshot();
+                match shared.write() {
+                    Ok(mut s) => *s = snap,
+                    Err(poisoned) => *poisoned.into_inner() = snap,
+                }
                 thread::sleep(Duration::from_millis(5));
             })
             .expect("spawn controller thread");
@@ -1438,7 +1789,10 @@ impl ControllerHandle {
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        self.snapshot.read().unwrap().clone()
+        match self.snapshot.read() {
+            Ok(s) => s.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
     }
 }
 
@@ -1475,7 +1829,9 @@ mod tests {
     struct Wire {
         fail_polls: bool,
         aborts: usize,
+        axis_stops: usize,
         last_poll: Option<Outputs>,
+        moves: Vec<AxisMove>,
     }
 
     struct Flaky(Simulator, Arc<std::sync::Mutex<Wire>>);
@@ -1509,9 +1865,11 @@ mod tests {
             self.0.push_segments(segments, last)
         }
         fn axis_move(&mut self, m: &AxisMove) -> crate::backend::Result<()> {
+            self.1.lock().unwrap().moves.push(m.clone());
             self.0.axis_move(m)
         }
         fn stop_axis_move(&mut self) -> crate::backend::Result<()> {
+            self.1.lock().unwrap().axis_stops += 1;
             self.0.stop_axis_move()
         }
         fn abort(&mut self) -> crate::backend::Result<()> {
@@ -1563,9 +1921,11 @@ mod tests {
         c.handle(Command::Stop);
         assert!(wire.lock().unwrap().aborts > aborts);
 
-        // Reset reconnects into E-stop with everything off.
+        // Reset alone doesn't reconnect; Connect does, into E-stop with everything off.
         wire.lock().unwrap().fail_polls = false;
         c.handle(Command::Reset);
+        assert_eq!(c.mode(), Mode::Disconnected);
+        c.handle(Command::Connect);
         assert_eq!(c.mode(), Mode::EStop);
         let sent = wire.lock().unwrap().last_poll.unwrap();
         assert!(!sent.enable && !sent.spindle_on, "{sent:?}");
@@ -1586,7 +1946,7 @@ mod tests {
         tick(&mut c, &clock, 2600);
         assert_eq!(c.mode(), Mode::Running);
         assert!(c.interpreter().pc() > 2);
-        c.handle(Command::Reset);
+        c.handle(Command::EStop);
         assert_eq!(c.mode(), Mode::EStop);
         assert_eq!(c.interpreter().pc(), 0);
         assert_eq!(c.interpreter().state.spindle, Spindle::Off);
@@ -1606,6 +1966,7 @@ mod tests {
         c.handle(Command::FeedHold);
         tick(&mut c, &clock, 100);
         c.handle(Command::Stop);
+        run_until_idle(&mut c, &clock, 2.0);
         let x = c.snapshot().machine[0];
         c.handle(Command::Mdi("G91 G1 X5 F600".into()));
         run_until_idle(&mut c, &clock, 10.0);
@@ -1641,6 +2002,7 @@ mod tests {
         c.handle(Command::SetJogSpeed(0.5));
         clock.advance(2.0);
         c.update();
+        c.wait_for_saves();
 
         let (mut d, _) = setup();
         d.persist_to(dir.clone());
@@ -1959,7 +2321,9 @@ mod tests {
         }
         let s = c.snapshot();
         assert!(!s.log.iter().any(|l| l.contains("Tool touched off")), "{:?}", s.log);
-        assert!(close(s.machine[2], 110.0), "{:?}", s.machine);
+        // Unmeasured, it may be longer than the last tool: it stays at the safe height.
+        assert!(close(s.machine[2], c.snapshot().config.tool_change.z.max(110.0)), "{:?}", s.machine);
+        assert!(s.log.iter().any(|l| l.contains("wasn't measured")), "{:?}", s.log);
 
         let (mut c, _clock) = guided_setup();
         c.handle(Command::Stop);
@@ -1976,6 +2340,13 @@ mod tests {
         config.tool_change.guided = false;
         config.tool_change_touch_off = false;
         c.handle(Command::SetConfig(Box::new(config)));
+        // Its retracts are G53 Z0: unhomed, the simulated Z would hit its stop.
+        c.handle(Command::Home(None));
+        run_until_idle(&mut c, &clock, 120.0);
+        assert!(c.snapshot().homed[2]);
+        // Work zero somewhere inside the simulated travel (Y homes at 512, 260 mm of travel).
+        c.handle(Command::Mdi("G10 L2 P1 X100 Y350 Z-50".into()));
+        run_until_idle(&mut c, &clock, 1.0);
         c.handle(Command::Load {
             name: "cad".into(),
             text: include_str!("../../../examples/cad-rust-app-contour.nc").into(),
@@ -2009,8 +2380,163 @@ mod tests {
         assert_eq!(c.mode(), Mode::Jog);
         clock.advance(0.1);
         c.update();
-        c.handle(Command::Reset);
+        c.handle(Command::EStop);
         assert_eq!(c.mode(), Mode::EStop);
         assert!(!c.snapshot().homed[0]);
+        // Reset leaves E-stop once; a second (double click) does nothing more.
+        c.handle(Command::Reset);
+        assert_eq!(c.mode(), Mode::Idle);
+        c.handle(Command::Reset);
+        assert_eq!(c.mode(), Mode::Idle);
+        // Connect while connected doesn't reconnect.
+        c.handle(Command::Connect);
+        assert_eq!(c.mode(), Mode::Idle);
+    }
+
+    #[test]
+    fn continuous_jog_needs_keepalives_and_is_bounded() {
+        let (mut c, clock, wire) = flaky_setup();
+        c.handle(Command::Jog { axis: 0, positive: true, step: None });
+        let m = wire.lock().unwrap().moves.last().unwrap().clone();
+        // No further than the axis is long (500 mm of soft-limit span + 10 mm), even unhomed.
+        assert!(m.steps <= 510 * 200, "{}", m.steps);
+        for _ in 0..40 {
+            c.handle(Command::JogAlive);
+            tick(&mut c, &clock, 5);
+        }
+        assert_eq!(c.mode(), Mode::Jog);
+        assert_eq!(wire.lock().unwrap().axis_stops, 0);
+        // The UI goes quiet (lost key-up, window hung): the controller stops the jog.
+        tick(&mut c, &clock, 120);
+        assert!(wire.lock().unwrap().axis_stops >= 1);
+        assert!(c.snapshot().log.iter().any(|l| l.contains("no longer held")));
+    }
+
+    #[test]
+    fn jog_stop_is_sent_even_if_the_jog_looks_finished() {
+        let (mut c, _clock, wire) = flaky_setup();
+        c.handle(Command::JogStop);
+        assert_eq!(wire.lock().unwrap().axis_stops, 1);
+    }
+
+    #[test]
+    fn homing_seek_is_bounded() {
+        let (mut c, _clock, wire) = flaky_setup();
+        c.handle(Command::Home(Some(0)));
+        let m = wire.lock().unwrap().moves.last().unwrap().clone();
+        assert!(m.steps <= 510 * 200, "{}", m.steps);
+    }
+
+    #[test]
+    fn estop_forgets_homing() {
+        let (mut c, clock) = setup();
+        c.handle(Command::Home(None));
+        run_until_idle(&mut c, &clock, 120.0);
+        assert!(c.snapshot().homed[0]);
+        c.handle(Command::EStop);
+        assert_eq!(c.snapshot().homed, [false; 6]);
+    }
+
+    #[test]
+    fn stop_slows_down_before_aborting() {
+        let (mut c, clock) = setup();
+        c.handle(Command::Home(None));
+        run_until_idle(&mut c, &clock, 120.0);
+        c.handle(Command::Mdi("G53 G0 X100".into()));
+        tick(&mut c, &clock, 60);
+        assert!(c.snapshot().velocity > 1000.0);
+        c.handle(Command::Stop);
+        assert_eq!(c.mode(), Mode::Running);
+        assert!(c.snapshot().stopping);
+        run_until_idle(&mut c, &clock, STOP_TIMEOUT);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l == "Stopped"), "{:?}", s.log);
+        // A controlled stop keeps the homes; nothing was lost.
+        assert!(s.homed[0], "{:?}", s.log);
+    }
+
+    #[test]
+    fn errors_ahead_alarm_once_the_machine_is_at_rest() {
+        let (mut c, clock) = setup();
+        c.handle(Command::Load { name: "t".into(), text: "G91 G1 X10 F600\nG1 X10\nG1 X[SQRT[-1]]\nM30".into() });
+        let x = c.snapshot().machine[0];
+        c.handle(Command::CycleStart);
+        run_until_idle(&mut c, &clock, 10.0);
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Alarm, "{:?}", s.log);
+        assert!(s.alarm.as_deref().unwrap_or("").contains("line 3"), "{:?}", s.alarm);
+        // The two good moves ran to the end before the alarm.
+        assert!(close(s.machine[0], x + 20.0), "{} {}", s.machine[0], x);
+    }
+
+    #[test]
+    fn lost_steps_raise_an_alarm() {
+        let (mut c, clock) = setup();
+        // Unhomed, the simulated Z hits its hard stop: the board counts fewer steps than were sent.
+        c.handle(Command::Mdi("G91 G0 Z200".into()));
+        run_until_idle(&mut c, &clock, 10.0);
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Alarm);
+        assert!(s.alarm.unwrap().contains("steps off"));
+    }
+
+    #[test]
+    fn tool_table_is_locked_while_running() {
+        let (mut c, clock) = setup();
+        c.handle(Command::Mdi("G91 G1 X20 F600".into()));
+        tick(&mut c, &clock, 10);
+        c.handle(Command::SetTool(1, Some(Tool { length: 5.0, ..Default::default() })));
+        assert!(!c.snapshot().tools.contains_key(&1));
+        run_until_idle(&mut c, &clock, 10.0);
+        c.handle(Command::SetTool(1, Some(Tool { length: 5.0, ..Default::default() })));
+        assert!(c.snapshot().tools.contains_key(&1));
+    }
+
+    #[test]
+    fn probing_while_paused_goes_back_before_carrying_on() {
+        let (mut c, clock) = probing_setup();
+        c.handle(Command::Mdi("G53 G0 X130 Y130".into()));
+        run_until_idle(&mut c, &clock, 5.0);
+        c.handle(Command::Load { name: "t".into(), text: "M0\nG91 G0 X1\nM30".into() });
+        c.handle(Command::CycleStart);
+        tick(&mut c, &clock, 5);
+        assert!(c.snapshot().paused.is_some());
+        let start = c.snapshot().machine;
+        c.handle(Command::Probe(ProbeJob::ZSurface));
+        for _ in 0..40_000 {
+            clock.advance(0.005);
+            c.update();
+            if c.mode() == Mode::Running {
+                break;
+            }
+        }
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("going back")), "{:?}", s.log);
+        for i in 0..2 {
+            assert!(close(s.machine[i], start[i]), "{:?} vs {:?}", s.machine, start);
+        }
+    }
+
+    #[test]
+    fn tool_change_without_return_restores_the_spindle() {
+        let (mut c, clock) = guided_setup();
+        let mut config = c.snapshot().config;
+        config.tool_change.return_to_start = false;
+        // Changing settings is refused while running; set it on the controller directly.
+        c.config = config;
+        if let Some(t) = &mut c.tool_change {
+            t.view.return_to_start = false;
+        }
+        c.handle(Command::ToolChangeContinue { measure: Some(false) });
+        for _ in 0..40_000 {
+            clock.advance(0.005);
+            c.update();
+            if c.snapshot().tool_change.is_none() {
+                break;
+            }
+        }
+        let s = c.snapshot();
+        assert_eq!(s.spindle, Spindle::Cw, "{:?}", s.log);
+        assert!(s.flood);
     }
 }

@@ -112,6 +112,20 @@ impl BlueSkyBoard {
         self.transport()?.write(&wire)
     }
 
+    /// Throw away reports already waiting. A reply that came in after its
+    /// request timed out would otherwise be taken as the answer to the next
+    /// request, and every later one after it: rcnc would see the board one
+    /// exchange late for good (an old "idle" while a jog runs, a probe input
+    /// a poll behind, a stale position written back on reconnect).
+    fn drain(&mut self) -> Result<()> {
+        for _ in 0..64 {
+            if self.transport()?.read(Duration::ZERO)?.is_none() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// Read until a report answering `command` arrives.
     fn reply(&mut self, command: u8) -> Result<Payload> {
         let deadline = Instant::now() + REPLY_TIMEOUT;
@@ -138,6 +152,7 @@ impl BlueSkyBoard {
             z_steps_per_unit: config.axes[2].steps_per_unit,
         };
         let request = proto::status_request(&self.setup, &state);
+        self.drain()?;
         self.send(&request)?;
         let q = self.reply(cmd::STATUS)?;
         let status = proto::parse_status(&q).ok_or_else(|| BackendError::Io("bad status report".into()))?;
@@ -195,6 +210,7 @@ impl Backend for BlueSkyBoard {
         self.send(&proto::simple(cmd::ABORT))?;
         let hello = proto::handshake(config, &self.setup);
         let wire = proto::handshake_wire(&hello);
+        self.drain()?;
         self.transport()?.write(&wire)?;
         let reply = self.reply(cmd::HANDSHAKE)?;
         let identity = proto::parse_handshake_reply(&reply).ok_or(BackendError::NotFound)?;
@@ -321,6 +337,11 @@ impl Backend for BlueSkyBoard {
         self.cached = None;
         self.encoder.clear();
         self.in_flight.clear();
+        if self.transport.is_none() {
+            // The link was dropped (lost replies), but the board may still
+            // listen: open it again just to send the abort.
+            self.transport = Some((self.open)()?);
+        }
         self.send(&proto::simple(cmd::ABORT))
     }
 
@@ -453,6 +474,30 @@ mod tests {
         // Motion sent between exchanges clears the cached idle flag.
         b.push_segments(&[Segment { steps: [4, 0, 0, 0, 0, 0], line: 0 }], true).unwrap();
         assert!(!b.poll(&Outputs { spindle_on: true, ..out }).unwrap().idle);
+    }
+
+    #[test]
+    fn a_late_reply_is_not_taken_for_the_next_one() {
+        let (mut b, fake) = board();
+        b.connect(&MachineConfig::dmc2()).unwrap();
+        // A status reply that arrived after its request timed out, from when the board was busy.
+        let mut stale = [0u8; 64];
+        stale[0] = 0x6b;
+        stale[63] = cmd::STATUS;
+        fake.lock().unwrap().replies.push_back(proto::scramble_in(&stale));
+        fake.lock().unwrap().position = [1234, 0, 0, 0, 0];
+        let s = b.poll(&Outputs { enable: true, ..Default::default() }).unwrap();
+        assert_eq!(s.position[0], 1234, "got the stale reply");
+    }
+
+    #[test]
+    fn abort_reopens_a_dropped_link() {
+        let (mut b, fake) = board();
+        b.connect(&MachineConfig::dmc2()).unwrap();
+        b.disconnect();
+        fake.lock().unwrap().sent.clear();
+        b.abort().unwrap();
+        assert_eq!(fake.lock().unwrap().sent.last().unwrap()[63], cmd::ABORT);
     }
 
     #[test]

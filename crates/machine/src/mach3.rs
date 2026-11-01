@@ -93,6 +93,13 @@ pub fn import(xml: &str, base: &MachineConfig) -> Result<Import, String> {
             a.home_position = v / a.steps_per_unit;
         }
         a.home_input = input(HOME_INPUT[i]);
+        // Mach3 doesn't mind soft limits that leave out the home position (the
+        // DMC2 profile's do); rcnc would refuse to home or turn them on.
+        if a.home_input.is_some() && !(a.soft_min..=a.soft_max).contains(&a.home_position) {
+            a.soft_min = a.soft_min.min(a.home_position);
+            a.soft_max = a.soft_max.max(a.home_position);
+            notes.push(format!("{letter}: soft limits widened to include the home position; measure the real travel"));
+        }
         notes.push(format!(
             "{letter}: {} steps/mm, {} mm/s, {} mm/s², limits {}..{}, homes {} to {}",
             a.steps_per_unit, a.max_velocity, a.acceleration, a.soft_min, a.soft_max,

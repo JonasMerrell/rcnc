@@ -95,6 +95,11 @@ impl Generator {
         self.speed
     }
 
+    /// Step counters after the last emitted segment.
+    pub fn steps(&self) -> [i64; 6] {
+        self.steps
+    }
+
     pub fn is_empty(&self) -> bool {
         self.moves.is_empty()
     }
