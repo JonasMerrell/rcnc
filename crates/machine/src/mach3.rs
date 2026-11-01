@@ -93,6 +93,13 @@ pub fn import(xml: &str, base: &MachineConfig) -> Result<Import, String> {
             a.home_position = v / a.steps_per_unit;
         }
         a.home_input = input(HOME_INPUT[i]);
+        // Mach3 doesn't mind soft limits that leave out the home position (the
+        // DMC2 profile's do); rcnc won't turn soft limits on like that.
+        if a.home_input.is_some() && !(a.soft_min..=a.soft_max).contains(&a.home_position) {
+            notes.push(format!(
+                "{letter}: the home position is outside the soft limits; fix them before turning soft limits on"
+            ));
+        }
         notes.push(format!(
             "{letter}: {} steps/mm, {} mm/s, {} mm/s², limits {}..{}, homes {} to {}",
             a.steps_per_unit, a.max_velocity, a.acceleration, a.soft_min, a.soft_max,

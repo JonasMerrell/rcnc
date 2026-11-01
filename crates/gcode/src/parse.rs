@@ -105,13 +105,16 @@ pub fn parse_line(line: &str, params: &Params) -> Result<Block, String> {
                     return Err("expected '=' after parameter".into());
                 }
                 p.i += 1;
-                let value = p.real_value()?;
+                let value = finite(p.real_value()?)?;
                 block.assignments.push((param_index(index)?, value));
             }
             b'A'..=b'Z' => {
                 p.i += 1;
                 let letter = c as char;
-                let value = p.real_value()?;
+                let value = finite(p.real_value()?)?;
+                if !matches!(letter, 'G' | 'M') && block.words.iter().any(|w| w.letter == letter) {
+                    return Err(format!("two {letter} words on one line"));
+                }
                 match letter {
                     'N' => block.line_number = Some(value as u32),
                     'O' => block.label = Some(value as u32),
@@ -122,6 +125,16 @@ pub fn parse_line(line: &str, params: &Params) -> Result<Block, String> {
         }
     }
     Ok(block)
+}
+
+/// Reject NaN and infinity (`SQRT[-1]`, a divide by an unset parameter):
+/// as a coordinate they would turn into a move to machine zero or past the end of travel.
+fn finite(v: f64) -> Result<f64, String> {
+    if v.is_finite() {
+        Ok(v)
+    } else {
+        Err("value is not a number (a square root of a negative, or a divide by zero?)".into())
+    }
 }
 
 fn param_index(v: f64) -> Result<u32, String> {
@@ -153,17 +166,17 @@ impl Cursor<'_> {
 
     /// A word value: number, parameter, bracketed expression, or a signed one of those.
     fn real_value(&mut self) -> Result<f64, String> {
-        match self.peek() {
-            Some(b'-') => {
-                self.i += 1;
-                Ok(-self.real_value()?)
-            }
-            Some(b'+') => {
-                self.i += 1;
-                self.real_value()
-            }
-            _ => self.primary(),
+        let sign = match self.peek() {
+            Some(b'-') => -1.0,
+            Some(b'+') => 1.0,
+            _ => return self.primary(),
+        };
+        self.i += 1;
+        // `X--1` is a typo, not 1.
+        if matches!(self.peek(), Some(b'-' | b'+')) {
+            return Err("two signs in a row".into());
         }
+        Ok(sign * self.primary()?)
     }
 
     fn primary(&mut self) -> Result<f64, String> {
@@ -179,7 +192,6 @@ impl Cursor<'_> {
                 let index = param_index(self.primary()?)?;
                 Ok(self.params.get(index))
             }
-            Some(b'-') | Some(b'+') => self.real_value(),
             Some(c) if c.is_ascii_digit() || c == b'.' => self.number(),
             Some(b'A'..=b'Z') => self.function(),
             Some(c) => Err(format!("unexpected '{}' in value", c as char)),
@@ -207,9 +219,9 @@ impl Cursor<'_> {
     }
 
     fn function(&mut self) -> Result<f64, String> {
-        const NAMES: [&str; 14] = [
+        const NAMES: [&str; 13] = [
             "ABS", "ACOS", "ASIN", "ATAN", "COS", "EXP", "FIX", "FUP", "LN", "ROUND", "SIN",
-            "SQRT", "TAN", "EXISTS",
+            "SQRT", "TAN",
         ];
         let name = NAMES
             .iter()
@@ -358,5 +370,19 @@ mod tests {
     fn errors() {
         assert!(parse_line("G1 X1 (open", &Params::default()).is_err());
         assert!(parse_line("G1 X$", &Params::default()).is_err());
+    }
+
+    #[test]
+    fn rejects_bad_values() {
+        let p = Params::default();
+        assert!(parse_line("G0 X[SQRT[-1]]", &p).is_err());
+        assert!(parse_line("G0 Y[1/#100]", &p).is_err());
+        assert!(parse_line("#1=[1/0]", &p).is_err());
+        assert!(parse_line("G0 X--1", &p).is_err());
+        assert!(parse_line("G0 X1 X2", &p).is_err());
+        // EXISTS isn't supported; it used to crash the controller.
+        assert!(parse_line("G0 X[EXISTS[#1]]", &p).is_err());
+        assert_eq!(parse_line("G0 X-[1+1]", &p).unwrap().get('X'), Some(-2.0));
+        assert_eq!(parse_line("G0 X[3 - -1]", &p).unwrap().get('X'), Some(4.0));
     }
 }
