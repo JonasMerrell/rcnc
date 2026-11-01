@@ -3,6 +3,7 @@
 mod app;
 mod link;
 mod preview;
+mod sheet;
 
 use std::sync::Arc;
 
@@ -55,9 +56,11 @@ fn main() -> eframe::Result<()> {
         }
     };
     let mut controller = Controller::new(config, backend, clock);
-    controller.persist_to(data);
+    controller.persist_to(data.clone());
     let handle = ControllerHandle::spawn(controller);
-    link::spawn(handle.clone());
+    let sheets = Arc::new(sheet::Sheets::new(data.join("sheets")));
+    link::spawn(handle.clone(), sheets.clone());
+    let web_data = data.join("webview");
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("CNC Controller")
@@ -69,7 +72,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "CNC Controller",
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, handle).with_program(program.map(Into::into))))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, handle, sheets, web_data).with_program(program.map(Into::into))))),
     )
 }
 
