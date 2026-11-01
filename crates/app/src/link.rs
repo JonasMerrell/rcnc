@@ -7,6 +7,13 @@
 //!   "setup_sheet": "<html>.."}`. Tools set diameters and descriptions in the tool table and keep
 //!   any measured length. The optional setup sheet is shown with the program. Refused while the
 //!   machine is running.
+//!
+//! Only programs, not web pages, may talk to it: a request must name
+//! `127.0.0.1:7350` (or `localhost`) as its Host, carry no Origin header (a
+//! browser always sends one with a cross-site POST), and a POST must be
+//! `application/json` (which a web page can't send to another site without
+//! asking first). Otherwise any page in a browser on this PC could load a
+//! program or change tool diameters.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -70,20 +77,32 @@ fn handle(stream: TcpStream, machine: &ControllerHandle, sheets: &Sheets) -> std
     let mut request = String::new();
     reader.read_line(&mut request)?;
     let mut length = 0usize;
+    let (mut host, mut origin, mut json) = (None, false, false);
     loop {
         let mut line = String::new();
         if reader.read_line(&mut line)? == 0 || line.trim().is_empty() {
             break;
         }
         if let Some((k, v)) = line.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("content-length") {
-                length = v.trim().parse().unwrap_or(0);
+            let (k, v) = (k.trim(), v.trim());
+            if k.eq_ignore_ascii_case("content-length") {
+                length = v.parse().unwrap_or(0);
+            } else if k.eq_ignore_ascii_case("host") {
+                host = Some(v.to_ascii_lowercase());
+            } else if k.eq_ignore_ascii_case("origin") {
+                origin = true;
+            } else if k.eq_ignore_ascii_case("content-type") {
+                json = v.to_ascii_lowercase().starts_with("application/json");
             }
         }
     }
     let mut parts = request.split_whitespace();
     let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+    let port = stream.local_addr().map(|a| a.port()).unwrap_or(PORT);
+    let host_ok = host.as_deref().is_some_and(|h| h == format!("127.0.0.1:{port}") || h == format!("localhost:{port}"));
     let (status, body) = match (method, path) {
+        _ if !host_ok || origin => (403, json!({"ok": false, "message": "only programs on this PC may use the CAM link"})),
+        ("POST", "/program") if !json => (415, json!({"ok": false, "message": "send the program as application/json"})),
         ("GET", "/status") => {
             let s = machine.snapshot();
             (200, json!({"app": "rcnc", "mode": format!("{:?}", s.mode), "program": s.program_name}))
@@ -134,7 +153,9 @@ fn respond(mut stream: TcpStream, status: u16, body: &serde_json::Value) -> std:
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
+        403 => "Forbidden",
         404 => "Not Found",
+        415 => "Unsupported Media Type",
         409 => "Conflict",
         _ => "Payload Too Large",
     };
@@ -177,7 +198,16 @@ mod tests {
             }
         });
         let body = r#"{"name":"bracket.nc","gcode":"G0 X1\nM30","tools":[{"number":2,"diameter":6,"description":"6 mm flat"}],"setup_sheet":"<h1>Bracket</h1>"}"#;
-        let reply = request(port, &format!("POST /program HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len()));
+        // What a web page could send: refused.
+        let reply = request(port, &format!("POST /program HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}", body.len()));
+        assert!(reply.starts_with("HTTP/1.1 415"), "{reply}");
+        let reply = request(port, &format!("POST /program HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: https://evil.example\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()));
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        let reply = request(port, &format!("POST /program HTTP/1.1\r\nHost: evil.example:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()));
+        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(handle.snapshot().program_name.is_none());
+        // What the CAM sends.
+        let reply = request(port, &format!("POST /program HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()));
         assert!(reply.starts_with("HTTP/1.1 200") && reply.contains("Loaded bracket.nc and its setup sheet"), "{reply}");
         let sheet = sheets.take("bracket.nc").unwrap().unwrap();
         assert_eq!(std::fs::read_to_string(sheet).unwrap(), "<h1>Bracket</h1>");
@@ -186,7 +216,7 @@ mod tests {
         let s = handle.snapshot();
         assert_eq!(s.program_name.as_deref(), Some("bracket.nc"));
         assert_eq!(s.tools[&2].diameter, 6.0);
-        let reply = request(port, "GET /status HTTP/1.1\r\n\r\n");
+        let reply = request(port, &format!("GET /status HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
         assert!(reply.contains("\"app\":\"rcnc\""), "{reply}");
     }
 }

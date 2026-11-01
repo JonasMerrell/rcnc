@@ -94,11 +94,11 @@ pub fn import(xml: &str, base: &MachineConfig) -> Result<Import, String> {
         }
         a.home_input = input(HOME_INPUT[i]);
         // Mach3 doesn't mind soft limits that leave out the home position (the
-        // DMC2 profile's do); rcnc would refuse to home or turn them on.
+        // DMC2 profile's do); rcnc won't turn soft limits on like that.
         if a.home_input.is_some() && !(a.soft_min..=a.soft_max).contains(&a.home_position) {
-            a.soft_min = a.soft_min.min(a.home_position);
-            a.soft_max = a.soft_max.max(a.home_position);
-            notes.push(format!("{letter}: soft limits widened to include the home position; measure the real travel"));
+            notes.push(format!(
+                "{letter}: the home position is outside the soft limits; fix them before turning soft limits on"
+            ));
         }
         notes.push(format!(
             "{letter}: {} steps/mm, {} mm/s, {} mm/s², limits {}..{}, homes {} to {}",

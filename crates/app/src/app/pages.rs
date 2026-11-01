@@ -31,6 +31,10 @@ impl Tab {
 #[derive(Default)]
 pub(super) struct SettingsDraft {
     pub config: Option<MachineConfig>,
+    /// The settings the draft started from: Apply changes only what was
+    /// edited here, so changes made meanwhile elsewhere (probe page, tool
+    /// change, jog speed) survive.
+    pub base: Option<MachineConfig>,
     pub import_notes: Vec<String>,
     pub new_tool: u32,
     /// Tool number for "Change tool".
@@ -58,58 +62,66 @@ impl App {
                 .color(MUTED),
         );
         ui.add_space(6.0);
+        // The tool table is locked while the machine moves: a new length would move Z mid-cut.
+        let editable = matches!(s.mode, Mode::Idle | Mode::EStop | Mode::Disconnected | Mode::Alarm)
+            || (s.mode == Mode::Running && s.paused.is_some());
+        if !editable {
+            ui.label(RichText::new("Locked while the machine runs").color(AMBER).size(12.0));
+        }
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            // The description gets its own line, so the table fits a narrow panel.
-            let (tw, nw) = (40.0, 86.0);
-            ui.horizontal(|ui| {
-                for (h, w) in [("Tool", tw), ("Diameter", nw), ("Length", nw)] {
-                    ui.add_sized([w, 18.0], egui::Label::new(RichText::new(h).color(MUTED).strong()));
-                }
-            });
-            for (n, tool) in &s.tools {
-                let mut t = tool.clone();
-                let mut changed = false;
-                let mut remove = false;
-                let current = *n == s.tool;
+            ui.add_enabled_ui(editable, |ui| {
+                // The description gets its own line, so the table fits a narrow panel.
+                let (tw, nw) = (40.0, 86.0);
                 ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [tw, 22.0],
-                        egui::Label::new(RichText::new(format!("T{n}")).strong().color(if current { GREEN } else { TEXT })),
-                    );
-                    for v in [&mut t.diameter, &mut t.length] {
-                        changed |= ui
-                            .add_sized([nw, 22.0], DragValue::new(v).speed(0.01).max_decimals(4).suffix(" mm"))
-                            .changed();
+                    for (h, w) in [("Tool", tw), ("Diameter", nw), ("Length", nw)] {
+                        ui.add_sized([w, 18.0], egui::Label::new(RichText::new(h).color(MUTED).strong()));
                     }
-                    remove = ui.small_button("Remove").clicked();
                 });
+                for (n, tool) in &s.tools {
+                    let mut t = tool.clone();
+                    let mut changed = false;
+                    let mut remove = false;
+                    let current = *n == s.tool;
+                    ui.horizontal(|ui| {
+                        ui.add_sized(
+                            [tw, 22.0],
+                            egui::Label::new(RichText::new(format!("T{n}")).strong().color(if current { GREEN } else { TEXT })),
+                        );
+                        for v in [&mut t.diameter, &mut t.length] {
+                            changed |= ui
+                                .add_sized([nw, 22.0], DragValue::new(v).speed(0.01).max_decimals(4).suffix(" mm"))
+                                .changed();
+                        }
+                        remove = ui.small_button("Remove").clicked();
+                    });
+                    ui.horizontal(|ui| {
+                        ui.add_space(tw + ui.spacing().item_spacing.x);
+                        changed |= ui
+                            .add(
+                                egui::TextEdit::singleline(&mut t.description)
+                                    .hint_text("Description")
+                                    .desired_width(ui.available_width()),
+                            )
+                            .changed();
+                    });
+                    ui.add_space(4.0);
+                    if remove {
+                        self.machine.send(Command::SetTool(*n, None));
+                    } else if changed {
+                        self.machine.send(Command::SetTool(*n, Some(t)));
+                    }
+                }
                 ui.horizontal(|ui| {
-                    ui.add_space(tw + ui.spacing().item_spacing.x);
-                    changed |= ui
-                        .add(
-                            egui::TextEdit::singleline(&mut t.description)
-                                .hint_text("Description")
-                                .desired_width(ui.available_width()),
-                        )
-                        .changed();
+                    let next = s.tools.keys().max().map(|m| m + 1).unwrap_or(1);
+                    if self.draft.new_tool == 0 || s.tools.contains_key(&self.draft.new_tool) {
+                        self.draft.new_tool = next;
+                    }
+                    ui.label("T");
+                    ui.add(DragValue::new(&mut self.draft.new_tool).range(1..=999));
+                    if ui.button("Add tool").clicked() {
+                        self.machine.send(Command::SetTool(self.draft.new_tool, Some(Tool::default())));
+                    }
                 });
-                ui.add_space(4.0);
-                if remove {
-                    self.machine.send(Command::SetTool(*n, None));
-                } else if changed {
-                    self.machine.send(Command::SetTool(*n, Some(t)));
-                }
-            }
-            ui.horizontal(|ui| {
-                let next = s.tools.keys().max().map(|m| m + 1).unwrap_or(1);
-                if self.draft.new_tool == 0 || s.tools.contains_key(&self.draft.new_tool) {
-                    self.draft.new_tool = next;
-                }
-                ui.label("T");
-                ui.add(DragValue::new(&mut self.draft.new_tool).range(1..=999));
-                if ui.button("Add tool").clicked() {
-                    self.machine.send(Command::SetTool(self.draft.new_tool, Some(Tool::default())));
-                }
             });
             ui.add_space(12.0);
             self.tool_change_settings(ui);
@@ -310,13 +322,17 @@ impl App {
     pub(super) fn settings_page(&mut self, ui: &mut egui::Ui) {
         let s = self.snap.clone();
         let idle = matches!(s.mode, Mode::Idle | Mode::EStop | Mode::Disconnected | Mode::Alarm);
+        if self.draft.config.is_none() {
+            self.draft.base = Some(s.config.clone());
+        }
         let draft = self.draft.config.get_or_insert_with(|| s.config.clone());
-        let dirty = *draft != s.config;
+        // Edited here, not changed elsewhere since (that would make every draft look dirty).
+        let dirty = Some(&*draft) != self.draft.base.as_ref();
         let (mut apply, mut revert, mut import, mut dismiss) = (false, false, false, false);
         // Buttons first, so they can't be pushed off the bottom by the import summary.
         section_title(ui, "Machine settings");
         ui.horizontal_wrapped(|ui| {
-            import = ui.button("Import Mach3 profile…").clicked();
+            import = ui.add_enabled(idle, Button::new("Import Mach3 profile…")).clicked();
             apply = ui.add_enabled(dirty && idle, Button::new("Apply")).clicked();
             revert = ui.add_enabled(dirty, Button::new("Revert")).clicked();
             if dirty && !idle {
@@ -388,13 +404,16 @@ impl App {
             self.draft.import_notes.clear();
         }
         if apply {
-            if let Some(c) = self.draft.config.clone() {
-                self.machine.send(Command::SetConfig(Box::new(c)));
+            if let Some(c) = &self.draft.config {
+                let base = self.draft.base.clone().unwrap_or_else(|| s.config.clone());
+                let merged = merge_edits(&base, c, &s.config);
+                self.machine.send(Command::SetConfig(Box::new(merged)));
             }
             self.draft.import_notes.clear();
         }
         if revert {
             self.draft.config = None;
+            self.draft.base = None;
             self.draft.import_notes.clear();
         }
         if !dirty && self.draft.import_notes.is_empty() {
@@ -404,6 +423,9 @@ impl App {
     }
 
     fn import_profile(&mut self, current: &MachineConfig) {
+        if !self.can_open_dialogs() {
+            return;
+        }
         let Some(path) = rfd::FileDialog::new().add_filter("Mach3 profile", &["xml"]).pick_file() else {
             return;
         };
@@ -417,5 +439,66 @@ impl App {
             }
             Err(e) => self.draft.import_notes = vec![format!("Could not import {}: {e}", path.display())],
         }
+    }
+}
+
+/// `current` with the settings that differ between `base` and `edited`
+/// taken from `edited`, field by field.
+fn merge_edits(base: &MachineConfig, edited: &MachineConfig, current: &MachineConfig) -> MachineConfig {
+    fn merge(base: &serde_json::Value, edited: &serde_json::Value, current: &mut serde_json::Value) {
+        use serde_json::Value;
+        match (base, edited, current) {
+            (Value::Object(b), Value::Object(e), Value::Object(c)) => {
+                for (k, ev) in e {
+                    match (b.get(k), c.get_mut(k)) {
+                        (Some(bv), Some(cv)) => merge(bv, ev, cv),
+                        (_, cv) => {
+                            if b.get(k) != Some(ev) {
+                                match cv {
+                                    Some(cv) => *cv = ev.clone(),
+                                    None => {
+                                        c.insert(k.clone(), ev.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            (Value::Array(b), Value::Array(e), Value::Array(c)) if b.len() == e.len() && e.len() == c.len() => {
+                for ((bv, ev), cv) in b.iter().zip(e).zip(c.iter_mut()) {
+                    merge(bv, ev, cv);
+                }
+            }
+            (b, e, c) => {
+                if b != e {
+                    *c = e.clone();
+                }
+            }
+        }
+    }
+    let (Ok(b), Ok(e), Ok(mut c)) = (serde_json::to_value(base), serde_json::to_value(edited), serde_json::to_value(current)) else {
+        return edited.clone();
+    };
+    merge(&b, &e, &mut c);
+    serde_json::from_value(c).unwrap_or_else(|_| edited.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_keeps_changes_made_elsewhere() {
+        let base = MachineConfig::dmc2();
+        let mut edited = base.clone();
+        edited.axes[0].max_velocity = 100.0;
+        let mut current = base.clone();
+        current.jog_speed = 0.8;
+        current.probing.fast_feed = 321.0;
+        let merged = merge_edits(&base, &edited, &current);
+        assert_eq!(merged.axes[0].max_velocity, 100.0);
+        assert_eq!(merged.jog_speed, 0.8);
+        assert_eq!(merged.probing.fast_feed, 321.0);
     }
 }

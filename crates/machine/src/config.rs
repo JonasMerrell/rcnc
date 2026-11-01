@@ -154,10 +154,11 @@ impl MachineConfig {
                 linear(133.3, Input::new(12, false), false, -8.0, -300.0, 200.0),
                 // Home position from the capture (102400 steps); check against the Mach3 DRO.
                 // Mach3's soft limits (Y 0..195, Z -130..0) leave out its own home
-                // positions and the tool setter, so they're widened to include them.
-                // Measure the real travel before relying on soft limits.
-                linear(133.3, Input::new(13, true), true, 512.0, 0.0, 512.0),
-                linear(100.0, Input::new(15, true), true, 8.0, -130.0, 8.0),
+                // positions and the tool setter. They're kept as Mach3 sends them to
+                // the board, but rcnc won't turn soft limits on until they're fixed
+                // (see `validate`): measure the real travel first.
+                linear(133.3, Input::new(13, true), true, 512.0, 0.0, 195.0),
+                linear(100.0, Input::new(15, true), true, 8.0, -130.0, 0.0),
                 // A and B are disabled, but the profile keeps settings for them.
                 rotary_unused(),
                 rotary_unused(),
@@ -278,17 +279,18 @@ mod tests {
     }
 
     #[test]
-    fn dmc2_defaults_are_valid_with_soft_limits_on() {
+    fn settings_are_checked() {
         let mut c = MachineConfig::dmc2();
-        c.validate().unwrap();
-        c.soft_limits = true;
         c.validate().unwrap();
         c.arc_tolerance = 0.0;
         assert!(c.validate().is_err());
+        // Mach3's DMC2 limits leave out the home positions: soft limits can't go on like that.
         let mut c = MachineConfig::dmc2();
         c.soft_limits = true;
-        c.axes[1].soft_max = 195.0;
         assert!(c.validate().unwrap_err().contains("home position"));
+        c.axes[1].soft_max = 512.0;
+        c.axes[2].soft_max = 8.0;
+        c.validate().unwrap();
     }
 
     #[test]

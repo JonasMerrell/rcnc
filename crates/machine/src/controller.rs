@@ -137,6 +137,8 @@ pub struct Snapshot {
     pub tool_change: Option<ToolChangeView>,
     /// User M-code macros, for the preview.
     pub macros: Arc<HashMap<u32, String>>,
+    /// Persistent parameters (work offsets, G28/G30 homes, G92), for the preview.
+    pub params: BTreeMap<u32, f64>,
     /// The spindle can run in reverse (M4, G84).
     pub spindle_reversible: bool,
     /// Controller clock when this snapshot was taken; it stops moving if the
@@ -817,6 +819,12 @@ impl Controller {
         self.interp.params.set_coord_offset(cs, coord);
     }
 
+    /// Show a problem found outside the controller (unreadable settings) as an alarm.
+    pub fn report_alarm(&mut self, msg: String) {
+        self.alarm = Some(msg.trim_start_matches("Alarm: ").to_string());
+        self.info(msg);
+    }
+
     pub(crate) fn report(&mut self, msg: String) {
         self.info(msg);
     }
@@ -827,7 +835,6 @@ impl Controller {
                 self.info(format!("Connected to {} ({})", info.name, info.firmware));
                 self.board = Some(info);
                 self.mode = Mode::EStop;
-                self.alarm = None;
                 self.homed = [false; 6];
                 self.poll_failures = 0;
                 // Whatever was on before the link went down stays off.
@@ -925,7 +932,7 @@ impl Controller {
         let a = &self.config.axes[axis];
         let spu = a.steps_per_unit;
         // Even unhomed, a continuous jog never runs further than the axis is long.
-        let travel = ((a.soft_max - a.soft_min).abs() + 10.0) * spu;
+        let travel = travel_steps(a) as f64;
         let mut steps: u32 = match step {
             Some(d) => (d.abs() * spu).round() as u32,
             None => travel.min(u32::MAX as f64) as u32,
@@ -991,7 +998,7 @@ impl Controller {
         let seek = a.max_velocity * a.home_speed * self.axis_override() * spu;
         let toward = a.home_positive;
         // No further than the axis is long: a broken switch wire must not drive it into its stop.
-        let travel = (((a.soft_max - a.soft_min).abs() + 10.0) * spu).min(u32::MAX as f64) as u32;
+        let travel = travel_steps(a);
         let m = match self.home_phase {
             HomePhase::Seek => AxisMove {
                 axis,
@@ -1679,6 +1686,7 @@ impl Controller {
             g92: self.interp.params.get_axes(num::G92),
             tool_change: self.tool_change.as_ref().map(|t| t.view.clone()),
             macros: self.macros.clone(),
+            params: self.interp.params.persistent(),
             spindle_reversible: self.config.spindle_reversible,
             time: self.clock.now(),
             stopping: self.stopping.is_some(),
@@ -1701,6 +1709,13 @@ impl Controller {
         self.alarm = Some(format!("Internal error: {what}"));
         self.info(format!("Alarm: internal error ({what}); motion aborted and outputs off"));
     }
+}
+
+/// Steps in the longest move the axis could need: its soft-limit span or
+/// home position, whichever reaches further, plus a margin.
+fn travel_steps(a: &crate::config::AxisConfig) -> u32 {
+    let span = a.soft_max.max(a.home_position) - a.soft_min.min(a.home_position);
+    ((span.abs() + 10.0) * a.steps_per_unit).min(u32::MAX as f64) as u32
 }
 
 fn modal_text(interp: &Interpreter) -> String {
