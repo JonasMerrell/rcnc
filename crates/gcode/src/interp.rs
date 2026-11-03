@@ -255,6 +255,10 @@ pub struct Interpreter {
 const ARC_TOLERANCE: f64 = 0.01;
 /// Peck retract clearance for G83, in mm.
 const PECK_CLEARANCE: f64 = 0.25;
+/// Most moves one canned-cycle line may expand to. A typo like L100000 or
+/// Q0.0001 would otherwise build millions of moves in one go, holding up the
+/// controller (and its E-stop and status checks) while it does.
+const MAX_CYCLE_OPS: usize = 100_000;
 
 impl Interpreter {
     pub fn new(program: &str) -> Self {
@@ -1042,6 +1046,9 @@ impl Interpreter {
             .get('P')
             .map(|p| (p as u32).saturating_sub(1))
             .unwrap_or(0);
+        if turns > 10_000 {
+            return Err(format!("arc P{} is too many turns", turns + 1));
+        }
         let length = arc_length(&from, &to, &center, plane, clockwise, turns);
         let feed = self.feed_for(length)?;
         Ok(Op::Arc {
@@ -1123,6 +1130,12 @@ impl Interpreter {
             return Err("canned cycle Z is above R".into());
         }
 
+        let pecks = if code == 830 || code == 730 { ((r_z - bottom) / st.q).ceil().max(1.0) } else { 1.0 };
+        if repeats as f64 * pecks * 4.0 > MAX_CYCLE_OPS as f64 {
+            return Err(format!(
+                "canned cycle makes too many moves ({repeats} holes, {pecks} pecks each); check L and Q"
+            ));
+        }
         let mut ops = Vec::new();
         let mut pos = self.position;
         let words = self.axis_words(b);
@@ -1565,6 +1578,19 @@ mod tests {
             panic!()
         };
         assert_eq!(to[2], 1.0);
+    }
+
+    #[test]
+    fn canned_cycles_that_would_make_millions_of_moves_are_refused() {
+        for program in ["G0 Z5\nG81 X0 Y0 Z-1 R1 L1000000 F100", "G0 Z5\nG83 X0 Y0 Z-100 R1 Q0.00001 F100"] {
+            let mut i = Interpreter::new(program);
+            i.next_step().unwrap();
+            let err = i.next_step().unwrap_err();
+            assert!(err.message.contains("too many moves"), "{}", err.message);
+        }
+        let mut i = Interpreter::new("G0 X1 Y0\nG2 X1 Y0 I-1 J0 P100000 F100");
+        i.next_step().unwrap();
+        assert!(i.next_step().is_err());
     }
 
     #[test]
