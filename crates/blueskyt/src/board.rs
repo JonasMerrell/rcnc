@@ -262,7 +262,8 @@ impl Backend for BlueSkyBoard {
             }
         }
         let status = self.exchange_status(outputs, !outputs.enable)?;
-        let board_free = status.queue_free as usize;
+        // Never more than the queue holds, whatever a garbled report says.
+        let board_free = (status.queue_free as usize).min(proto::QUEUE_CAPACITY);
         self.track_played(board_free);
         // Segments still waiting in the encoder count as queued.
         self.queue_free = board_free.saturating_sub(self.encoder.pending());

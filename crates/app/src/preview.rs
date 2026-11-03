@@ -173,6 +173,8 @@ pub struct Camera {
     pan: Vec2,
     center: [f32; 3],
     fit_pending: bool,
+    /// The path as last drawn, and what for.
+    mesh: Option<(MeshKey, std::sync::Arc<egui::Mesh>)>,
 }
 
 impl Default for Camera {
@@ -184,6 +186,7 @@ impl Default for Camera {
             pan: Vec2::ZERO,
             center: [0.0; 3],
             fit_pending: true,
+            mesh: None,
         }
     }
 }
@@ -230,6 +233,22 @@ impl Camera {
         let v = self.view(p);
         rect.center() + self.pan + Vec2::new(v[0], v[1]) * self.zoom
     }
+
+    /// `project` for many points: the sines and cosines worked out once.
+    fn projector(&self, rect: Rect) -> impl Fn([f64; 3]) -> Pos2 {
+        let (sy, cy) = self.yaw.sin_cos();
+        let (sp, cp) = self.pitch.sin_cos();
+        let (c, zoom, origin) = (self.center, self.zoom, rect.center() + self.pan);
+        move |p| {
+            let x = p[0] as f32 - c[0];
+            let y = p[1] as f32 - c[1];
+            let z = p[2] as f32 - c[2];
+            let x1 = x * cy - y * sy;
+            let y1 = x * sy + y * cy;
+            let up = y1 * cp + z * sp;
+            origin + Vec2::new(x1, -up) * zoom
+        }
+    }
 }
 
 pub struct Colors {
@@ -239,6 +258,69 @@ pub struct Colors {
     pub tool: Color32,
     pub envelope: Color32,
     pub background: Color32,
+}
+
+/// Points of a drawn path closer together than this are merged.
+const MIN_PIXELS: f32 = 1.5;
+
+/// What the cached path mesh was drawn for.
+#[derive(Clone, Copy, PartialEq)]
+struct MeshKey {
+    path: (usize, usize),
+    view: [f32; 8],
+    rect: Rect,
+    pixels_per_point: f32,
+    colors: [Color32; 2],
+}
+
+/// Rapids first so cuts draw on top. Moves that join up become one
+/// polyline, leaving out points within a pixel of the last one kept.
+fn path_mesh(cam: &Camera, rect: Rect, path: &Toolpath, colors: &Colors, pixels_per_point: f32) -> egui::Mesh {
+    let mut tess = egui::epaint::Tessellator::new(pixels_per_point, Default::default(), [1, 1], Vec::new());
+    tess.set_clip_rect(rect);
+    let mut mesh = egui::Mesh::default();
+    let project = cam.projector(rect);
+    let visible = rect.expand(50.0);
+    for rapid in [true, false] {
+        let stroke = if rapid {
+            Stroke::new(0.8_f32, colors.rapid)
+        } else {
+            Stroke::new(1.3_f32, colors.feed)
+        };
+        let mut line: Vec<Pos2> = Vec::new();
+        let mut flush = |line: &mut Vec<Pos2>, mesh: &mut egui::Mesh| {
+            if line.len() >= 2 {
+                if rapid {
+                    for shape in Shape::dashed_line(line, stroke, 4.0, 4.0) {
+                        tess.tessellate_shape(shape, mesh);
+                    }
+                } else {
+                    tess.tessellate_shape(Shape::line(std::mem::take(line), stroke), mesh);
+                }
+            }
+            line.clear();
+        };
+        for s in path.segs.iter().filter(|s| s.rapid == rapid) {
+            let a = project(s.a);
+            let b = project(s.b);
+            if !visible.contains(a) && !visible.contains(b) {
+                flush(&mut line, &mut mesh);
+                continue;
+            }
+            match line.last() {
+                Some(last) if last.distance(a) <= MIN_PIXELS => {}
+                _ => {
+                    flush(&mut line, &mut mesh);
+                    line.push(a);
+                }
+            }
+            if line.last().is_some_and(|last| last.distance(b) > MIN_PIXELS) {
+                line.push(b);
+            }
+        }
+        flush(&mut line, &mut mesh);
+    }
+    mesh
 }
 
 pub fn draw(
@@ -357,39 +439,31 @@ pub fn draw(
         painter.line_segment([o, cam.project(rect, p)], Stroke::new(2.0_f32, c));
     }
 
-    // Path: rapids first so cuts draw on top.
-    for rapid in [true, false] {
-        for s in path.segs.iter().filter(|s| s.rapid == rapid) {
-            let a = cam.project(rect, s.a);
-            let b = cam.project(rect, s.b);
-            if !rect.expand(50.0).contains(a) && !rect.expand(50.0).contains(b) {
-                continue;
-            }
-            let active = active_line == Some(s.line);
-            let color = if active {
-                colors.active
-            } else if rapid {
-                colors.rapid
-            } else {
-                colors.feed
-            };
-            let width: f32 = if active {
-                2.5
-            } else if rapid {
-                0.8
-            } else {
-                1.3
-            };
-            if rapid && !active {
-                painter.extend(Shape::dashed_line(
-                    &[a, b],
-                    Stroke::new(width, color),
-                    4.0,
-                    4.0,
-                ));
-            } else {
-                painter.line_segment([a, b], Stroke::new(width, color));
-            }
+    // The path, as a mesh built once and kept until the view or the path
+    // changes. A CAM program of a million tiny moves would otherwise be
+    // projected and tessellated every frame (300 ms a frame for a million
+    // moves), and the window repaints 30 times a second while a program
+    // runs: Stop, the DRO and the jog buttons would all lag.
+    let key = MeshKey {
+        path: (path.segs.as_ptr() as usize, path.segs.len()),
+        view: [cam.yaw, cam.pitch, cam.zoom, cam.pan.x, cam.pan.y, cam.center[0], cam.center[1], cam.center[2]],
+        rect,
+        pixels_per_point: ui.ctx().pixels_per_point(),
+        colors: [colors.feed, colors.rapid],
+    };
+    let mesh = match &cam.mesh {
+        Some((k, mesh)) if *k == key => mesh.clone(),
+        _ => {
+            let mesh = std::sync::Arc::new(path_mesh(cam, rect, path, colors, key.pixels_per_point));
+            cam.mesh = Some((key, mesh.clone()));
+            mesh
+        }
+    };
+    painter.add(Shape::mesh(mesh));
+    // The line running now, on top.
+    if let Some(active) = active_line {
+        for s in path.segs.iter().filter(|s| s.line == active) {
+            painter.line_segment([cam.project(rect, s.a), cam.project(rect, s.b)], Stroke::new(2.5_f32, colors.active));
         }
     }
 
@@ -410,5 +484,78 @@ pub fn draw(
             egui::FontId::proportional(14.0),
             Color32::from_rgb(240, 110, 90),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 3D-finishing-like path: a dense raster of tiny feed moves.
+    fn dense_path(n: usize) -> Toolpath {
+        let mut segs = Vec::with_capacity(n);
+        let mut p = [0.0, 0.0, 0.0];
+        for i in 0..n {
+            let row = (i / 2000) as f64;
+            let x = (i % 2000) as f64 * 0.05;
+            let x = if (i / 2000) % 2 == 0 { x } else { 100.0 - x };
+            let q = [x, row * 0.2, (x * 0.1).sin() - 2.0];
+            segs.push(PathSeg { a: p, b: q, rapid: i % 2000 == 0, line: i });
+            p = q;
+        }
+        Toolpath { segs, min: [0.0, 0.0, -3.0], max: [100.0, n as f64 / 2000.0 * 0.2, 0.0], ..Default::default() }
+    }
+
+    fn frame_time(path: &Toolpath) -> (std::time::Duration, usize) {
+        let ctx = egui::Context::default();
+        let mut cam = Camera::default();
+        let colors = Colors {
+            feed: Color32::WHITE,
+            rapid: Color32::GRAY,
+            active: Color32::YELLOW,
+            tool: Color32::RED,
+            envelope: Color32::DARK_GRAY,
+            background: Color32::BLACK,
+        };
+        let input = || egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 800.0))),
+            ..Default::default()
+        };
+        let frame = |cam: &mut Camera| {
+            let out = ctx.run(input(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| draw(ui, cam, path, [0.0; 6], Some(500), None, &colors));
+            });
+            ctx.tessellate(out.shapes, out.pixels_per_point)
+        };
+        let start = std::time::Instant::now();
+        frame(&mut cam);
+        eprintln!("first frame (builds the mesh): {:?}", start.elapsed());
+        let mut best = std::time::Duration::MAX;
+        let mut meshes = Vec::new();
+        for _ in 0..5 {
+            let start = std::time::Instant::now();
+            meshes = frame(&mut cam);
+            best = best.min(start.elapsed());
+        }
+        let vertices = meshes
+            .iter()
+            .map(|m| match &m.primitive {
+                egui::epaint::Primitive::Mesh(m) => m.vertices.len(),
+                _ => 0,
+            })
+            .sum();
+        (best, vertices)
+    }
+
+    /// Drawing a million-move program must not stall the window (it
+    /// repaints at 30 Hz while a program runs). Release build: 315 ms a
+    /// frame and 8M vertices when every move was its own shape; about 15 ms
+    /// with the cached mesh.
+    #[test]
+    fn big_programs_draw_quickly() {
+        let path = dense_path(1_000_000);
+        let (t, vertices) = frame_time(&path);
+        eprintln!("1M moves: {t:?}, {vertices} vertices");
+        assert!(vertices < 2_000_000, "{vertices} vertices");
     }
 }

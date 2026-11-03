@@ -35,6 +35,11 @@ const JOG_KEEPALIVE: f64 = 0.5;
 const STOP_TIMEOUT: f64 = 1.5;
 /// Board and planner positions may differ by this many steps (rounding).
 const POSITION_SLACK: i64 = 2;
+/// Program lines read per controller cycle at most. Lines that make no
+/// motion (comments, or a subprogram that loops without moving) would
+/// otherwise keep the controller in one cycle for good: no status polls, no
+/// E-stop input, no Stop.
+const MAX_LINES_PER_CYCLE: usize = 2_000;
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -127,7 +132,8 @@ pub struct Snapshot {
     pub soft_limits: bool,
     pub board: Option<BoardInfo>,
     pub alarm: Option<String>,
-    pub log: VecDeque<String>,
+    /// Shared with the controller: copied only when a line is added.
+    pub log: Arc<VecDeque<String>>,
     pub config: MachineConfig,
     pub tools: BTreeMap<u32, Tool>,
     /// G54..G59 offsets.
@@ -212,7 +218,7 @@ pub struct Controller {
     spindle_override: f64,
     board: Option<BoardInfo>,
     alarm: Option<String>,
-    log: VecDeque<String>,
+    log: Arc<VecDeque<String>>,
     program_name: Option<String>,
     program: Arc<String>,
     persist: Option<Persist>,
@@ -267,7 +273,7 @@ impl Controller {
             spindle_override: 1.0,
             board: None,
             alarm: None,
-            log: VecDeque::new(),
+            log: Arc::new(VecDeque::new()),
             program_name: None,
             program: Arc::new(String::new()),
             persist: None,
@@ -360,6 +366,14 @@ impl Controller {
         }
     }
 
+    /// Hand any unsaved change to the saver now.
+    fn autosave_now(&mut self) {
+        if let Some(p) = &mut self.persist {
+            p.checked_at = f64::NEG_INFINITY;
+        }
+        self.autosave();
+    }
+
     fn autosave(&mut self) {
         let now = self.clock.now();
         let Some(p) = &self.persist else { return };
@@ -410,9 +424,10 @@ impl Controller {
     }
 
     fn info(&mut self, msg: impl Into<String>) {
-        self.log.push_back(msg.into());
-        while self.log.len() > 200 {
-            self.log.pop_front();
+        let log = Arc::make_mut(&mut self.log);
+        log.push_back(msg.into());
+        while log.len() > 200 {
+            log.pop_front();
         }
     }
 
@@ -522,7 +537,7 @@ impl Controller {
             Command::FeedHold => self.feed_hold(),
             Command::Stop => self.stop(),
             Command::ZeroAxis(axis) => {
-                if self.is_ready() {
+                if self.is_ready() && axis < AXIS_LETTERS.len() {
                     let line = format!("G10 L20 P0 {}0", AXIS_LETTERS[axis]);
                     if let Err(e) = self.interp.execute_line(&line) {
                         self.info(e.to_string());
@@ -670,8 +685,8 @@ impl Controller {
                     if !probe_hit {
                         return self.end_routine(Err("Probe search finished without touching".into()));
                     }
-                    if record {
-                        self.routine.as_mut().unwrap().hits.push(pos[axis]);
+                    if let (true, Some(routine)) = (record, &mut self.routine) {
+                        routine.hits.push(pos[axis]);
                     }
                 }
                 _ => {}
@@ -688,7 +703,7 @@ impl Controller {
                 Step::Then(f) => {
                     match f(self, &hits) {
                         Ok(more) => {
-                            let routine = self.routine.as_mut().unwrap();
+                            let Some(routine) = self.routine.as_mut() else { return };
                             for s in more.into_iter().rev() {
                                 routine.steps.push_front(s);
                             }
@@ -926,7 +941,7 @@ impl Controller {
     }
 
     fn jog(&mut self, axis: usize, positive: bool, step: Option<f64>) {
-        if !self.is_ready() || !self.config.axes[axis].enabled {
+        if !self.is_ready() || !self.config.axes.get(axis).is_some_and(|a| a.enabled) {
             return;
         }
         let a = &self.config.axes[axis];
@@ -979,7 +994,7 @@ impl Controller {
             None => self.config.home_order.iter().copied().collect(),
         };
         self.home
-            .retain(|&a| self.config.axes[a].enabled && self.config.axes[a].home_input.is_some());
+            .retain(|&a| self.config.axes.get(a).is_some_and(|a| a.enabled && a.home_input.is_some()));
         if self.home.is_empty() {
             return;
         }
@@ -994,7 +1009,9 @@ impl Controller {
         };
         let a = &self.config.axes[axis];
         let spu = a.steps_per_unit;
-        let input = a.home_input.unwrap();
+        let Some(input) = a.home_input else {
+            return self.raise(format!("{} has no home switch configured", AXIS_LETTERS[axis]));
+        };
         let seek = a.max_velocity * a.home_speed * self.axis_override() * spu;
         let toward = a.home_positive;
         // No further than the axis is long: a broken switch wire must not drive it into its stop.
@@ -1031,9 +1048,14 @@ impl Controller {
     }
 
     fn homing_step_done(&mut self) {
-        let axis = *self.home.front().unwrap();
+        let Some(&axis) = self.home.front() else {
+            self.mode = Mode::Idle;
+            return self.sync_position();
+        };
         let a = self.config.axes[axis].clone();
-        let input = a.home_input.unwrap();
+        let Some(input) = a.home_input else {
+            return self.raise(format!("{} has no home switch configured", AXIS_LETTERS[axis]));
+        };
         match self.home_phase {
             HomePhase::Seek => {
                 if !input.is_active(self.status.inputs) {
@@ -1325,7 +1347,7 @@ impl Controller {
             }
             _ => {}
         }
-        let exec = self.exec.as_ref().unwrap();
+        let Some(exec) = self.exec.as_ref() else { return };
         if exec.exhausted
             && exec.pending.is_empty()
             && matches!(exec.wait, Wait::None)
@@ -1368,6 +1390,7 @@ impl Controller {
 
     /// Pull ops into the planner until an action needs the machine stopped.
     fn fill_planner(&mut self) {
+        let mut lines_read = 0;
         loop {
             let Some(exec) = &mut self.exec else { return };
             if !matches!(exec.wait, Wait::None)
@@ -1379,6 +1402,11 @@ impl Controller {
                 if exec.exhausted {
                     return;
                 }
+                // The rest waits for the next cycle.
+                if lines_read >= MAX_LINES_PER_CYCLE {
+                    return;
+                }
+                lines_read += 1;
                 match exec.source {
                     // A macro that probes runs its remaining lines after the probe.
                     Source::Mdi => match self.interp.resume_macro() {
@@ -1419,7 +1447,7 @@ impl Controller {
                 }
                 continue;
             }
-            let (line, op) = exec.pending.front().cloned().unwrap();
+            let Some((line, op)) = exec.pending.front().cloned() else { continue };
             let from = self.generator.end_position();
             let moves = op_to_moves(&op, &from, line, self.config.arc_tolerance);
             if !moves.is_empty() {
@@ -1568,7 +1596,8 @@ impl Controller {
 
     /// Keep the board's queue topped up from the planner.
     fn stream(&mut self) {
-        let queued = self.backend.queue_capacity() - self.status.queue_free;
+        // Saturating: a garbled status report must not wrap this round.
+        let queued = self.backend.queue_capacity().saturating_sub(self.status.queue_free);
         if queued >= TARGET_QUEUE || self.generator.is_empty() {
             return;
         }
@@ -1579,10 +1608,10 @@ impl Controller {
         // The board ran out of segments in the middle of a move: it stopped
         // dead and restarted with no ramp, which can lose steps. The position
         // check at the next stop catches lost steps; say what happened.
-        if self.status.idle && self.status.queue_free == self.backend.queue_capacity() && self.generator.speed() > 1.0 {
+        if self.status.idle && self.status.queue_free >= self.backend.queue_capacity() && self.generator.speed() > 1.0 {
             self.info("Warning: the motion buffer ran empty mid-move (the PC was too slow); check the part");
         }
-        let mut segments = Vec::with_capacity(TARGET_QUEUE - queued);
+        let mut segments = Vec::with_capacity(TARGET_QUEUE.saturating_sub(queued));
         while segments.len() < TARGET_QUEUE - queued {
             match self.generator.tick() {
                 Some(s) => segments.push(s),
@@ -1600,7 +1629,7 @@ impl Controller {
             Ok(()) => {
                 // The last poll predates this push.
                 self.status.idle = false;
-                self.status.queue_free -= segments.len();
+                self.status.queue_free = self.status.queue_free.saturating_sub(segments.len());
             }
             Err(e) => self.raise(format!("Board rejected motion: {e}")),
         }
@@ -1709,6 +1738,24 @@ impl Controller {
         self.alarm = Some(format!("Internal error: {what}"));
         self.info(format!("Alarm: internal error ({what}); motion aborted and outputs off"));
     }
+
+    /// rcnc is quitting (or its window crashed): stop the machine, switch
+    /// everything off, let the board go and finish saving.
+    pub fn shut_down(&mut self) {
+        if self.mode != Mode::Disconnected {
+            if matches!(self.mode, Mode::Running | Mode::Jog | Mode::Homing | Mode::Probing) {
+                self.info("Quitting: motion aborted");
+            }
+            self.drop_motion();
+            self.outputs = Outputs::default();
+            // Abort, a status exchange with reset on (drives, spindle and
+            // coolant off), then let go of the board.
+            self.backend.disconnect();
+            self.mode = Mode::Disconnected;
+        }
+        self.autosave_now();
+        self.wait_for_saves();
+    }
 }
 
 /// Steps in the longest move the axis could need: its soft-limit span or
@@ -1752,17 +1799,42 @@ fn modal_text(interp: &Interpreter) -> String {
 #[derive(Clone)]
 pub struct ControllerHandle {
     tx: mpsc::Sender<Command>,
-    snapshot: Arc<RwLock<Snapshot>>,
+    /// Swapped whole each cycle, so the UI's copy is a pointer, not the log,
+    /// the tool table and the settings copied under the lock every frame.
+    snapshot: Arc<RwLock<Arc<Snapshot>>>,
+    /// Asks the controller thread to stop the machine and end.
+    shutdown: mpsc::Sender<mpsc::SyncSender<()>>,
+    /// Set once the controller thread has stopped the machine and ended.
+    done: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ControllerHandle {
     pub fn spawn(mut controller: Controller) -> Self {
         let (tx, rx) = mpsc::channel::<Command>();
-        let snapshot = Arc::new(RwLock::new(controller.snapshot()));
+        let (shutdown_tx, shutdown_rx) = mpsc::channel::<mpsc::SyncSender<()>>();
+        let snapshot = Arc::new(RwLock::new(Arc::new(controller.snapshot())));
         let shared = snapshot.clone();
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let finished = done.clone();
+        let end = move || finished.store(true, std::sync::atomic::Ordering::SeqCst);
         thread::Builder::new()
-            .name("machine-controller".into())
+            .name(CONTROLLER_THREAD.into())
             .spawn(move || loop {
+                // Quitting, or the UI is gone (it closed or crashed): never
+                // leave the board with the spindle on and motion queued.
+                let quit = match shutdown_rx.try_recv() {
+                    Ok(ack) => Some(Some(ack)),
+                    Err(mpsc::TryRecvError::Empty) => None,
+                    Err(mpsc::TryRecvError::Disconnected) => Some(None),
+                };
+                if let Some(ack) = quit {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.shut_down()));
+                    end();
+                    if let Some(ack) = ack {
+                        let _ = ack.try_send(());
+                    }
+                    return;
+                }
                 // A bug that panics must not leave the board running with
                 // nothing listening: catch it, stop the machine and carry on in E-stop.
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1778,37 +1850,83 @@ impl ControllerHandle {
                 }));
                 match result {
                     Ok(true) => {}
-                    Ok(false) => return,
+                    Ok(false) => {
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.shut_down()));
+                        end();
+                        return;
+                    }
                     Err(panic) => {
-                        let what = panic
-                            .downcast_ref::<String>()
-                            .cloned()
-                            .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
-                            .unwrap_or_else(|| "unknown".into());
+                        let what = panic_message(&*panic);
                         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.recover(&what)));
                     }
                 }
-                let snap = controller.snapshot();
-                match shared.write() {
-                    Ok(mut s) => *s = snap,
-                    Err(poisoned) => *poisoned.into_inner() = snap,
+                // Taking the snapshot can't be allowed to end the thread either.
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.snapshot())) {
+                    Ok(snap) => {
+                        let snap = Arc::new(snap);
+                        match shared.write() {
+                            Ok(mut s) => *s = snap,
+                            Err(poisoned) => *poisoned.into_inner() = snap,
+                        }
+                    }
+                    Err(panic) => {
+                        let what = panic_message(&*panic);
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.recover(&what)));
+                    }
                 }
                 thread::sleep(Duration::from_millis(5));
             })
             .expect("spawn controller thread");
-        ControllerHandle { tx, snapshot }
+        ControllerHandle { tx, snapshot, shutdown: shutdown_tx, done }
     }
 
     pub fn send(&self, cmd: Command) {
         let _ = self.tx.send(cmd);
     }
 
-    pub fn snapshot(&self) -> Snapshot {
+    pub fn snapshot(&self) -> Arc<Snapshot> {
         match self.snapshot.read() {
             Ok(s) => s.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         }
     }
+
+    /// Stop all motion, switch the spindle, coolant and drives off, let the
+    /// board go and end the controller thread. Waits up to `timeout` for it
+    /// to finish; true if it did. Safe to call more than once.
+    pub fn shut_down(&self, timeout: Duration) -> bool {
+        let done = || self.done.load(std::sync::atomic::Ordering::SeqCst);
+        if done() {
+            return true;
+        }
+        let (ack_tx, ack_rx) = mpsc::sync_channel(1);
+        if self.shutdown.send(ack_tx).is_err() {
+            return done();
+        }
+        // In slices: if another caller's request got there first, this one
+        // is never answered, but `done` still says the machine is stopped.
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match ack_rx.recv_timeout(Duration::from_millis(10)) {
+                Ok(()) => return true,
+                Err(_) if done() => return true,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+                Err(mpsc::RecvTimeoutError::Timeout) if std::time::Instant::now() >= deadline => return false,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+        }
+    }
+}
+
+/// Name of the controller thread (a panic hook can tell it apart).
+pub const CONTROLLER_THREAD: &str = "machine-controller";
+
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_else(|| "unknown".into())
 }
 
 #[cfg(test)]
@@ -1844,6 +1962,7 @@ mod tests {
     struct Wire {
         fail_polls: bool,
         aborts: usize,
+        disconnects: usize,
         axis_stops: usize,
         last_poll: Option<Outputs>,
         moves: Vec<AxisMove>,
@@ -1859,7 +1978,10 @@ mod tests {
             self.0.connect(config)
         }
         fn disconnect(&mut self) {
-            self.1.lock().unwrap().aborts += 1;
+            let mut w = self.1.lock().unwrap();
+            w.aborts += 1;
+            w.disconnects += 1;
+            drop(w);
             self.0.disconnect()
         }
         fn segment_period(&self) -> f64 {
@@ -1905,6 +2027,195 @@ mod tests {
         c.handle(Command::Reset);
         assert_eq!(c.mode(), Mode::Idle);
         (c, clock, wire)
+    }
+
+    #[test]
+    fn quitting_mid_run_stops_the_machine_and_switches_off() {
+        let (mut c, clock, wire) = flaky_setup();
+        c.handle(Command::Load { name: "t".into(), text: "M3 S10000\nM8\nG1 X50 F100\nM30".into() });
+        c.handle(Command::CycleStart);
+        tick(&mut c, &clock, 1200);
+        assert_eq!(c.mode(), Mode::Running);
+        assert_eq!(c.snapshot().spindle, Spindle::Cw);
+        let handle = ControllerHandle::spawn(c);
+        assert!(handle.shut_down(Duration::from_secs(2)));
+        assert_eq!(wire.lock().unwrap().disconnects, 1, "the board was let go with outputs off");
+        // A second call (the panic hook, then main) is harmless.
+        assert!(handle.shut_down(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn the_machine_stops_when_the_window_goes_away() {
+        let (mut c, clock, wire) = flaky_setup();
+        c.handle(Command::Load { name: "t".into(), text: "M3 S10000\nG1 X50 F100\nM30".into() });
+        c.handle(Command::CycleStart);
+        tick(&mut c, &clock, 10);
+        drop(ControllerHandle::spawn(c));
+        let start = std::time::Instant::now();
+        while wire.lock().unwrap().disconnects == 0 {
+            assert!(start.elapsed() < Duration::from_secs(2), "controller kept running with no UI");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn a_loop_without_motion_does_not_hold_up_the_controller() {
+        let (mut c, clock) = setup();
+        let text = "M98 P100 L4000000000\nM30\nO100\n(nothing here)\nM99";
+        c.handle(Command::Load { name: "t".into(), text: text.into() });
+        c.handle(Command::CycleStart);
+        let start = std::time::Instant::now();
+        tick(&mut c, &clock, 20);
+        assert!(start.elapsed() < Duration::from_secs(2), "one cycle read the whole loop");
+        assert_eq!(c.mode(), Mode::Running);
+        // Still listening: Stop ends it.
+        c.handle(Command::Stop);
+        tick(&mut c, &clock, 2);
+        assert_eq!(c.mode(), Mode::Idle);
+    }
+
+    /// Small deterministic random numbers for the fuzz and soak tests.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn pick<'a>(&mut self, of: &[&'a str]) -> &'a str {
+            of[(self.next() % of.len() as u64) as usize]
+        }
+        fn num(&mut self, range: f64) -> String {
+            let v = (self.next() % 2_000_001) as f64 / 1_000_000.0 - 1.0;
+            match self.next() % 20 {
+                0 => "0".into(),
+                1 => format!("{}", (self.next() % 100_000) as f64 * 1e3),
+                2 => "-0.0001".into(),
+                3 => "[#100+1]".into(),
+                _ => format!("{:.3}", v * range),
+            }
+        }
+    }
+
+    fn random_line(r: &mut Rng) -> String {
+        let words = ["G0", "G1", "G2", "G3", "G4", "G17", "G18", "G19", "G20", "G21", "G28", "G30", "G31", "G38.2", "G40", "G41", "G42",
+            "G43", "G49", "G53", "G54", "G55", "G59", "G61", "G64", "G73", "G80", "G81", "G82", "G83", "G84", "G85", "G89", "G90", "G91",
+            "G90.1", "G91.1", "G92", "G92.1", "G92.2", "G93", "G94", "G98", "G99", "M0", "M1", "M3", "M4", "M5", "M6", "M7", "M8", "M9",
+            "M98", "M99", "M30", "T1", "T2", "#100=", "(comment)", "%", "/", "O100", "N10"];
+        let letters = ["X", "Y", "Z", "A", "I", "J", "K", "R", "F", "S", "P", "Q", "L", "H", "D"];
+        let mut line = String::new();
+        for _ in 0..(r.next() % 4 + 1) {
+            line.push_str(r.pick(&words));
+            line.push(' ');
+        }
+        for _ in 0..(r.next() % 5) {
+            let letter = r.pick(&letters);
+            line.push_str(letter);
+            line.push_str(&r.num(if letter == "F" { 2000.0 } else { 50.0 }));
+            line.push(' ');
+        }
+        line
+    }
+
+    /// Random, mostly broken G-code through the interpreter, planner and
+    /// simulator: whatever it does, nothing may panic (debug builds also
+    /// trap integer overflow), and every run must end.
+    #[test]
+    fn random_programs_never_panic_the_controller() {
+        fuzz(300, 1);
+    }
+
+    #[test]
+    #[ignore = "long; cargo test --release -- --ignored"]
+    fn random_programs_never_panic_the_controller_long() {
+        fuzz(20_000, 7);
+    }
+
+    fn fuzz(programs: usize, seed: u64) {
+        let mut r = Rng(0x9E37_79B9_7F4A_7C15 ^ seed);
+        for n in 0..programs {
+            let (mut c, clock) = setup();
+            c.handle(Command::SetConfig(Box::new({
+                let mut cfg = MachineConfig::dmc2();
+                cfg.spindle_spin_up = 0.0;
+                cfg.spindle_spin_down = 0.0;
+                cfg
+            })));
+            if c.mode() != Mode::Idle {
+                c.handle(Command::Reset);
+            }
+            let text: Vec<String> = (0..30).map(|_| random_line(&mut r)).collect();
+            let text = text.join("\n");
+            c.handle(Command::Load { name: format!("fuzz{n}"), text: text.clone() });
+            c.handle(Command::CycleStart);
+            for i in 0..4000 {
+                clock.advance(0.005);
+                c.update();
+                let _ = c.snapshot();
+                match c.mode() {
+                    Mode::Idle | Mode::Alarm | Mode::EStop | Mode::Disconnected => break,
+                    _ if i % 200 == 199 => c.handle(Command::CycleStart),
+                    _ => {}
+                }
+            }
+            // Whatever state it's in, Stop and E-stop bring it back.
+            c.handle(Command::Stop);
+            tick(&mut c, &clock, 400);
+            c.handle(Command::EStop);
+            tick(&mut c, &clock, 2);
+            assert_eq!(c.mode(), Mode::EStop, "program:\n{text}");
+        }
+    }
+
+    /// A long 3D-finishing-like program on the simulator: it must finish at
+    /// the right place, and no controller cycle may take long enough to run
+    /// the board's motion queue dry (240 ms; aim for far less).
+    #[test]
+    #[ignore = "long; cargo test --release -- --ignored"]
+    fn soak_long_program() {
+        let (mut c, clock) = setup();
+        let mut text = String::from("G21 G90 G17\nG0 Z5\nG0 X0 Y0\nM3 S12000\nG1 Z-1 F300\n");
+        let mut lines = 0;
+        for row in 0..400 {
+            let y = row as f64 * 0.25;
+            for k in 0..=200 {
+                let x = if row % 2 == 0 { k as f64 * 0.5 } else { 100.0 - k as f64 * 0.5 };
+                let z = -1.0 - 0.5 * ((x * 0.1).sin() * (y * 0.1).cos());
+                text.push_str(&format!("G1 X{x:.3} Y{y:.3} Z{z:.3} F1500\n"));
+                lines += 1;
+            }
+            if row % 50 == 49 {
+                text.push_str("G2 X100 Y{y} I0 J0.5\n".replace("{y}", &format!("{:.3}", y + 1.0)).replace("X100", if row % 2 == 0 { "X100" } else { "X0" }).as_str());
+                text.push_str(&format!("G0 Z5\nG0 Y{:.3}\nG1 Z-1 F300\n", y + 0.25));
+            }
+        }
+        text.push_str("G0 Z5\nM5\nG0 X0 Y0\nM30\n");
+        c.handle(Command::Load { name: "soak".into(), text });
+        c.handle(Command::CycleStart);
+        let mut worst = Duration::ZERO;
+        let mut simulated = 0.0;
+        let start = std::time::Instant::now();
+        while c.mode() == Mode::Running {
+            clock.advance(0.005);
+            simulated += 0.005;
+            let t = std::time::Instant::now();
+            c.update();
+            let _ = c.snapshot();
+            worst = worst.max(t.elapsed());
+            assert!(simulated < 24.0 * 3600.0, "never finished");
+        }
+        let s = c.snapshot();
+        eprintln!(
+            "soak: {lines} moves, {:.0} min machine time in {:?}, slowest cycle {worst:?}",
+            simulated / 60.0,
+            start.elapsed()
+        );
+        assert_eq!(c.mode(), Mode::Idle, "alarm: {:?}\n{:?}", s.alarm, s.log);
+        assert!(s.alarm.is_none());
+        assert!(s.machine[0].abs() < 1e-3 && s.machine[1].abs() < 1e-3, "{:?}", s.machine);
+        assert!(!s.log.iter().any(|l| l.contains("ran empty")), "{:?}", s.log);
+        assert!(worst < Duration::from_millis(50), "slowest cycle {worst:?}");
     }
 
     fn tick(c: &mut Controller, clock: &ManualClock, n: usize) {

@@ -46,7 +46,7 @@ enum JogStep {
 
 pub struct App {
     machine: ControllerHandle,
-    snap: Snapshot,
+    snap: Arc<Snapshot>,
     toolpath: Toolpath,
     /// The program and the tools/offsets the preview was built for.
     toolpath_for: (usize, u64),
@@ -81,6 +81,13 @@ pub struct App {
     sheet_view: SheetView,
     /// Where the sheet goes this frame, if it's on show.
     sheet_rect: Option<egui::Rect>,
+    /// Start of each line of the loaded program, worked out once per
+    /// program rather than every frame (a CAM file can be a million lines).
+    program_lines: (usize, Vec<usize>),
+    /// The window's close button was pressed while the machine was busy.
+    confirm_quit: bool,
+    /// Quit was confirmed: let the window close.
+    quitting: bool,
 }
 
 impl App {
@@ -120,6 +127,9 @@ impl App {
             sheet: None,
             sheet_view: SheetView::new(web_data),
             sheet_rect: None,
+            program_lines: (0, Vec::new()),
+            confirm_quit: false,
+            quitting: false,
         }
     }
 
@@ -330,6 +340,7 @@ impl eframe::App for App {
         self.watch_file(ctx.input(|i| i.time));
         self.update_preview(ctx);
         self.keyboard(ctx);
+        self.guard_close(ctx);
         if self.alive.1.elapsed() > std::time::Duration::from_millis(500) {
             egui::TopBottomPanel::top("dead")
                 .frame(egui::Frame::new().fill(RED).inner_margin(Margin::symmetric(14, 8)))
@@ -419,7 +430,63 @@ impl eframe::App for App {
     }
 }
 
+/// Byte offset where each line starts (`str::lines` rules: a trailing
+/// newline doesn't start another line).
+fn line_starts(text: &str) -> Vec<usize> {
+    let mut starts = Vec::new();
+    if !text.is_empty() {
+        starts.push(0);
+    }
+    starts.extend(text.match_indices('\n').map(|(i, _)| i + 1).filter(|&i| i < text.len()));
+    starts
+}
+
 impl App {
+    /// Closing the window mid-cut would leave the board with the spindle on.
+    /// While anything runs, ask first; on Quit the machine is stopped and
+    /// switched off (in `main`, once the window has gone).
+    fn guard_close(&mut self, ctx: &egui::Context) {
+        let s = &self.snap;
+        let busy = matches!(s.mode, Mode::Running | Mode::Jog | Mode::Homing | Mode::Probing)
+            || s.spindle != Spindle::Off
+            || s.flood
+            || s.mist;
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
+            if busy {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.confirm_quit = true;
+            } else {
+                self.quitting = true;
+            }
+        }
+        if !self.confirm_quit {
+            return;
+        }
+        egui::Window::new("Quit rcnc?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label(if busy {
+                    "The machine is running. Quitting stops all motion and switches the spindle, coolant and drives off."
+                } else {
+                    "The machine has stopped."
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(RichText::new("Stop and quit").color(RED).strong()).clicked() {
+                        self.confirm_quit = false;
+                        self.quitting = true;
+                        self.machine.send(Command::Stop);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if ui.button("Keep running").clicked() {
+                        self.confirm_quit = false;
+                    }
+                });
+            });
+    }
+
     fn program_id(s: &Snapshot) -> usize {
         std::sync::Arc::as_ptr(&s.program) as usize
     }
@@ -759,7 +826,16 @@ impl App {
             );
         }
         ui.add_space(6.0);
-        let lines: Vec<&str> = s.program.lines().collect();
+        let id = Self::program_id(&s);
+        if self.program_lines.0 != id {
+            self.program_lines = (id, line_starts(&s.program));
+        }
+        let starts = &self.program_lines.1;
+        let line_text = |i: usize| -> &str {
+            let end = starts.get(i + 1).map(|e| e - 1).unwrap_or(s.program.len());
+            s.program.get(starts[i]..end).unwrap_or("").trim_end_matches('\r')
+        };
+        let line_count = starts.len();
         let row_h = 18.0;
         egui::Frame::new()
             .fill(BG)
@@ -770,10 +846,10 @@ impl App {
                 if let (true, Some(line)) = (self.follow_line, s.line) {
                     area = area.vertical_scroll_offset((line as f32 * row_h - 120.0).max(0.0));
                 }
-                area.show_rows(ui, row_h, lines.len(), |ui, range| {
+                area.show_rows(ui, row_h, line_count, |ui, range| {
                     for i in range {
                         let active = s.line == Some(i);
-                        let text = RichText::new(format!("{:>5}  {}", i + 1, lines[i]))
+                        let text = RichText::new(format!("{:>5}  {}", i + 1, line_text(i)))
                             .font(FontId::monospace(13.0));
                         let text = if active {
                             text.color(Color32::BLACK).background_color(AMBER)
