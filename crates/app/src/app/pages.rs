@@ -155,6 +155,11 @@ impl App {
                 });
             });
             ui.add_space(12.0);
+            section_title(ui, "Z zero");
+            if let Some(job) = z_reference_buttons(ui, &s) {
+                self.machine.send(Command::Probe(job));
+            }
+            ui.add_space(12.0);
             self.tool_change_settings(ui);
         });
     }
@@ -303,6 +308,9 @@ impl App {
         // One scroll area for the page so the setter settings are reachable on small screens.
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             section_title(ui, "Tool");
+            if let Some(job) = z_reference_buttons(ui, &s) {
+                self.machine.send(Command::Probe(job));
+            }
             run(ui, "Touch off tool on setter", ProbeJob::ToolTouchOff, Vec2::new(220.0, 36.0));
             ui.add_space(8.0);
             section_title(ui, "Work");
@@ -362,7 +370,18 @@ impl App {
                 changed |= labelled(ui, "Y", &mut t.y, 0.1, " mm");
                 changed |= labelled(ui, "Travel height Z", &mut t.travel_z, 0.1, " mm");
                 changed |= labelled(ui, "Search distance", &mut t.max_distance, 0.5, " mm");
-                changed |= labelled(ui, "Setter top (work Z)", &mut t.offset, 0.001, " mm");
+                if t.active().is_none() {
+                    changed |= labelled(ui, "Setter top (work Z)", &mut t.offset, 0.001, " mm");
+                }
+            });
+            ui.add_space(4.0);
+            ui.label(RichText::new("Z zero references: the setter top's height above each surface").color(MUTED));
+            egui::Grid::new("z-references").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                for r in &mut t.references {
+                    changed |= ui.add(egui::TextEdit::singleline(&mut r.name).desired_width(90.0)).changed();
+                    changed |= num(ui, &mut r.setter_top, 0.001, " mm");
+                    ui.end_row();
+                }
             });
             if ui.button("Setter is under the spindle now").clicked() {
                 t.x = s.machine[0];
@@ -538,6 +557,38 @@ fn merge_edits(base: &MachineConfig, edited: &MachineConfig, current: &MachineCo
     };
     merge(&b, &e, &mut c);
     serde_json::from_value(c).unwrap_or_else(|_| edited.clone())
+}
+
+/// The Z zero references (table, vise): which one is in use, and a big
+/// button for each that touches the tool off on the setter and sets Z zero
+/// there. Returns the job to run.
+fn z_reference_buttons(ui: &mut egui::Ui, s: &machine::Snapshot) -> Option<ProbeJob> {
+    let setter = &s.config.probing.setter;
+    let in_use = match setter.active() {
+        Some(r) => format!("Z zero: {} (setter top at Z{:.3})", r.name, r.setter_top),
+        None => format!("Z zero: custom (setter top at Z{:.3})", setter.offset),
+    };
+    ui.label(RichText::new(in_use).size(16.0).color(GREEN).strong());
+    let ready = matches!(s.mode, Mode::Idle) || (s.mode == Mode::Running && s.paused.is_some());
+    let mut job = None;
+    ui.horizontal_wrapped(|ui| {
+        for (i, r) in setter.references.iter().enumerate() {
+            let button = Button::new(RichText::new(format!("Set Z: {}", r.name.to_lowercase())).size(20.0).strong())
+                .min_size(Vec2::new(170.0, 56.0));
+            if ui
+                .add_enabled(ready, button)
+                .on_hover_text(format!(
+                    "Measure the tool on the setter and set Z zero on the {} ({:.3} below the setter top). Tool changes keep it.",
+                    r.name.to_lowercase(),
+                    r.setter_top
+                ))
+                .clicked()
+            {
+                job = Some(ProbeJob::SetZ(i));
+            }
+        }
+    });
+    job
 }
 
 #[cfg(test)]

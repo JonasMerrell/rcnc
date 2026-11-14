@@ -834,6 +834,13 @@ impl Controller {
         self.interp.params.set_coord_offset(cs, coord);
     }
 
+    /// Make `name` the setter's Z reference, kept by later touch-offs and
+    /// tool changes (and saved with the settings). Returns the probe settings.
+    pub(crate) fn use_z_reference(&mut self, name: &str) -> crate::probing::ProbeSettings {
+        self.config.probing.setter.reference = name.to_string();
+        self.config.probing.clone()
+    }
+
     /// Show a problem found outside the controller (unreadable settings) as an alarm.
     pub fn report_alarm(&mut self, msg: String) {
         self.alarm = Some(msg.trim_start_matches("Alarm: ").to_string());
@@ -2403,7 +2410,7 @@ mod tests {
     fn tool_touch_off_sets_z_from_setter() {
         let (mut c, clock) = probing_setup();
         let mut config = MachineConfig::dmc2();
-        config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, ..Default::default() };
+        config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, offset: 13.31, reference: String::new(), ..Default::default() };
         c.handle(Command::SetConfig(Box::new(config)));
         assert_eq!(c.mode(), Mode::Idle, "probe settings don't need a reconnect");
         c.handle(Command::Probe(ProbeJob::ToolTouchOff));
@@ -2565,7 +2572,7 @@ mod tests {
     fn tool_change_touches_off_then_continues() {
         let (mut c, clock) = probing_setup();
         let mut config = MachineConfig::dmc2();
-        config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, ..Default::default() };
+        config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, offset: 13.31, reference: String::new(), ..Default::default() };
         config.tool_change_touch_off = true;
         config.tool_change.guided = false;
         c.handle(Command::SetConfig(Box::new(config)));
@@ -2602,7 +2609,7 @@ mod tests {
     ) -> (Controller, Arc<ManualClock>) {
         let (mut c, clock) = probing_setup_with(world);
         let mut config = MachineConfig::dmc2();
-        config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, ..Default::default() };
+        config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, offset: 13.31, reference: String::new(), ..Default::default() };
         config.tool_change =
             crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, ..Default::default() };
         settings(&mut config.tool_change);
@@ -2791,6 +2798,76 @@ mod tests {
         assert!(s.log.iter().any(|l| l.contains("Tool touched off")), "{:?}", s.log);
         // The setter now sits 0.1 mm higher: machine Z30.1 reads 13.31.
         assert!(close(s.machine[2] - s.work[2], 30.1 - 13.31), "{:?} {:?}", s.machine, s.work);
+    }
+
+    /// Probing sim with the setter at X50 Y50 (the sim table, machine Z30)
+    /// and its Table/Vise references as configured.
+    fn reference_setup() -> (Controller, Arc<ManualClock>) {
+        let (mut c, clock) = probing_setup();
+        let mut config = MachineConfig::dmc2();
+        let s = &mut config.probing.setter;
+        (s.x, s.y, s.travel_z) = (50.0, 50.0, 120.0);
+        config.tool_change = crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, ..Default::default() };
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.homed = [true; 6];
+        c.handle(Command::Mdi("G53 G0 X50 Y50 Z110".into()));
+        run_until_idle(&mut c, &clock, 5.0);
+        (c, clock)
+    }
+
+    #[test]
+    fn set_z_on_the_table_and_the_vise() {
+        let s = crate::probing::ToolSetter::default();
+        assert_eq!(s.reference, "Table");
+        assert!(close(s.references[0].setter_top, 63.805) && close(s.references[1].setter_top, 40.61));
+
+        let (mut c, clock) = reference_setup();
+        c.handle(Command::Probe(ProbeJob::SetZ(1)));
+        run_until_idle(&mut c, &clock, 90.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Set Z: vise done")), "{:?}", s.log);
+        assert!(s.log.iter().any(|l| l.contains("Z zero set on the vise, setter top at Z40.610")), "{:?}", s.log);
+        // The setter top (machine Z30) reads 40.61: Z zero is 40.61 below it.
+        assert!(close(s.machine[2] - s.work[2], 30.0 - 40.61), "{:?} {:?}", s.machine, s.work);
+        assert_eq!(s.config.probing.setter.reference, "Vise");
+
+        c.handle(Command::Probe(ProbeJob::SetZ(0)));
+        run_until_idle(&mut c, &clock, 90.0);
+        let s = c.snapshot();
+        assert!(close(s.machine[2] - s.work[2], 30.0 - 63.805), "{:?} {:?}", s.machine, s.work);
+        assert_eq!(s.config.probing.setter.reference, "Table");
+    }
+
+    #[test]
+    fn set_z_checks_the_two_readings_too() {
+        let (mut c, clock) = probing_setup_with(|sim| sim.world.touch_shifts = [0, 20].into());
+        let mut config = MachineConfig::dmc2();
+        let st = &mut config.probing.setter;
+        (st.x, st.y, st.travel_z) = (50.0, 50.0, 120.0);
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.handle(Command::Mdi("G53 G0 X50 Y50 Z110".into()));
+        run_until_idle(&mut c, &clock, 5.0);
+        let before = c.snapshot();
+        c.handle(Command::Probe(ProbeJob::SetZ(1)));
+        run_until_idle(&mut c, &clock, 90.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("differ by 0.100 mm")), "{:?}", s.log);
+        assert!(close(s.machine[2] - s.work[2], before.machine[2] - before.work[2]), "Z zero unchanged");
+        assert_eq!(s.config.probing.setter.reference, "Table", "reference unchanged");
+    }
+
+    #[test]
+    fn a_tool_change_keeps_the_vise_reference() {
+        let (mut c, clock) = reference_setup();
+        c.handle(Command::Probe(ProbeJob::SetZ(1)));
+        run_until_idle(&mut c, &clock, 90.0);
+        c.handle(Command::Mdi("T4 M6".into()));
+        run_tool_change_to(&mut c, &clock, Some(ToolChangeStage::Loading));
+        c.handle(Command::ToolChangeContinue { measure: Some(true) });
+        run_tool_change_to(&mut c, &clock, None);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Tool 4 loaded")), "{:?}", s.log);
+        assert!(close(s.machine[2] - s.work[2], 30.0 - 40.61), "{:?} {:?}", s.machine, s.work);
     }
 
     #[test]
