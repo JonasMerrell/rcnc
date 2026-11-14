@@ -193,6 +193,9 @@ pub enum Op {
     ProbeZ(ZRequest),
     /// Find two bores and set work X/Y from them (an `(RCNC FIND_BORES ...)` comment).
     FindBores(BoresRequest),
+    /// Zero every tool measured from now on on this setter reference (an
+    /// `(RCNC Z_REFERENCE Vise)` comment): the job's Z0 is that surface.
+    ZReference(String),
     ProgramEnd,
 }
 
@@ -207,6 +210,20 @@ pub struct StockRequest {
     pub top_centre: [f64; 3],
     pub tolerance: Option<f64>,
     pub depth: Option<f64>,
+    /// `KEEPZ=1`: set only X/Y; Z comes from the tool measurements (a Z
+    /// reference), and the top is only checked against `top_centre`.
+    pub keep_z: bool,
+}
+
+/// The reference named in an `(RCNC Z_REFERENCE <name>)` comment.
+fn z_reference(comment: &str) -> Option<Result<String, String>> {
+    const KEYWORD: &str = "RCNC Z_REFERENCE";
+    let rest = comment.trim();
+    if rest.len() < KEYWORD.len() || !rest[..KEYWORD.len()].eq_ignore_ascii_case(KEYWORD) {
+        return None;
+    }
+    let name = rest[KEYWORD.len()..].trim();
+    Some(if name.is_empty() { Err("Z_REFERENCE needs a reference name, e.g. Vise".into()) } else { Ok(name.to_string()) })
 }
 
 /// `(RCNC PROBE_Z AT=x,y Z=z SEARCH=mm)`: with the touch probe loaded, go
@@ -328,7 +345,7 @@ impl StockRequest {
         if rest.len() < Self::KEYWORD.len() || !rest[..Self::KEYWORD.len()].eq_ignore_ascii_case(Self::KEYWORD) {
             return None;
         }
-        let mut r = StockRequest { size: [0.0; 3], top_centre: [0.0; 3], tolerance: None, depth: None };
+        let mut r = StockRequest { size: [0.0; 3], top_centre: [0.0; 3], tolerance: None, depth: None, keep_z: false };
         let mut sized = false;
         let nums = |v: &str| -> Result<Vec<f64>, String> {
             v.split(',').map(|n| n.trim().parse::<f64>().map_err(|_| format!("FIND_STOCK: bad number '{n}'"))).collect()
@@ -349,6 +366,7 @@ impl StockRequest {
                 "AT" => three(v).map(|a| r.top_centre = a),
                 "TOL" => nums(v).map(|n| r.tolerance = n.first().copied()),
                 "DEPTH" => nums(v).map(|n| r.depth = n.first().copied()),
+                "KEEPZ" => nums(v).map(|n| r.keep_z = n.first().is_some_and(|v| *v != 0.0)),
                 _ => Err(format!("FIND_STOCK: unknown setting {k}")),
             };
             if let Err(e) = res {
@@ -778,6 +796,8 @@ impl Interpreter {
                 ops.push(Op::ProbeZ(req?));
             } else if let Some(req) = BoresRequest::parse(c) {
                 ops.push(Op::FindBores(req?));
+            } else if let Some(name) = z_reference(c) {
+                ops.push(Op::ZReference(name?));
             }
         }
 
@@ -2040,7 +2060,7 @@ mod tests {
         let (_, ops) = run("(RCNC FIND_STOCK SIZE=39,20,77 AT=0,0,-1.5 TOL=0.8)\nM30");
         assert_eq!(
             ops[0],
-            Op::FindStock(StockRequest { size: [39.0, 20.0, 77.0], top_centre: [0.0, 0.0, -1.5], tolerance: Some(0.8), depth: None })
+            Op::FindStock(StockRequest { size: [39.0, 20.0, 77.0], top_centre: [0.0, 0.0, -1.5], tolerance: Some(0.8), depth: None, keep_z: false })
         );
         assert!(StockRequest::parse("rcnc find_stock size=1,2,3 depth=2").unwrap().is_ok());
         assert!(StockRequest::parse("RCNC FIND_STOCK AT=0,0,0").unwrap().is_err());

@@ -87,7 +87,13 @@ impl Controller {
     pub(super) fn locating(&self) -> bool {
         self.mode == Mode::Probing
             && self.routine_waiting
-            && self.find_stock.as_ref().is_some_and(|f| matches!(f.stage, FindStockStage::Locate | FindStockStage::Mismatch))
+            && (self.find_stock.as_ref().is_some_and(|f| matches!(f.stage, FindStockStage::Locate | FindStockStage::Mismatch))
+                || self.calibrate.as_ref().is_some_and(|c| c.stage == super::CalibrateStage::Locate))
+    }
+
+    /// A jog while locating stops on the probe, except a tool jogged onto a gauge block.
+    pub(super) fn locate_guarded(&self) -> bool {
+        !self.calibrate.as_ref().is_some_and(|c| c.gauge.is_some())
     }
 
     /// Note a tap on the stylus while the wizard waits for one.
@@ -200,6 +206,18 @@ impl Controller {
         let [cx, cy, cz] = req.top_centre;
         self.set_work_axis(0, centre[0], cx);
         self.set_work_axis(1, centre[1], cy);
+        if req.keep_z {
+            // Z comes from the tools' measurements on a reference: the top is only checked
+            let work_top = top - self.interp.program_offset()[2];
+            let off = work_top - cz;
+            let note = if off.abs() > 0.5 {
+                format!(" Warning: the top is at Z{}, {} mm from the Z{} the job expects: check the stock height and the Z reference", fmt(work_top), fmt(off), fmt(cz))
+            } else {
+                format!(" Top at Z{} ({} mm from the job's)", fmt(work_top), fmt(off))
+            };
+            self.report(format!("Stock found: {summary}, centre machine X{} Y{}; work X/Y set, Z kept.{note}", fmt(centre[0]), fmt(centre[1])));
+            return Ok(steps);
+        }
         // The probe was measured on the setter: that tells how far the
         // setter's top is above the stock's, which later tools are zeroed by.
         let setter_top = self.zero_z_on(top, cz);
