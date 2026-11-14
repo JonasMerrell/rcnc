@@ -2917,7 +2917,7 @@ mod tests {
         let mut config = MachineConfig::dmc2();
         config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, offset: 13.31, reference: String::new(), ..Default::default() };
         config.tool_change =
-            crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, ..Default::default() };
+            crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, centre_x: false, ..Default::default() };
         settings(&mut config.tool_change);
         c.handle(Command::SetConfig(Box::new(config)));
         // Homing the sim takes a while; the change only needs to know it's been done.
@@ -3012,11 +3012,13 @@ mod tests {
     }
 
     #[test]
-    fn tool_change_raises_z_then_moves_only_the_bed_back() {
+    fn tool_change_raises_z_then_moves_x_to_the_middle_then_the_bed_back() {
         let (mut c, clock) = probing_setup();
         let mut config = MachineConfig::dmc2();
         config.tool_change =
             crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, ..Default::default() };
+        // The DMC2's X homes at -8 and travels 343 mm: the middle is X163.5.
+        assert_eq!(config.change_x(), Some(163.5));
         c.handle(Command::SetConfig(Box::new(config)));
         c.homed = [true; 6];
         c.handle(Command::Mdi("G53 G0 X130 Y130 Z110".into()));
@@ -3033,14 +3035,20 @@ mod tests {
             }
         }
         let end = *path.last().unwrap();
-        assert!(close(end[0], 130.0) && close(end[1], 20.0) && close(end[2], 120.0), "{end:?}");
-        // X never moves, and Y only once Z is all the way up.
+        assert!(close(end[0], 163.5) && close(end[1], 20.0) && close(end[2], 120.0), "{end:?}");
+        // X only once Z is all the way up, and Y only once X is there.
         for p in &path {
-            assert!(close(p[0], 130.0), "X moved: {p:?}");
+            if !close(p[0], 130.0) {
+                assert!(close(p[2], 120.0), "X moved before Z was up: {p:?}");
+            }
             if !close(p[1], 130.0) {
-                assert!(close(p[2], 120.0), "Y moved before Z was up: {p:?}");
+                assert!(close(p[2], 120.0) && close(p[0], 163.5), "Y moved too early: {p:?}");
             }
         }
+        // With both off, X stays where it is.
+        let mut config = c.snapshot().config.clone();
+        config.tool_change.centre_x = false;
+        assert_eq!(config.change_x(), None);
     }
 
     #[test]
@@ -3113,7 +3121,7 @@ mod tests {
         let mut config = MachineConfig::dmc2();
         let s = &mut config.probing.setter;
         (s.x, s.y, s.travel_z) = (50.0, 50.0, 120.0);
-        config.tool_change = crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, ..Default::default() };
+        config.tool_change = crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, centre_x: false, ..Default::default() };
         c.handle(Command::SetConfig(Box::new(config)));
         c.homed = [true; 6];
         c.handle(Command::Mdi("G53 G0 X50 Y50 Z110".into()));
@@ -3189,7 +3197,7 @@ mod tests {
             reference: String::new(),
             ..Default::default()
         };
-        config.tool_change = crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, ..Default::default() };
+        config.tool_change = crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, centre_x: false, ..Default::default() };
         c.handle(Command::SetConfig(Box::new(config)));
         c.homed = [true; 6];
         // A stale Z zero, 40 mm above where touching off will put it.
