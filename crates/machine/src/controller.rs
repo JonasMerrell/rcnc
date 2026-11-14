@@ -1183,7 +1183,8 @@ impl Controller {
             Mode::Running | Mode::Jog | Mode::Homing | Mode::Probing if self.stopping.is_none() => {
                 self.clear_routine();
                 self.home.clear();
-                if self.mode == Mode::Running {
+                let probing = matches!(&self.exec, Some(Exec { wait: Wait::Probe, .. }));
+                if self.mode == Mode::Running && !probing {
                     // The planner ramps down; streaming stops once it's at rest.
                     self.generator.hold = true;
                     // Nothing more is read from the program.
@@ -1192,8 +1193,13 @@ impl Controller {
                         exec.pending.clear();
                     }
                 } else {
-                    // Single-axis moves stop with the board's own deceleration.
+                    // Single-axis moves (including a G31/G38 probe in a program
+                    // or MDI) stop with the board's own deceleration.
                     let _ = self.backend.stop_axis_move();
+                    if let Some(exec) = &mut self.exec {
+                        exec.exhausted = true;
+                        exec.pending.clear();
+                    }
                 }
                 self.stopping = Some(self.clock.now() + STOP_TIMEOUT);
                 self.info("Stopping");
@@ -1729,6 +1735,9 @@ impl Controller {
         self.exec = None;
         self.clear_routine();
         self.generator.clear();
+        // A Stop that was slowing down must not finish later and leave E-stop for Idle.
+        self.stopping = None;
+        self.jog_continuous = false;
         self.outputs = Outputs::default();
         let _ = self.backend.poll(&self.outputs);
         self.homed = [false; 6];
@@ -2864,5 +2873,30 @@ mod tests {
         let s = c.snapshot();
         assert_eq!(s.spindle, Spindle::Cw, "{:?}", s.log);
         assert!(s.flood);
+    }
+
+    #[test]
+    fn stop_stops_a_probe_in_a_program() {
+        let (mut c, clock) = setup();
+        c.handle(Command::Home(None));
+        run_until_idle(&mut c, &clock, 120.0);
+        c.handle(Command::Mdi("G53 G31 Z-150 F300".into()));
+        tick(&mut c, &clock, 20);
+        c.handle(Command::Stop);
+        tick(&mut c, &clock, 60);
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Idle, "the board's own deceleration, not the 1.5 s timeout");
+        assert!(s.homed[2], "stopped at rest, so the position is still trusted");
+    }
+
+    #[test]
+    fn a_panic_while_stopping_stays_in_estop() {
+        let (mut c, clock) = setup();
+        c.handle(Command::Mdi("G91 G1 X100 F3000".into()));
+        tick(&mut c, &clock, 100);
+        c.handle(Command::Stop);
+        c.recover("test");
+        tick(&mut c, &clock, 400);
+        assert_eq!(c.mode(), Mode::EStop);
     }
 }
