@@ -84,11 +84,20 @@ pub enum ToolKind {
     Bull,
     Chamfer,
     Drill,
+    /// A touch probe: `diameter` is the stylus ball.
+    Probe,
 }
 
 impl ToolKind {
-    pub const ALL: [ToolKind; 6] =
-        [ToolKind::Auto, ToolKind::Flat, ToolKind::Ball, ToolKind::Bull, ToolKind::Chamfer, ToolKind::Drill];
+    pub const ALL: [ToolKind; 7] = [
+        ToolKind::Auto,
+        ToolKind::Flat,
+        ToolKind::Ball,
+        ToolKind::Bull,
+        ToolKind::Chamfer,
+        ToolKind::Drill,
+        ToolKind::Probe,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -98,6 +107,7 @@ impl ToolKind {
             ToolKind::Bull => "Bull nose",
             ToolKind::Chamfer => "Chamfer / V-bit",
             ToolKind::Drill => "Drill",
+            ToolKind::Probe => "Touch probe",
         }
     }
 }
@@ -110,7 +120,9 @@ impl Tool {
         }
         let d = self.description.to_lowercase();
         let has = |words: &[&str]| words.iter().any(|w| d.contains(w));
-        if has(&["ball"]) {
+        if has(&["probe"]) {
+            ToolKind::Probe
+        } else if has(&["ball"]) {
             ToolKind::Ball
         } else if has(&["bull", "corner rad", "radius"]) {
             ToolKind::Bull
@@ -175,7 +187,65 @@ pub enum Op {
         q: Option<f64>,
     },
     Message(String),
+    /// Find the stock with the touch probe before carrying on (an `(RCNC FIND_STOCK ...)` comment).
+    FindStock(StockRequest),
     ProgramEnd,
+}
+
+/// What a job asks the Find stock wizard to look for, from a comment like
+/// `(RCNC FIND_STOCK SIZE=39,20,77 AT=0,0,0 TOL=1 DEPTH=3)`: the stock's X, Y
+/// and Z size, the work coordinates its top centre should read, how far the
+/// probed size may differ from the expected one, and how far below the top
+/// to touch the sides. Always millimetres.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StockRequest {
+    pub size: [f64; 3],
+    pub top_centre: [f64; 3],
+    pub tolerance: Option<f64>,
+    pub depth: Option<f64>,
+}
+
+impl StockRequest {
+    pub const KEYWORD: &'static str = "RCNC FIND_STOCK";
+
+    /// The request in a comment, `None` if the comment isn't one.
+    pub fn parse(comment: &str) -> Option<Result<StockRequest, String>> {
+        let rest = comment.trim();
+        if rest.len() < Self::KEYWORD.len() || !rest[..Self::KEYWORD.len()].eq_ignore_ascii_case(Self::KEYWORD) {
+            return None;
+        }
+        let mut r = StockRequest { size: [0.0; 3], top_centre: [0.0; 3], tolerance: None, depth: None };
+        let mut sized = false;
+        let nums = |v: &str| -> Result<Vec<f64>, String> {
+            v.split(',').map(|n| n.trim().parse::<f64>().map_err(|_| format!("FIND_STOCK: bad number '{n}'"))).collect()
+        };
+        let three = |v: &str| -> Result<[f64; 3], String> {
+            let n = nums(v)?;
+            n.try_into().map_err(|_| "FIND_STOCK: SIZE and AT take three numbers, X,Y,Z".to_string())
+        };
+        for word in rest[Self::KEYWORD.len()..].split_whitespace() {
+            let Some((k, v)) = word.split_once('=') else {
+                return Some(Err(format!("FIND_STOCK: expected KEY=VALUE, got '{word}'")));
+            };
+            let res = match k.to_ascii_uppercase().as_str() {
+                "SIZE" => three(v).map(|s| {
+                    r.size = s;
+                    sized = true;
+                }),
+                "AT" => three(v).map(|a| r.top_centre = a),
+                "TOL" => nums(v).map(|n| r.tolerance = n.first().copied()),
+                "DEPTH" => nums(v).map(|n| r.depth = n.first().copied()),
+                _ => Err(format!("FIND_STOCK: unknown setting {k}")),
+            };
+            if let Err(e) = res {
+                return Some(Err(e));
+            }
+        }
+        if !sized || r.size.iter().any(|v| !(*v > 0.0)) {
+            return Some(Err("FIND_STOCK needs SIZE=x,y,z with sizes above zero".into()));
+        }
+        Some(Ok(r))
+    }
 }
 
 /// Ops produced by one source line.
@@ -588,6 +658,8 @@ impl Interpreter {
         for c in &b.comments {
             if let Some(msg) = c.strip_prefix("MSG,").or_else(|| c.strip_prefix("msg,")) {
                 ops.push(Op::Message(msg.trim().to_string()));
+            } else if let Some(req) = StockRequest::parse(c) {
+                ops.push(Op::FindStock(req?));
             }
         }
 
@@ -1843,5 +1915,20 @@ mod tests {
         let (i, ops) = run("%\nG0 X1\n%\nG0 X99\n");
         assert!(close(i.position[0], 1.0));
         assert!(!ops.iter().any(|op| matches!(op, Op::Rapid { to } if to[0] == 99.0)));
+    }
+
+    #[test]
+    fn find_stock_comment() {
+        let (_, ops) = run("(RCNC FIND_STOCK SIZE=39,20,77 AT=0,0,-1.5 TOL=0.8)\nM30");
+        assert_eq!(
+            ops[0],
+            Op::FindStock(StockRequest { size: [39.0, 20.0, 77.0], top_centre: [0.0, 0.0, -1.5], tolerance: Some(0.8), depth: None })
+        );
+        assert!(StockRequest::parse("rcnc find_stock size=1,2,3 depth=2").unwrap().is_ok());
+        assert!(StockRequest::parse("RCNC FIND_STOCK AT=0,0,0").unwrap().is_err());
+        assert!(StockRequest::parse("RCNC FIND_STOCK SIZE=1,2").unwrap().is_err());
+        assert!(StockRequest::parse("just a comment").is_none());
+        let mut i = Interpreter::new("(RCNC FIND_STOCK SIZE=a,b,c)");
+        assert!(i.next_step().is_err());
     }
 }

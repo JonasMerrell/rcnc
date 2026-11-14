@@ -17,7 +17,9 @@ use crate::sim::Clock;
 use crate::probing::{self, ProbeJob, Routine, Step};
 use crate::store::{self, SavedState};
 
+mod findstock;
 mod toolchange;
+pub use findstock::{FindStockStage, FindStockView, StockFound, STOCK_REFERENCE};
 pub use toolchange::{ToolChangeStage, ToolChangeView};
 
 /// Segments kept queued on the board while streaming (240 ms at 4 ms).
@@ -89,6 +91,10 @@ pub enum Command {
     /// The new tool is loaded: carry on with the tool change, measuring it
     /// or not (`None`: as set up).
     ToolChangeContinue { measure: Option<bool> },
+    /// Start the Find stock wizard by hand (a program asks for it with a FIND_STOCK comment).
+    FindStock(gcode::StockRequest),
+    /// The probe is over the stock: carry on with Find stock.
+    FindStockContinue,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +150,12 @@ pub struct Snapshot {
     pub g92: Axes,
     /// The guided tool change in progress.
     pub tool_change: Option<ToolChangeView>,
+    /// The Find stock wizard in progress.
+    pub find_stock: Option<FindStockView>,
+    /// The tool in the spindle as far as the controller knows (0: unknown).
+    pub loaded_tool: u32,
+    /// The loaded tool has been measured on the tool setter since it went in.
+    pub tool_measured: bool,
     /// User M-code macros, for the preview.
     pub macros: Arc<HashMap<u32, String>>,
     /// Persistent parameters (work offsets, G28/G30 homes, G92), for the preview.
@@ -235,6 +247,11 @@ pub struct Controller {
     /// The routine waits until this time.
     routine_until: Option<f64>,
     tool_change: Option<toolchange::ToolChange>,
+    find_stock: Option<FindStockView>,
+    /// The tool in the spindle has been measured on the setter since it was loaded.
+    pub(crate) tool_measured: bool,
+    /// Mode to go back to when a jog ends (a jog during Find stock).
+    jog_return: Option<Mode>,
     /// The tool in the spindle, as far as the controller knows (0: unknown).
     loaded_tool: u32,
     /// Status polls that failed in a row.
@@ -288,6 +305,9 @@ impl Controller {
             routine_waiting: false,
             routine_until: None,
             tool_change: None,
+            find_stock: None,
+            tool_measured: false,
+            jog_return: None,
             loaded_tool: 0,
             poll_failures: 0,
             stopping: None,
@@ -319,7 +339,13 @@ impl Controller {
                 self.interp.state.coord_system =
                     (self.interp.params.get(num::COORD_SYSTEM) as usize).clamp(1, 6) - 1;
             }
-            Ok(None) => {}
+            Ok(None) => {
+                // A new tool table starts with the touch probe in it.
+                let t = self.config.probing.probe_tool;
+                if t != 0 {
+                    self.interp.tools.insert(t, probing::probe_tool_entry(&self.config.probing));
+                }
+            }
             Err(e) => {
                 // Keep the unreadable file: the next save would overwrite the
                 // tool table and offsets in it.
@@ -444,6 +470,8 @@ impl Controller {
         self.routine_until = None;
         self.routine_resume = None;
         self.tool_change = None;
+        self.find_stock = None;
+        self.jog_return = None;
     }
 
     /// Abort all motion, switch the spindle and coolant off and rewind the
@@ -596,6 +624,14 @@ impl Controller {
             Command::SetConfig(config) => self.set_config(*config),
             Command::Probe(job) => self.start_probe(job),
             Command::ToolChangeContinue { measure } => self.tool_change_continue(measure),
+            Command::FindStock(request) => {
+                if self.is_ready() {
+                    self.start_find_stock(request);
+                } else {
+                    self.info("Find stock needs the machine idle");
+                }
+            }
+            Command::FindStockContinue => self.find_stock_continue(),
         }
     }
 
@@ -881,6 +917,7 @@ impl Controller {
             }
         }
         self.end_tool_change(&result);
+        self.end_find_stock(&result);
     }
 
     /// Set the active work offset so machine position `machine` on `axis` reads `work`.
@@ -1006,7 +1043,9 @@ impl Controller {
     }
 
     fn jog(&mut self, axis: usize, positive: bool, step: Option<f64>) {
-        if !self.is_ready() || !self.config.axes.get(axis).is_some_and(|a| a.enabled) {
+        // Find stock waits for the operator to jog over the stock.
+        let locating = self.locating() && self.status.idle;
+        if !(self.is_ready() || locating) || !self.config.axes.get(axis).is_some_and(|a| a.enabled) {
             return;
         }
         let a = &self.config.axes[axis];
@@ -1035,10 +1074,12 @@ impl Controller {
             steps,
             velocity: a.max_velocity * self.config.jog_speed * spu,
             acceleration: a.acceleration * spu,
-            stop_on: None,
+            // The probe stops a jog that runs it into the stock.
+            stop_on: if locating { self.config.probe.map(|p| (p, true)) } else { None },
         };
         match self.backend.axis_move(&m) {
             Ok(()) => {
+                self.jog_return = locating.then_some(self.mode);
                 self.mode = Mode::Jog;
                 self.jog_continuous = step.is_none();
                 self.jog_alive = self.clock.now();
@@ -1197,6 +1238,7 @@ impl Controller {
 
     fn cycle_start(&mut self) {
         match self.mode {
+            Mode::Probing if self.find_stock.is_some() => self.find_stock_continue(),
             Mode::Probing => self.tool_change_continue(None),
             Mode::Running => {
                 self.generator.hold = false;
@@ -1345,6 +1387,7 @@ impl Controller {
             return;
         }
         self.watch_probe();
+        self.find_stock_watch();
         if self.status.idle {
             self.probe_report();
         }
@@ -1360,7 +1403,7 @@ impl Controller {
         }
         match self.mode {
             Mode::Jog if self.status.idle => {
-                self.mode = Mode::Idle;
+                self.mode = self.jog_return.take().unwrap_or(Mode::Idle);
                 self.jog_continuous = false;
                 self.sync_position();
             }
@@ -1573,6 +1616,13 @@ impl Controller {
                         line + 1
                     ));
                 }
+                if state != Spindle::Off && self.probe_loaded() {
+                    return self.raise(format!(
+                        "line {}: the touch probe (T{}) is in the spindle; load a cutter before starting it",
+                        line + 1,
+                        self.config.probing.probe_tool
+                    ));
+                }
                 let was_on = self.outputs.spindle_on;
                 let reversing = was_on && state != Spindle::Off && self.outputs.spindle_ccw != (state == Spindle::Ccw);
                 let rpm = rpm * self.spindle_override;
@@ -1619,6 +1669,10 @@ impl Controller {
             Op::Message(text) => {
                 self.info(text);
                 Wait::None
+            }
+            Op::FindStock(request) => {
+                self.start_find_stock(request);
+                return;
             }
             Op::Probe { to, feed } => match self.probe_move(&to, feed) {
                 Ok(()) => Wait::Probe,
@@ -1787,6 +1841,9 @@ impl Controller {
             work_offsets: std::array::from_fn(|i| self.interp.params.coord_offset(i)),
             g92: self.interp.params.get_axes(num::G92),
             tool_change: self.tool_change.as_ref().map(|t| t.view.clone()),
+            find_stock: self.find_stock.clone(),
+            loaded_tool: self.loaded_tool,
+            tool_measured: self.tool_measured,
             macros: self.macros.clone(),
             params: self.interp.params.persistent(),
             spindle_reversible: self.config.spindle_reversible,
@@ -3285,5 +3342,186 @@ mod tests {
         assert_eq!(s.mode, Mode::Idle);
         assert!(!s.log.iter().any(|l| l.contains("rcnc stopped it")), "{:?}", s.log);
         assert!(s.log.iter().any(|l| l.starts_with("Probe: touched Z between")), "{:?}", s.log);
+    }
+
+    fn run_until(c: &mut Controller, clock: &ManualClock, max_seconds: f64, what: &str, done: impl Fn(&Snapshot) -> bool) {
+        let mut t = 0.0;
+        while !done(&c.snapshot()) {
+            clock.advance(0.005);
+            c.update();
+            t += 0.005;
+            assert!(t < max_seconds, "never got to {what}: {:?} {:?}", c.mode(), c.snapshot().log);
+        }
+    }
+
+    /// The probing sim (60 mm block X/Y 100..160, top Z100, setter plane at
+    /// Z30) running `program` up to the Find stock wizard, with the probe
+    /// (a point in the sim, so a 0 mm ball) loaded and measured.
+    fn find_stock_setup(program: &str) -> (Controller, Arc<ManualClock>) {
+        let (mut c, clock) = probing_setup();
+        let mut config = MachineConfig::dmc2();
+        config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, offset: 13.31, reference: String::new(), ..Default::default() };
+        config.probing.stylus_diameter = 0.0;
+        config.tool_change = crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, ..Default::default() };
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.homed = [true; 6];
+        c.handle(Command::Mdi("G53 G0 Z110\nG53 G0 X130 Y130".into()));
+        run_until_idle(&mut c, &clock, 10.0);
+        c.handle(Command::Load { name: "t".into(), text: program.into() });
+        c.handle(Command::CycleStart);
+        run_until(&mut c, &clock, 60.0, "loading the probe", |s| s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading));
+        c.handle(Command::CycleStart);
+        run_until(&mut c, &clock, 120.0, "the Find stock wizard", |s| s.find_stock.is_some());
+        (c, clock)
+    }
+
+    /// Tap the stylus on the block's top by jogging down onto it, back off,
+    /// and jog to `x`, `y`, off the middle.
+    fn locate(c: &mut Controller, clock: &ManualClock, dx: f64, dy: f64) {
+        let jog = |c: &mut Controller, axis: usize, by: f64| {
+            c.handle(Command::Jog { axis, positive: by > 0.0, step: Some(by.abs()) });
+            run_until(c, clock, 30.0, "the end of a jog", |s| s.mode == Mode::Probing);
+        };
+        jog(c, 2, -40.0);
+        let s = c.snapshot();
+        assert!(close(s.machine[2], 100.0), "the jog stops on the probe: {:?}", s.machine);
+        assert!(s.find_stock.as_ref().unwrap().tapped);
+        jog(c, 2, 4.0);
+        jog(c, 0, dx);
+        jog(c, 1, dy);
+    }
+
+    #[test]
+    fn find_stock_sets_the_work_offset_and_zeroes_later_tools_on_the_top() {
+        let (mut c, clock) = find_stock_setup(
+            "T99 M6\n(RCNC FIND_STOCK SIZE=60,60,70 AT=0,0,0 TOL=0.5)\nG0 Z20\nT3 M6\nG0 X-10 Y5 Z2\nM30",
+        );
+        let s = c.snapshot();
+        assert!(s.tool_measured);
+        assert_eq!(s.find_stock.as_ref().unwrap().stage, FindStockStage::Locate);
+        // Continue before tapping the stylus does nothing.
+        c.handle(Command::FindStockContinue);
+        assert!(c.snapshot().log.back().unwrap().contains("Tap the probe"));
+        locate(&mut c, &clock, 4.0, -3.0);
+        c.handle(Command::FindStockContinue);
+        run_until(&mut c, &clock, 300.0, "the end of Find stock", |s| s.find_stock.is_none());
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.starts_with("Stock found: X 60.000 × Y 60.000")), "{:?}", s.log);
+        assert!(close(s.machine[0], 130.0) && close(s.machine[1], 130.0), "ends over the centre: {:?}", s.machine);
+        assert!(close(s.work[0], 0.0) && close(s.work[1], 0.0), "{:?}", s.work);
+        assert!(close(s.work[2] - s.machine[2], -100.0), "Z zero on the top: {:?} {:?}", s.work, s.machine);
+        assert_eq!(s.config.probing.setter.reference, STOCK_REFERENCE);
+        // The next tool is zeroed on the stock top too (the sim's tools are all the same length).
+        run_until(&mut c, &clock, 120.0, "loading T3", |s| s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading));
+        c.handle(Command::CycleStart);
+        run_until_idle(&mut c, &clock, 120.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?}", s.log);
+        assert!(close(s.machine[0], 120.0) && close(s.machine[1], 135.0) && close(s.machine[2], 102.0), "{:?}", s.machine);
+    }
+
+    #[test]
+    fn find_stock_stops_when_the_size_is_off() {
+        let (mut c, clock) = find_stock_setup("T99 M6\n(RCNC FIND_STOCK SIZE=58,60,70 AT=29,30,0)\nM30");
+        let before = c.snapshot().work_offsets[0];
+        locate(&mut c, &clock, -2.0, 2.0);
+        c.handle(Command::FindStockContinue);
+        run_until(&mut c, &clock, 300.0, "the size check", |s| {
+            s.find_stock.as_ref().is_some_and(|f| f.stage == FindStockStage::Mismatch)
+        });
+        let s = c.snapshot();
+        assert!(s.find_stock.as_ref().unwrap().problem.as_ref().unwrap().contains("X 60.000 × Y 60.000 (job: 58.000 × 60.000)"));
+        assert_eq!(s.work_offsets[0], before, "nothing set");
+        // It moves back over the middle, then waits.
+        tick(&mut c, &clock, 400);
+        c.handle(Command::Stop);
+        let s = c.snapshot();
+        assert!(s.find_stock.is_none());
+        assert_eq!(s.mode, Mode::Idle);
+    }
+
+    #[test]
+    fn find_stock_with_corner_origin_and_no_probe_loaded() {
+        // Front-left corner of the top as zero.
+        let (mut c, clock) = find_stock_setup("T99 M6\n(RCNC FIND_STOCK SIZE=60,60,70 AT=30,30,0)\nM30");
+        locate(&mut c, &clock, 0.0, 0.0);
+        c.handle(Command::FindStockContinue);
+        run_until_idle(&mut c, &clock, 300.0);
+        let s = c.snapshot();
+        assert!(close(s.work[0], 30.0) && close(s.work[1], 30.0) && close(s.work[2] - s.machine[2], -100.0), "{:?}", s.work);
+
+        let (mut c, clock) = probing_setup();
+        c.handle(Command::Load { name: "t".into(), text: "(RCNC FIND_STOCK SIZE=60,60,70)\nM30".into() });
+        c.handle(Command::CycleStart);
+        run_until_idle(&mut c, &clock, 10.0);
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Alarm);
+        assert!(s.alarm.as_ref().unwrap().contains("load the touch probe first (T99 M6)"), "{:?}", s.alarm);
+    }
+
+    #[test]
+    fn the_spindle_does_not_start_with_the_probe_loaded() {
+        let (mut c, clock) = find_stock_setup("S1000 M3\nT99 M6\n(RCNC FIND_STOCK SIZE=60,60,70)\nM30");
+        let s = c.snapshot();
+        assert_eq!(s.spindle, Spindle::Off, "the change back doesn't restart it");
+        assert!(s.log.iter().any(|l| l.contains("spindle stays off")), "{:?}", s.log);
+        c.handle(Command::Stop);
+        run_until_idle(&mut c, &clock, 10.0);
+        c.handle(Command::Mdi("M3 S1000".into()));
+        run_until_idle(&mut c, &clock, 10.0);
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Alarm);
+        assert_eq!(s.spindle, Spindle::Off);
+        assert!(s.alarm.as_ref().unwrap().contains("touch probe (T99) is in the spindle"), "{:?}", s.alarm);
+    }
+
+    /// The whole wizard as on the simulator's screen: home, load the probe,
+    /// measure it, jog over a 77 × 39 block and find it.
+    #[test]
+    fn find_stock_on_the_homed_simulator() {
+        let clock = Arc::new(ManualClock::default());
+        let config = crate::sim::dmc2_sim_config();
+        let mut sim = Simulator::new(clock.clone());
+        sim.add_stock(&config, 77.0, 39.0, 20.0);
+        let world = sim.world.clone();
+        let mut c = Controller::new(config.clone(), Box::new(sim), clock.clone());
+        c.handle(Command::Connect);
+        c.handle(Command::Reset);
+        c.handle(Command::Home(None));
+        run_until_idle(&mut c, &clock, 600.0);
+        assert_eq!(c.snapshot().homed[..3], [true; 3], "{:?}", c.snapshot().log);
+        c.handle(Command::Load { name: "t".into(), text: "T99 M6\n(RCNC FIND_STOCK SIZE=77,39,20)\nG0 Z10\nM30".into() });
+        c.handle(Command::CycleStart);
+        run_until(&mut c, &clock, 120.0, "loading the probe", |s| s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading));
+        c.handle(Command::CycleStart);
+        run_until(&mut c, &clock, 300.0, "the Find stock wizard", |s| s.find_stock.is_some() || s.mode == Mode::Alarm);
+        assert!(c.snapshot().find_stock.is_some(), "{:?}", c.snapshot().log);
+        let spu = |a: usize| config.axes[a].steps_per_unit;
+        let middle = |a: usize| crate::sim::homed_position(&config, &world, a, world.travel[a] as f64 / 2.0 / spu(a));
+        let top = crate::sim::homed_position(&config, &world, 2, world.block.unwrap().2 as f64 / spu(2));
+        let pos = c.snapshot().machine;
+        let mdi_free = |c: &mut Controller, axis: usize, to: f64| {
+            let by = to - c.snapshot().machine[axis];
+            c.handle(Command::Jog { axis, positive: by > 0.0, step: Some(by.abs()) });
+            run_until(c, &clock, 120.0, "the end of a jog", |s| s.mode == Mode::Probing);
+        };
+        // Over the block, 3 mm and 2 mm off its middle; tap the top; then 5 mm above it.
+        mdi_free(&mut c, 2, pos[2].max(top + 30.0));
+        mdi_free(&mut c, 0, middle(0) + 3.0);
+        mdi_free(&mut c, 1, middle(1) - 2.0);
+        mdi_free(&mut c, 2, top - 5.0);
+        assert!(c.snapshot().find_stock.as_ref().unwrap().tapped);
+        mdi_free(&mut c, 2, top + 5.0);
+        c.handle(Command::FindStockContinue);
+        run_until_idle(&mut c, &clock, 600.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?}", s.log);
+        let found = s.log.iter().find(|l| l.starts_with("Stock found")).unwrap();
+        assert!(found.contains("X 77.0") && found.contains("Y 39.0"), "{found}");
+        // Ends at work X0 Y0 Z10: over the middle (to within the home switch's
+        // release, which this test's idea of the middle doesn't know), 10 above the top.
+        assert!(close(s.work[0], 0.0) && close(s.work[1], 0.0) && close(s.work[2], 10.0), "{:?}", s.work);
+        assert!((s.machine[0] - middle(0)).abs() < 2.0 && (s.machine[1] - middle(1)).abs() < 2.0, "{:?}", s.machine);
+        assert!((s.machine[2] - (top + 10.0)).abs() < 2.0, "{:?} top {top}", s.machine);
     }
 }

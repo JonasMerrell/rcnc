@@ -350,6 +350,44 @@ impl App {
                 .color(MUTED),
             );
             ui.add_space(8.0);
+            section_title(ui, "Find stock");
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Size X/Y/Z").color(MUTED));
+                for v in self.fs_size.iter_mut() {
+                    num(ui, v, 0.1, " mm");
+                }
+            });
+            let probe_in = s.loaded_tool == p.probe_tool && s.tool_measured;
+            if ui
+                .add_enabled(can && probe_in, Button::new("Find stock (zero on the top centre)").min_size(Vec2::new(260.0, 32.0)))
+                .clicked()
+            {
+                self.machine.send(Command::FindStock(gcode::StockRequest {
+                    size: self.fs_size,
+                    top_centre: [0.0; 3],
+                    tolerance: None,
+                    depth: None,
+                }));
+            }
+            if !probe_in {
+                ui.label(RichText::new(format!("Load and measure the probe (T{} M6) first", p.probe_tool)).size(12.0).color(MUTED));
+            }
+            egui::Grid::new("find-stock-settings").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                let f = &mut p.find_stock;
+                changed |= labelled(ui, "Rough position ±", &mut f.clearance, 0.5, " mm");
+                changed |= labelled(ui, "Search down", &mut f.z_search, 0.5, " mm");
+                changed |= labelled(ui, "Above the top", &mut f.z_clearance, 0.5, " mm");
+                changed |= labelled(ui, "Sides below the top", &mut f.depth, 0.1, " mm");
+                changed |= labelled(ui, "Size tolerance", &mut f.tolerance, 0.05, " mm");
+                ui.label("Probe tool");
+                let mut t = p.probe_tool as f64;
+                if num(ui, &mut t, 1.0, "") {
+                    p.probe_tool = t.max(0.0).round() as u32;
+                    changed = true;
+                }
+                ui.end_row();
+            });
+            ui.add_space(8.0);
             changed |= ui.checkbox(&mut p.auto_zero, "Set work zero at the result").changed();
             egui::Grid::new("probe-settings").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
                 changed |= labelled(ui, "Search feed", &mut p.fast_feed, 1.0, " mm/min");

@@ -15,16 +15,27 @@ use machine::sim::{RealClock, Simulator};
 use machine::store;
 use machine::{Controller, ControllerHandle, MachineConfig};
 
-const USAGE: &str = "usage: cnc-controller [--sim] [program.nc]
+const USAGE: &str = "usage: cnc-controller [--sim [--sim-stock=X,Y,H]] [program.nc]
 
-  --sim    run against the built-in simulator instead of the DMC2's USB board";
+  --sim                run against the built-in simulator instead of the DMC2's USB board
+  --sim-stock=X,Y,H    put an X by Y mm block, H mm tall, in the middle of the simulator's table
+                       for the probe to find";
 
 fn main() -> eframe::Result<()> {
     let mut simulate = false;
     let mut program = None;
+    let mut stock = None;
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--sim" => simulate = true,
+            _ if arg.starts_with("--sim-stock=") => {
+                let v: Vec<f64> = arg["--sim-stock=".len()..].split(',').filter_map(|v| v.trim().parse().ok()).collect();
+                let [x, y, h] = v[..] else {
+                    eprintln!("--sim-stock needs X,Y,H in mm\n{USAGE}");
+                    std::process::exit(2);
+                };
+                stock = Some([x, y, h]);
+            }
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Ok(());
@@ -39,7 +50,11 @@ fn main() -> eframe::Result<()> {
 
     let clock = Arc::new(RealClock::new());
     let backend: Box<dyn Backend> = if simulate {
-        Box::new(Simulator::new(clock.clone()))
+        let mut sim = Simulator::new(clock.clone());
+        if let Some([x, y, h]) = stock {
+            sim.add_stock(&MachineConfig::dmc2(), x, y, h);
+        }
+        Box::new(sim)
     } else {
         Box::new(BlueSkyBoard::new(BoardSetup::dmc2()))
     };
@@ -50,7 +65,7 @@ fn main() -> eframe::Result<()> {
     let mut settings_error = None;
     let config = match store::load::<MachineConfig>(&data.join("machine.json")) {
         Ok(Some(c)) => c,
-        Ok(None) if simulate => sim_config(),
+        Ok(None) if simulate => machine::sim::dmc2_sim_config(),
         Ok(None) => MachineConfig::dmc2(),
         Err(e) => {
             // Kept aside, so saving the defaults doesn't overwrite it.
@@ -122,15 +137,3 @@ fn stop_machine_on_panic(handle: ControllerHandle) {
     }));
 }
 
-/// The DMC2 with the tool setter and change position where the simulator's
-/// table is (machine Z30, starting at Z150).
-fn sim_config() -> MachineConfig {
-    let mut c = MachineConfig::dmc2();
-    c.probing.setter.x = 50.0;
-    c.probing.setter.y = 50.0;
-    c.probing.setter.travel_z = 120.0;
-    c.tool_change.x = 10.0;
-    c.tool_change.y = Some(20.0);
-    c.tool_change.z = 120.0;
-    c
-}

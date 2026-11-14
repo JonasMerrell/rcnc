@@ -98,7 +98,46 @@ pub struct Simulator {
     pub ignore_stop_pin: bool,
 }
 
+/// The DMC2 with the tool setter and change position where the simulator's
+/// table is once it is homed: the setter is the table (the probe plane).
+pub fn dmc2_sim_config() -> MachineConfig {
+    let mut c = MachineConfig::dmc2();
+    let world = Simulator::new(Arc::new(ManualClock::default())).world;
+    let at = |c: &MachineConfig, axis: usize, mm: f64| homed_position(c, &world, axis, mm);
+    let table = world.probe_z as f64 / c.axes[2].steps_per_unit;
+    c.probing.setter.x = at(&c, 0, 50.0);
+    c.probing.setter.y = at(&c, 1, 50.0);
+    c.probing.setter.travel_z = at(&c, 2, table + 90.0);
+    c.tool_change.x = at(&c, 0, 10.0);
+    c.tool_change.z = at(&c, 2, table + 110.0);
+    // The simulator's probe is a point.
+    c.probing.stylus_diameter = 0.0;
+    c
+}
+
+/// Machine coordinate of physical position `mm` (from the low end of travel)
+/// once the axis is homed (to within the home switch's release distance).
+pub fn homed_position(c: &MachineConfig, world: &SimWorld, axis: usize, mm: f64) -> f64 {
+    let a = &c.axes[axis];
+    let length = world.travel[axis] as f64 / a.steps_per_unit;
+    if a.home_positive {
+        a.home_position - length + mm
+    } else {
+        a.home_position + mm
+    }
+}
+
 impl Simulator {
+    /// Put an `x` by `y` mm block, `h` mm tall, on the table in the middle of the X/Y travel.
+    pub fn add_stock(&mut self, c: &MachineConfig, x: f64, y: f64, h: f64) {
+        let w = &self.world;
+        let span = |axis: usize, size: f64| {
+            let half = (size / 2.0 * c.axes[axis].steps_per_unit) as i64;
+            [w.travel[axis] / 2 - half, w.travel[axis] / 2 + half]
+        };
+        self.world.block = Some((span(0, x), span(1, y), w.probe_z + (h * c.axes[2].steps_per_unit) as i64));
+    }
+
     pub fn new(clock: Arc<dyn Clock>) -> Self {
         let world = SimWorld {
             travel: [72_000, 52_000, 33_000, 0, 0, 0],

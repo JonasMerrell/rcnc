@@ -38,6 +38,44 @@ pub struct ProbeSettings {
     /// Feed for positioning moves.
     pub travel_feed: f64,
     pub setter: ToolSetter,
+    /// Tool number of the touch probe. The spindle won't start with it loaded.
+    pub probe_tool: u32,
+    pub find_stock: FindStockSettings,
+}
+
+/// The tool-table entry a new table gets for the touch probe.
+pub fn probe_tool_entry(s: &ProbeSettings) -> gcode::Tool {
+    gcode::Tool {
+        diameter: s.stylus_diameter,
+        description: "Touch probe".into(),
+        kind: gcode::ToolKind::Probe,
+        ..Default::default()
+    }
+}
+
+/// How the Find stock wizard probes a block from roughly above its middle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FindStockSettings {
+    /// How far off the rough position (and the stock's size) may be: each side
+    /// is approached from this far outside where it should be, and searched
+    /// for up to twice this far.
+    pub clearance: f64,
+    /// Longest search down for the top.
+    pub z_search: f64,
+    /// Height above the top to move sideways at.
+    pub z_clearance: f64,
+    /// Below the top to touch the sides, unless the job says otherwise.
+    pub depth: f64,
+    /// Largest difference between the probed and expected X/Y size, unless
+    /// the job says otherwise.
+    pub tolerance: f64,
+}
+
+impl Default for FindStockSettings {
+    fn default() -> Self {
+        FindStockSettings { clearance: 8.0, z_search: 25.0, z_clearance: 5.0, depth: 3.0, tolerance: 1.0 }
+    }
 }
 
 /// A fixed tool setter. Touching a tool off on it sets the work Z zero so
@@ -99,6 +137,8 @@ impl Default for ProbeSettings {
             auto_zero: true,
             travel_feed: 3000.0,
             setter: ToolSetter::default(),
+            probe_tool: 99,
+            find_stock: FindStockSettings::default(),
         }
     }
 }
@@ -192,7 +232,7 @@ pub(crate) struct Routine {
 
 /// Two-pass probe as in the verser macros' ProbeAxis: search, back off,
 /// latch slowly, back off. Records one touch.
-fn touch(s: &ProbeSettings, axis: usize, positive: bool, distance: f64) -> Vec<Step> {
+pub(crate) fn touch(s: &ProbeSettings, axis: usize, positive: bool, distance: f64) -> Vec<Step> {
     let dir = if positive { 1.0 } else { -1.0 };
     vec![
         Step::Probe { axis, by: dir * distance, feed: s.fast_feed, record: false },
@@ -234,6 +274,7 @@ pub(crate) fn setter_reading(s: &ProbeSettings, hits: &[f64]) -> Result<f64, Str
 pub(crate) fn touch_off(c: &mut Controller, s: &ProbeSettings, hit: f64) -> Vec<Step> {
     let t = &s.setter;
     c.set_work_axis(2, hit, t.top());
+    c.tool_measured = true;
     let on = t.active().map(|r| format!(" on the {}", r.name.to_lowercase())).unwrap_or_default();
     c.report(format!("Tool touched off: Z zero set{on}, setter top at Z{}", fmt(t.top())));
     // Retract, but no higher than the travel height.
@@ -245,7 +286,7 @@ fn guarded_by(s: &ProbeSettings, axis: usize, by: f64) -> Step {
     Step::MoveBy { axis, by, feed: s.travel_feed, guarded: true }
 }
 
-fn guarded_to(s: &ProbeSettings, axis: usize, to: f64) -> Step {
+pub(crate) fn guarded_to(s: &ProbeSettings, axis: usize, to: f64) -> Step {
     Step::MoveTo { axis, to, feed: s.travel_feed, guarded: true }
 }
 
@@ -253,7 +294,7 @@ fn then(f: impl FnOnce(&mut Controller, &[f64]) -> Result<Vec<Step>, String> + S
     Step::Then(Box::new(f))
 }
 
-fn fmt(v: f64) -> String {
+pub(crate) fn fmt(v: f64) -> String {
     format!("{v:.3}")
 }
 

@@ -12,6 +12,7 @@ use std::sync::Arc;
 use crate::preview::{self, Camera, Toolpath};
 use crate::sheet::{self, Sheets, SheetView};
 
+mod findstock;
 mod pages;
 mod toolchange;
 use pages::{SettingsDraft, Tab};
@@ -74,6 +75,10 @@ pub struct App {
     file_checked: f64,
     /// The tool change window's "measure" checkbox.
     tc_measure: Option<bool>,
+    /// Jog step in the Find stock window, mm.
+    fs_step: f64,
+    /// Stock size for Find stock started from the Probe page.
+    fs_size: [f64; 3],
     /// The tool change window's photo: tool, its image setting, the file found.
     tc_photo: Option<(u32, String, Option<std::path::PathBuf>)>,
     view: View,
@@ -125,6 +130,8 @@ impl App {
             program_file: None,
             file_checked: 0.0,
             tc_measure: None,
+            fs_step: 1.0,
+            fs_size: [39.0, 20.0, 77.0],
             tc_photo: None,
             view: View::Toolpath,
             sheets,
@@ -408,6 +415,7 @@ impl eframe::App for App {
                 View::Sheet => self.sheet_page(ui),
             });
         self.tool_change_window(ctx);
+        self.find_stock_window(ctx);
 
         // The sheet is a native window over the centre area, drawn above
         // anything egui puts there: keep it out of the way of the tool change

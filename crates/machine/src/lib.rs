@@ -12,5 +12,8 @@ pub mod store;
 
 pub use backend::{Backend, BoardInfo, Outputs, Status};
 pub use config::{AxisConfig, Input, MachineConfig, ToolChangeSettings};
-pub use controller::{Command, Controller, ControllerHandle, Mode, Snapshot, ToolChangeStage, ToolChangeView};
-pub use probing::{ProbeJob, ProbeSettings, ToolSetter, ZReference};
+pub use controller::{
+    Command, Controller, ControllerHandle, FindStockStage, FindStockView, Mode, Snapshot, StockFound, ToolChangeStage,
+    ToolChangeView, STOCK_REFERENCE,
+};
+pub use probing::{FindStockSettings, ProbeJob, ProbeSettings, ToolSetter, ZReference};
