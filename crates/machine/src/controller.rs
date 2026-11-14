@@ -2872,6 +2872,55 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_change_never_returns_lower_than_it_began() {
+        let (mut c, clock) = probing_setup();
+        let mut config = MachineConfig::dmc2();
+        config.probing.setter = crate::probing::ToolSetter {
+            x: 50.0,
+            y: 50.0,
+            travel_z: 120.0,
+            offset: 13.31,
+            reference: String::new(),
+            ..Default::default()
+        };
+        config.tool_change = crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, ..Default::default() };
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.homed = [true; 6];
+        // A stale Z zero, 40 mm above where touching off will put it.
+        c.handle(Command::Mdi("G10 L2 P1 Z56.69".into()));
+        run_until_idle(&mut c, &clock, 5.0);
+        c.handle(Command::Mdi("G53 G0 X130 Y130 Z110".into()));
+        run_until_idle(&mut c, &clock, 5.0);
+        let start = c.snapshot().machine;
+        assert!(close(start[0], 130.0) && close(start[2], 110.0), "{start:?}");
+        c.handle(Command::Load { name: "t".into(), text: "T3 M6\nM30".into() });
+        c.handle(Command::CycleStart);
+        run_tool_change_to(&mut c, &clock, Some(ToolChangeStage::Loading));
+        c.handle(Command::ToolChangeContinue { measure: Some(true) });
+        // Lowest Z once back over where the change began.
+        let mut lowest_back = f64::MAX;
+        let mut measured = false;
+        for _ in 0..80_000 {
+            clock.advance(0.005);
+            c.update();
+            let s = c.snapshot();
+            measured |= s.log.iter().any(|l| l.contains("Tool touched off"));
+            if measured && close(s.machine[0], 130.0) && close(s.machine[1], 130.0) {
+                lowest_back = lowest_back.min(s.machine[2]);
+            }
+            if s.tool_change.is_none() {
+                break;
+            }
+        }
+        let s = c.snapshot();
+        assert!(measured, "{:?}", s.log);
+        // Back at the same work Z would be machine Z70: it stays at the safe height instead.
+        assert!(close(s.machine[2], 120.0), "{:?}", s.machine);
+        assert!(close(lowest_back, 120.0), "{lowest_back}");
+        assert!(s.log.iter().any(|l| l.contains("Staying at the safe height")), "{:?}", s.log);
+    }
+
+    #[test]
     fn a_mismatch_can_be_cancelled() {
         let (mut c, clock) = guided_setup_with(|sim| sim.world.touch_shifts = [0, 20].into(), |_| {});
         c.handle(Command::ToolChangeContinue { measure: Some(true) });

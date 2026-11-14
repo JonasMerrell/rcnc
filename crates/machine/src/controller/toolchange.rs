@@ -170,8 +170,15 @@ impl Controller {
         let pos = self.machine_position();
         let mut steps = vec![to(2, tc.z.max(pos[2])), to(0, start[0]), to(1, start[1]), restore];
         if view.measure {
-            // Same work Z as before: a longer tool stops higher, so it can't hit the part.
-            steps.push(to(2, start[2] - z_offset + self.interp.program_offset()[2]));
+            // Same work Z as before: a longer tool stops higher, so it can't hit
+            // the part. Never lower than where the change began, though: with a
+            // stale Z zero the same work Z can be down in the part or the setter.
+            let z = start[2] - z_offset + self.interp.program_offset()[2];
+            if z >= start[2] - 1e-6 {
+                steps.push(to(2, z));
+            } else {
+                self.info("Staying at the safe height: going back to the same work Z would go lower than where the change began");
+            }
         } else {
             // An unmeasured tool may be longer than the last: stay at the safe
             // height and let the program's own moves bring it down.
