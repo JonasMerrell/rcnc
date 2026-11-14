@@ -209,12 +209,23 @@ impl MachineConfig {
     pub fn change_x(&self) -> Option<f64> {
         let t = &self.tool_change;
         let x = &self.axes[0];
-        if t.centre_x {
+        let want = if t.centre_x {
             let half = t.x_travel.abs() / 2.0;
-            Some(if x.home_positive { x.home_position - half } else { x.home_position + half })
+            if x.home_positive { x.home_position - half } else { x.home_position + half }
+        } else if t.move_x {
+            t.x
         } else {
-            t.move_x.then_some(t.x)
+            return None;
+        };
+        // Never past the configured soft limits, nor beyond the home switch: a
+        // wrong travel or sign must not drive X into its end.
+        let (mut lo, mut hi) = (x.soft_min.min(x.soft_max), x.soft_max.max(x.soft_min));
+        if x.home_positive {
+            hi = hi.min(x.home_position);
+        } else {
+            lo = lo.max(x.home_position);
         }
+        Some(if lo <= hi { want.clamp(lo, hi) } else { x.home_position })
     }
 
     /// Machine Y the tool change moves the bed to. On the DMC2, Y+ moves the

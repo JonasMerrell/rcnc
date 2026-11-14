@@ -2739,6 +2739,17 @@ mod tests {
                 assert!(close(p[2], 120.0) && close(p[0], 163.5), "Y moved too early: {p:?}");
             }
         }
+        // Kept inside the soft limits and on the travel side of the home switch.
+        let mut short = MachineConfig::dmc2();
+        short.axes[0].soft_max = 120.0;
+        assert_eq!(short.change_x(), Some(120.0));
+        short.tool_change.x_travel = -1000.0;
+        short.axes[0].soft_max = 200.0;
+        assert_eq!(short.change_x(), Some(200.0));
+        short.tool_change.centre_x = false;
+        short.tool_change.move_x = true;
+        short.tool_change.x = -50.0;
+        assert_eq!(short.change_x(), Some(-8.0), "not past the home switch");
         // With both off, X stays where it is.
         let mut config = c.snapshot().config.clone();
         config.tool_change.centre_x = false;
