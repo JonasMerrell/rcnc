@@ -55,9 +55,9 @@ impl App {
                     ui.add_space(6.0);
                 }
                 check(ui, f.tapped, "Tap the stylus with a finger");
-                if s.probe_active {
-                    ui.label(RichText::new("   Probe input: ON").size(15.0).color(AMBER).strong());
-                }
+                // Always shown, so the buttons below never move under a finger.
+                let (text, color) = if s.probe_active { ("ON", AMBER) } else { ("off", MUTED) };
+                ui.label(RichText::new(format!("      Probe input: {text}")).size(15.0).color(color).strong());
                 check(ui, false, "Jog it over the middle of the stock, 2–10 mm above the top");
                 ui.add_space(6.0);
                 self.find_stock_jog(ui);

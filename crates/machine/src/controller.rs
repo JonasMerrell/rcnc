@@ -1074,8 +1074,9 @@ impl Controller {
             steps,
             velocity: a.max_velocity * self.config.jog_speed * spu,
             acceleration: a.acceleration * spu,
-            // The probe stops a jog that runs it into the stock.
-            stop_on: if locating { self.config.probe.map(|p| (p, true)) } else { None },
+            // The probe stops a jog that runs it into the stock (unless it is
+            // touching already: then the jog is what takes it off again).
+            stop_on: if locating { self.config.probe.filter(|p| !p.is_active(self.status.inputs)).map(|p| (p, true)) } else { None },
         };
         match self.backend.axis_move(&m) {
             Ok(()) => {
@@ -3386,7 +3387,9 @@ mod tests {
         let s = c.snapshot();
         assert!(close(s.machine[2], 100.0), "the jog stops on the probe: {:?}", s.machine);
         assert!(s.find_stock.as_ref().unwrap().tapped);
+        // Touching, it still jogs off the stock.
         jog(c, 2, 4.0);
+        assert!(close(c.snapshot().machine[2], 104.0), "{:?}", c.snapshot().machine);
         jog(c, 0, dx);
         jog(c, 1, dy);
     }
