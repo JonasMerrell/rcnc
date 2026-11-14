@@ -46,17 +46,33 @@ fn main() -> eframe::Result<()> {
     // saved as they change; the DMC2 defaults apply until something is saved.
     // The simulator keeps its own, so trying things out never changes the real machine's.
     let data = if simulate { store::data_dir().join("sim") } else { store::data_dir() };
+    let mut settings_error = None;
     let config = match store::load::<MachineConfig>(&data.join("machine.json")) {
         Ok(Some(c)) => c,
         Ok(None) if simulate => sim_config(),
         Ok(None) => MachineConfig::dmc2(),
         Err(e) => {
-            eprintln!("ignoring unreadable settings ({e}); using DMC2 defaults");
+            // Kept aside, so saving the defaults doesn't overwrite it.
+            let kept = store::set_aside(&data.join("machine.json"));
+            settings_error = Some(format!("Alarm: the machine settings could not be loaded ({e}); using DMC2 defaults, {kept}"));
             MachineConfig::dmc2()
         }
     };
+    // Windows sleeps in 15.6 ms ticks unless asked: the controller's 5 ms
+    // loop would really run at 15.6 ms and eat into the board's motion buffer.
+    #[cfg(windows)]
+    unsafe {
+        #[link(name = "winmm")]
+        extern "system" {
+            fn timeBeginPeriod(period: u32) -> u32;
+        }
+        timeBeginPeriod(1);
+    }
     let mut controller = Controller::new(config, backend, clock);
     controller.persist_to(data.clone());
+    if let Some(e) = settings_error {
+        controller.report_alarm(e);
+    }
     let handle = ControllerHandle::spawn(controller);
     let sheets = Arc::new(sheet::Sheets::new(data.join("sheets")));
     link::spawn(handle.clone(), sheets.clone());

@@ -128,6 +128,28 @@ impl Comp {
     pub fn process(&mut self, ops: Vec<Op>) -> Result<Vec<Op>, String> {
         let mut out = Vec::new();
         for op in ops {
+            if let Op::Arc { to, center, turns, .. } = &op {
+                if (to[0] - self.programmed[0]).abs() <= 1e-9 && (to[1] - self.programmed[1]).abs() <= 1e-9 {
+                    // A full circle: start and end are the same point. Cut it as
+                    // two halves so each half is offset like any other arc.
+                    if *turns > 0 {
+                        return Err("full circles with P turns are not supported with cutter compensation".into());
+                    }
+                    let mut mid = *to;
+                    mid[0] = 2.0 * center[0] - self.programmed[0];
+                    mid[1] = 2.0 * center[1] - self.programmed[1];
+                    for i in 2..6 {
+                        mid[i] = (self.actual[i] + to[i]) / 2.0;
+                    }
+                    let mut first = op.clone();
+                    if let Op::Arc { to, .. } = &mut first {
+                        *to = mid;
+                    }
+                    self.add_move(first, &mut out)?;
+                    self.add_move(op, &mut out)?;
+                    continue;
+                }
+            }
             match &op {
                 Op::Rapid { to } | Op::Linear { to, .. } | Op::Arc { to, .. }
                     if (to[0] - self.programmed[0]).abs() > 1e-9 || (to[1] - self.programmed[1]).abs() > 1e-9 =>
@@ -242,7 +264,9 @@ impl Comp {
                     }
                 }
                 out.push(prev.emit());
-                out.append(&mut self.held);
+                // Z moves held at the corner run where the previous move really
+                // ended, after any trim, not at its untrimmed offset end.
+                out.extend(self.held.drain(..).map(|op| at_xy(op, prev.end)));
                 out.extend(corner_arc);
             }
         }
@@ -302,6 +326,15 @@ impl Comp {
         out.append(&mut self.held);
         out
     }
+}
+
+/// `op` with its XY target moved to `p` (a move with no XY change of its own).
+fn at_xy(mut op: Op, p: P2) -> Op {
+    if let Op::Rapid { to } | Op::Linear { to, .. } | Op::Arc { to, .. } = &mut op {
+        to[0] = p[0];
+        to[1] = p[1];
+    }
+    op
 }
 
 fn line_circle(p0: P2, p1: P2, c: P2, r: f64) -> Vec<P2> {
@@ -392,6 +425,35 @@ mod tests {
         // A 2 mm radius arc can't be cut on the inside with a 3 mm radius tool.
         let err = path("G0 X-10 Y0\nG42 D1 G1 X0 Y0 F100\nG2 X4 Y0 I2 J0\nG40 G1 X10\nM30").unwrap_err();
         assert!(err.contains("too big"), "{err}");
+    }
+
+    #[test]
+    fn z_moves_at_an_inside_corner_stay_on_the_trimmed_path() {
+        let p = path("G0 X-10 Y0\nG41 D1 G1 X0 Y0 F100\nX20\nZ-1\nY20\nG40 G1 X-10\nM30").unwrap();
+        // The tool goes to the trimmed corner, plunges there, and carries on up the wall.
+        assert_eq!(p[2], (17.0, 3.0, false));
+        assert_eq!(p[3], (17.0, 3.0, false));
+        assert_eq!(p[4], (17.0, 20.0, false));
+    }
+
+    #[test]
+    fn full_circles_are_offset() {
+        // Circle of radius 10 around (0,0), cut on the inside with a 3 mm radius tool.
+        let mut i = Interpreter::new("G0 X0 Y-20\nG41 D1 G1 X0 Y-10 F100\nG3 X0 Y-10 J10\nG40 G1 X0 Y-20\nM30");
+        i.tools.insert(1, Tool { diameter: 6.0, ..Default::default() });
+        let ops: Vec<Op> = i.run_to_end(100).unwrap().into_iter().flat_map(|s| s.ops).collect();
+        let arcs: Vec<_> = ops
+            .iter()
+            .filter_map(|op| match op {
+                // Leave out the corner arc onto the circle (centred on the programmed corner).
+                Op::Arc { to, center, .. } if center[1].abs() < 1e-9 => Some((to[0] - center[0]).hypot(to[1] - center[1])),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(arcs.len(), 2, "{ops:?}");
+        for r in arcs {
+            assert!((r - 7.0).abs() < 1e-6, "radius {r}");
+        }
     }
 
     #[test]

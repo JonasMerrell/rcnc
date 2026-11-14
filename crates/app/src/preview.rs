@@ -23,16 +23,76 @@ pub struct Toolpath {
     pub rapid_length: f64,
 }
 
+/// What the controller knows that changes how a program runs: tools,
+/// offsets, macros and where the machine is. Without it G43 H and G41 D stop
+/// the preview, and G53 moves are drawn in the wrong place.
+#[derive(Clone, Default)]
+pub struct Setup {
+    pub tools: std::collections::BTreeMap<u32, gcode::Tool>,
+    pub params: std::collections::BTreeMap<u32, f64>,
+    pub coord_system: usize,
+    pub tool: u32,
+    pub tool_length_offset: f64,
+    pub macros: std::collections::HashMap<u32, String>,
+    pub machine: Axes,
+    pub spindle_reversible: bool,
+}
+
+impl Setup {
+    pub fn from_snapshot(s: &machine::Snapshot) -> Self {
+        Setup {
+            tools: s.tools.clone(),
+            params: s.params.clone(),
+            coord_system: s.coord_system,
+            tool: s.tool,
+            tool_length_offset: s.tool_length_offset,
+            macros: (*s.macros).clone(),
+            machine: s.machine,
+            spindle_reversible: s.spindle_reversible,
+        }
+    }
+}
+
+/// Lines the preview reads at most, so a program that loops forever (a big
+/// M98 L count) can't keep its thread busy for good.
+const MAX_STEPS: usize = 5_000_000;
+
 impl Toolpath {
-    /// Path in work coordinates of the program as written (no offsets applied).
-    pub fn build(text: &str) -> Self {
+    /// Build on a thread of its own; the result comes on the receiver.
+    pub fn build_in_background(text: std::sync::Arc<String>, setup: Setup, ctx: egui::Context) -> std::sync::mpsc::Receiver<Toolpath> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("preview".into())
+            .spawn(move || {
+                let path = Toolpath::build(&text, &setup);
+                let _ = tx.send(path);
+                ctx.request_repaint();
+            })
+            .expect("spawn preview thread");
+        rx
+    }
+
+    /// The path in work coordinates (the active offsets at each move), as
+    /// the controller would run it from `setup`.
+    pub fn build(text: &str, setup: &Setup) -> Self {
         let mut interp = Interpreter::new(text);
+        interp.tools = setup.tools.clone();
+        for (&k, &v) in &setup.params {
+            interp.params.set(k, v);
+        }
+        interp.state.coord_system = setup.coord_system;
+        interp.state.tool = setup.tool;
+        interp.state.tool_length_offset = setup.tool_length_offset;
+        interp.macros = setup.macros.clone();
+        interp.spindle_reversible = setup.spindle_reversible;
+        interp.position = setup.machine;
         let mut path = Toolpath {
             min: [f64::MAX; 3],
             max: [f64::MIN; 3],
             ..Default::default()
         };
         let mut pos: Axes = interp.position;
+        let mut steps = 0usize;
         loop {
             let step = match interp.next_step() {
                 Ok(Some(s)) => s,
@@ -42,6 +102,14 @@ impl Toolpath {
                     break;
                 }
             };
+            steps += 1;
+            if steps > MAX_STEPS {
+                path.error = Some("program too long to preview, or it loops forever".into());
+                break;
+            }
+            // Work coordinates of the offsets in force after this line.
+            let off = interp.program_offset();
+            let work = |p: &Axes| [p[0] - off[0], p[1] - off[1], p[2] - off[2]];
             for op in &step.ops {
                 if let Op::Probe { to, .. } = op {
                     interp.probe_result(*to);
@@ -58,8 +126,8 @@ impl Toolpath {
                     _ => op_to_moves(op, &pos, step.line, 0.01),
                 };
                 for m in moves {
-                    let a = [pos[0], pos[1], pos[2]];
-                    let b = [m.to[0], m.to[1], m.to[2]];
+                    let a = work(&pos);
+                    let b = work(&m.to);
                     let len =
                         ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2))
                             .sqrt();

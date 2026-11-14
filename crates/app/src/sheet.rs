@@ -6,6 +6,13 @@
 //! `part.nc`). On Windows it is shown inside rcnc by WebView2, the Chromium
 //! engine that ships with Windows; elsewhere it opens in the browser.
 //!
+//! The page is only something to read. It is served to the web view by
+//! rcnc itself with a Content-Security-Policy that lets it show text,
+//! styles and pictures (inline or from beside the sheet) and nothing else:
+//! no scripts of its own, no network, no frames, no dialogs. Whatever HTML a
+//! CAM (or anything that can reach the CAM link) sends can't reach the
+//! internet, call the CAM link, or press Stop and Feed Hold.
+//!
 //! The web view lives on the UI thread but renders in its own browser
 //! processes, and the machine is polled on the controller's thread, so
 //! nothing a page does can hold up motion. The sheet never keeps the
@@ -90,8 +97,61 @@ pub fn open_in_browser(path: &Path) {
     }
 }
 
+/// What a sheet may load: its own styles, pictures and fonts. Nothing runs.
+#[cfg_attr(not(windows), allow(dead_code))]
+const SHEET_CSP: &str = "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
+     font-src 'self' data:; media-src 'self' data:; form-action 'none'; base-uri 'none'; frame-ancestors 'none'";
+
+/// The file a request inside the sheet asks for: the sheet itself, or a
+/// file beside it (never above its folder).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn sheet_file(sheet: &Path, request_path: &str) -> Option<PathBuf> {
+    // Paths are /<version>/sheet.html and /<version>/<file beside it>.
+    let rest = request_path.trim_start_matches('/').split_once('/').map(|(_, r)| r)?;
+    if rest == "sheet.html" {
+        return Some(sheet.to_path_buf());
+    }
+    let mut decoded = Vec::new();
+    let bytes = rest.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    let rel = PathBuf::from(String::from_utf8(decoded).ok()?);
+    let safe = rel.components().all(|c| matches!(c, std::path::Component::Normal(_)));
+    if !safe {
+        return None;
+    }
+    Some(sheet.parent()?.join(rel))
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn content_type(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
+        Some("html" | "htm") => "text/html; charset=utf-8",
+        Some("css") => "text/css",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("svg") => "image/svg+xml",
+        Some("webp") => "image/webp",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        _ => "application/octet-stream",
+    }
+}
+
 /// Esc and Space pressed inside the page in the moment before rcnc takes the
-/// keyboard back, sent on as they would be from rcnc's own window.
+/// keyboard back, sent on as they would be from rcnc's own window. (rcnc's
+/// own script; the page's scripts don't run.)
 #[cfg_attr(not(windows), allow(dead_code))]
 const KEYS_SCRIPT: &str = r#"
 window.addEventListener('keydown', function (e) {
@@ -102,19 +162,29 @@ window.addEventListener('keydown', function (e) {
 
 #[cfg(windows)]
 mod view {
+    use std::borrow::Cow;
     use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
 
     use eframe::egui;
     use machine::{Command, ControllerHandle, Mode};
     use wry::dpi::{PhysicalPosition, PhysicalSize};
+    use wry::http::{header, Request, Response};
     use wry::raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use wry::{NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder};
 
     /// The web view showing the sheet, made the first time a sheet is shown.
+    /// Where the web view finds rcnc's sheet server (WebView2's form of `rcncsheet://localhost`).
+    const ORIGIN: &str = "http://rcncsheet.localhost/";
+
     pub struct SheetView {
         web: Option<(WebView, WebContext)>,
         data: PathBuf,
         shown: Option<PathBuf>,
+        /// The sheet the server hands out.
+        serving: Arc<Mutex<Option<PathBuf>>>,
+        /// Bumped on every load, so a reload isn't served from the cache.
+        version: u64,
         bounds: Option<Rect>,
         visible: bool,
         error: Option<String>,
@@ -122,7 +192,22 @@ mod view {
 
     impl SheetView {
         pub fn new(data: PathBuf) -> Self {
-            SheetView { web: None, data, shown: None, bounds: None, visible: false, error: None }
+            SheetView {
+                web: None,
+                data,
+                shown: None,
+                serving: Arc::new(Mutex::new(None)),
+                version: 0,
+                bounds: None,
+                visible: false,
+                error: None,
+            }
+        }
+
+        fn url(&mut self, path: &Path) -> String {
+            *self.serving.lock().unwrap_or_else(|p| p.into_inner()) = Some(path.to_path_buf());
+            self.version += 1;
+            format!("{ORIGIN}{}/sheet.html", self.version)
         }
 
         /// Why the sheet can't be shown here, if it can't.
@@ -140,11 +225,8 @@ mod view {
                 position: PhysicalPosition::new((rect.min.x * ppp).round() as i32, (rect.min.y * ppp).round() as i32).into(),
                 size: PhysicalSize::new((rect.width() * ppp).round().max(1.0) as u32, (rect.height() * ppp).round().max(1.0) as u32).into(),
             };
-            let Some(url) = file_url(path) else {
-                self.error = Some(format!("can't show {}", path.display()));
-                return;
-            };
             if self.web.is_none() {
+                let url = self.url(path);
                 match self.create(frame, bounds, &url, machine) {
                     Ok(w) => {
                         self.web = Some(w);
@@ -156,11 +238,14 @@ mod view {
                 }
                 return;
             }
-            let Some((web, _)) = &self.web else { return };
             if self.shown.as_deref() != Some(path) {
-                let _ = web.load_url(&url);
+                let url = self.url(path);
+                if let Some((web, _)) = &self.web {
+                    let _ = web.load_url(&url);
+                }
                 self.shown = Some(path.to_path_buf());
             }
+            let Some((web, _)) = &self.web else { return };
             if self.bounds != Some(bounds) {
                 let _ = web.set_bounds(bounds);
                 self.bounds = Some(bounds);
@@ -200,8 +285,9 @@ mod view {
 
         /// Reload the sheet, after its file changed.
         pub fn reload(&mut self) {
-            if let Some((web, _)) = &self.web {
-                if let Some(url) = self.shown.as_deref().and_then(file_url) {
+            if let Some(path) = self.shown.clone() {
+                let url = self.url(&path);
+                if let Some((web, _)) = &self.web {
                     let _ = web.load_url(&url);
                 }
             }
@@ -216,8 +302,24 @@ mod view {
         fn create(&mut self, frame: &eframe::Frame, bounds: Rect, url: &str, machine: &ControllerHandle) -> wry::Result<(WebView, WebContext)> {
             let mut context = WebContext::new(Some(self.data.clone()));
             let machine = machine.clone();
+            let serving = self.serving.clone();
             let web = WebViewBuilder::new_with_web_context(&mut context)
                 .with_bounds(bounds)
+                .with_custom_protocol("rcncsheet".into(), move |_, request: Request<Vec<u8>>| {
+                    let sheet = serving.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                    let file = sheet.and_then(|s| super::sheet_file(&s, request.uri().path()));
+                    let (status, kind, body) = match file.as_deref().map(|f| (f, std::fs::read(f))) {
+                        Some((f, Ok(bytes))) => (200, super::content_type(f), bytes),
+                        _ => (404, "text/plain", b"not found".to_vec()),
+                    };
+                    Response::builder()
+                        .status(status)
+                        .header(header::CONTENT_TYPE, kind)
+                        .header("Content-Security-Policy", super::SHEET_CSP)
+                        .header(header::CACHE_CONTROL, "no-store")
+                        .body(Cow::Owned(body))
+                        .unwrap_or_else(|_| Response::new(Cow::Borrowed(&b""[..])))
+                })
                 .with_url(url)
                 .with_focused(false)
                 .with_background_color((0xff, 0xff, 0xff, 0xff))
@@ -227,8 +329,8 @@ mod view {
                     "hold" if machine.snapshot().mode == Mode::Running => machine.send(Command::FeedHold),
                     _ => {}
                 })
-                // A sheet is a local page: links don't take it elsewhere or open windows.
-                .with_navigation_handler(|url| url.starts_with("file:") || url.starts_with("about:") || url.starts_with("data:"))
+                // A sheet is a page rcnc serves: links don't take it elsewhere or open windows.
+                .with_navigation_handler(|url| url.starts_with(ORIGIN) || url == "about:blank")
                 .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
                 .build_as_child(frame)?;
             Ok((web, context))
@@ -239,20 +341,6 @@ mod view {
     extern "system" {
         fn GetForegroundWindow() -> isize;
         fn GetFocus() -> isize;
-    }
-
-    fn file_url(path: &Path) -> Option<String> {
-        let path = std::path::absolute(path).ok()?;
-        let mut url = String::from("file:///");
-        let text = path.to_string_lossy().replace('\\', "/");
-        let text = text.strip_prefix("//?/").unwrap_or(&text);
-        for b in text.bytes() {
-            match b {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b':' | b'-' | b'_' | b'.' | b'~' => url.push(b as char),
-                _ => url.push_str(&format!("%{b:02X}")),
-            }
-        }
-        Some(url)
     }
 }
 
@@ -313,6 +401,16 @@ mod tests {
         assert_eq!(sheets.take("bracket.nc"), None, "taken once");
         sheets.sent("plate.nc", None).unwrap();
         assert_eq!(sheets.take("plate.nc"), Some(None));
+    }
+
+    #[test]
+    fn serves_the_sheet_and_files_beside_it_only() {
+        let sheet = Path::new("/sheets/part.html");
+        assert_eq!(sheet_file(sheet, "/3/sheet.html"), Some(sheet.to_path_buf()));
+        assert_eq!(sheet_file(sheet, "/3/img/tool%201.png"), Some(PathBuf::from("/sheets/img/tool 1.png")));
+        assert_eq!(sheet_file(sheet, "/3/../secret.txt"), None);
+        assert_eq!(sheet_file(sheet, "/3/%2E%2E/secret.txt"), None);
+        assert_eq!(sheet_file(sheet, "/sheet.html"), None);
     }
 
     #[test]

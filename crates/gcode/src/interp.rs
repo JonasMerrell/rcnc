@@ -146,6 +146,8 @@ pub struct ModalState {
     /// 0..=5 for G54..G59.
     pub coord_system: usize,
     pub tool_length_offset: f64,
+    /// The tool whose length G43 applies (None with G49 or G43 H0).
+    pub tlo_tool: Option<u32>,
     pub return_to_r: bool,
     /// Feed in mm/min (or inverse-time value when `inverse_time`).
     pub feed: f64,
@@ -164,6 +166,9 @@ pub struct ModalState {
 struct CannedSticky {
     r: f64,
     z: f64,
+    /// R and Z were given in this series of cycles (since the last G80 or other motion mode).
+    r_set: bool,
+    z_set: bool,
     q: f64,
     p: f64,
     /// Z at the start of the cycle (machine coordinates).
@@ -181,6 +186,7 @@ impl Default for ModalState {
             inverse_time: false,
             coord_system: 0,
             tool_length_offset: 0.0,
+            tlo_tool: None,
             return_to_r: false,
             feed: 0.0,
             rpm: 0.0,
@@ -237,6 +243,12 @@ pub struct Interpreter {
     comp: Option<Comp>,
     /// Set by G40/G41/G42 on the current block: None = off, Some((left, radius)).
     comp_change: Option<Option<(bool, f64)>>,
+    /// The spindle can run in reverse; without it G84 is refused before it moves.
+    pub spindle_reversible: bool,
+    /// G92 offsets put aside by G92.2, for G92.3.
+    g92_suspended: Option<Axes>,
+    /// The current block has an F word (G93 needs one on every feed move).
+    f_on_line: bool,
 }
 
 /// Arc endpoint radius mismatch that is still accepted, in mm.
@@ -246,7 +258,7 @@ const PECK_CLEARANCE: f64 = 0.25;
 
 impl Interpreter {
     pub fn new(program: &str) -> Self {
-        let lines: Vec<String> = program.lines().map(str::to_owned).collect();
+        let lines = program_lines(program);
         let labels = lines
             .iter()
             .enumerate()
@@ -270,6 +282,9 @@ impl Interpreter {
             exec_line: 0,
             comp: None,
             comp_change: None,
+            spindle_reversible: true,
+            g92_suspended: None,
+            f_on_line: false,
         }
     }
 
@@ -281,7 +296,21 @@ impl Interpreter {
         self.rewind();
     }
 
+    /// Back to the start of the program, with the modes a program may
+    /// assume (G17 G21 G90 G91.1 G94 G80 G98, no cutter comp) rather than
+    /// whatever the last program or MDI left. Work offsets, the tool and its
+    /// length offset stay.
     pub fn rewind(&mut self) {
+        let st = &mut self.state;
+        let d = ModalState::default();
+        st.motion = d.motion;
+        st.plane = d.plane;
+        st.units = d.units;
+        st.absolute = d.absolute;
+        st.arc_absolute = d.arc_absolute;
+        st.inverse_time = d.inverse_time;
+        st.return_to_r = d.return_to_r;
+        st.canned = d.canned;
         self.comp = None;
         self.comp_change = None;
         self.state.cutter_comp = 400;
@@ -488,6 +517,10 @@ impl Interpreter {
         let mut ops = Vec::new();
         let gs: Vec<u32> = b.codes('G').collect();
         let ms: Vec<u32> = b.codes('M').collect();
+        // Check the whole block before it changes any state.
+        check_known_codes(&gs, &ms)?;
+        check_modal_groups(&gs, &ms)?;
+        self.f_on_line = b.has('F');
 
         for c in &b.comments {
             if let Some(msg) = c.strip_prefix("MSG,").or_else(|| c.strip_prefix("msg,")) {
@@ -495,6 +528,14 @@ impl Interpreter {
             }
         }
 
+        // Units first: an F on the same line is in the new units.
+        for g in &gs {
+            match g {
+                200 => self.state.units = Units::Inch,
+                210 => self.state.units = Units::Mm,
+                _ => {}
+            }
+        }
         // Feed mode, feed, speed, tool select.
         if gs.contains(&930) {
             self.state.inverse_time = true;
@@ -574,8 +615,6 @@ impl Interpreter {
                 170 => self.state.plane = Plane::XY,
                 180 => self.state.plane = Plane::ZX,
                 190 => self.state.plane = Plane::YZ,
-                200 => self.state.units = Units::Inch,
-                210 => self.state.units = Units::Mm,
                 400 => {
                     self.state.cutter_comp = 400;
                     self.comp_change = Some(None);
@@ -598,13 +637,23 @@ impl Interpreter {
                 }
                 430 => {
                     let h = b.get('H').map(|h| h as u32).unwrap_or(self.state.tool);
-                    let tool = self
-                        .tools
-                        .get(&h)
-                        .ok_or_else(|| format!("tool {h} is not in the tool table"))?;
-                    self.state.tool_length_offset = tool.length;
+                    if h == 0 {
+                        // H0: no tool, no offset.
+                        self.state.tool_length_offset = 0.0;
+                        self.state.tlo_tool = None;
+                    } else {
+                        let tool = self
+                            .tools
+                            .get(&h)
+                            .ok_or_else(|| format!("tool {h} is not in the tool table"))?;
+                        self.state.tool_length_offset = tool.length;
+                        self.state.tlo_tool = Some(h);
+                    }
                 }
-                490 => self.state.tool_length_offset = 0.0,
+                490 => {
+                    self.state.tool_length_offset = 0.0;
+                    self.state.tlo_tool = None;
+                }
                 540..=590 if g % 10 == 0 => self.state.coord_system = ((g - 540) / 10) as usize,
                 610 | 611 | 640 => {}
                 900 => self.state.absolute = true,
@@ -653,7 +702,20 @@ impl Interpreter {
                     self.params.set_axes(num::G92, g92);
                     axes_used_by_nonmodal = true;
                 }
-                921 | 922 => self.params.set_axes(num::G92, [0.0; 6]),
+                921 => {
+                    self.params.set_axes(num::G92, [0.0; 6]);
+                    self.g92_suspended = None;
+                }
+                922 => {
+                    // Suspend: G92.3 brings the offsets back.
+                    self.g92_suspended = Some(self.params.get_axes(num::G92));
+                    self.params.set_axes(num::G92, [0.0; 6]);
+                }
+                923 => {
+                    if let Some(g92) = self.g92_suspended.take() {
+                        self.params.set_axes(num::G92, g92);
+                    }
+                }
                 _ => {}
             }
         }
@@ -672,12 +734,12 @@ impl Interpreter {
             };
             if let MotionMode::Canned(_) = mode {
                 if !matches!(self.state.motion, MotionMode::Canned(_)) {
-                    self.state.canned.initial_z = self.position[2];
+                    // A new series: R and Z must be given again.
+                    self.state.canned = CannedSticky { initial_z: self.position[2], ..Default::default() };
                 }
             }
             self.state.motion = mode;
         }
-        check_known_codes(&gs, &ms)?;
 
         let has_axes = AXIS_LETTERS.iter().any(|&l| b.has(l));
         if has_axes && !axes_used_by_nonmodal {
@@ -726,6 +788,10 @@ impl Interpreter {
         self.state.spindle = Spindle::Off;
         self.state.flood = false;
         self.state.mist = false;
+        self.state.canned = CannedSticky::default();
+        self.state.return_to_r = false;
+        self.state.cutter_comp = 400;
+        self.g92_suspended = None;
     }
 
     /// Expand a user M-code macro in place. Macros are straight-line G-code
@@ -888,8 +954,8 @@ impl Interpreter {
 
     fn feed_for(&self, length: f64) -> Result<f64, String> {
         if self.state.inverse_time {
-            if self.state.feed <= 0.0 {
-                return Err("inverse time feed needs F on the line".into());
+            if self.state.feed <= 0.0 || !self.f_on_line {
+                return Err("inverse time feed (G93) needs F on every feed move".into());
             }
             return Ok(length * self.state.feed);
         }
@@ -957,8 +1023,9 @@ impl Interpreter {
             }
             if self.state.arc_absolute {
                 let off = self.program_offset();
-                center[a0] = o0.map(|v| v + off[a0]).unwrap_or(from[a0]);
-                center[a1] = o1.map(|v| v + off[a1]).unwrap_or(from[a1]);
+                // A missing offset is 0 in program coordinates, as for any absolute word.
+                center[a0] = o0.unwrap_or(0.0) + off[a0];
+                center[a1] = o1.unwrap_or(0.0) + off[a1];
             } else {
                 center[a0] = from[a0] + o0.unwrap_or(0.0);
                 center[a1] = from[a1] + o1.unwrap_or(0.0);
@@ -994,6 +1061,18 @@ impl Interpreter {
         if self.state.plane != Plane::XY {
             return Err("canned cycles are only supported in the XY plane (G17)".into());
         }
+        if self.state.inverse_time {
+            return Err("canned cycles can't run in inverse time feed (G93); use G94".into());
+        }
+        if code == 840 {
+            // Refused before it moves: finding out at the bottom leaves the tap in the hole.
+            if !self.spindle_reversible {
+                return Err("G84 needs a spindle that runs in reverse; this one can't (use a tapping head and G81/G85)".into());
+            }
+            if self.state.spindle != Spindle::Cw {
+                return Err("G84 needs the spindle running forward (M3) first".into());
+            }
+        }
         let feed = self.feed_for(0.0)?;
         let off = self.program_offset();
         let st = &mut self.state.canned;
@@ -1006,9 +1085,17 @@ impl Interpreter {
         };
         if let Some(r) = b.get('R') {
             st.r = lin(r);
+            st.r_set = true;
         }
         if let Some(z) = b.get('Z') {
             st.z = lin(z);
+            st.z_set = true;
+        }
+        if !st.r_set {
+            return Err("canned cycle needs R (the retract height)".into());
+        }
+        if !st.z_set {
+            return Err("canned cycle needs Z (the hole depth)".into());
         }
         if let Some(q) = b.get('Q') {
             st.q = lin(q).abs();
@@ -1032,11 +1119,22 @@ impl Interpreter {
         if (code == 830 || code == 730) && st.q <= 0.0 {
             return Err("G73/G83 need a positive Q".into());
         }
+        if bottom > r_z + 1e-9 {
+            return Err("canned cycle Z is above R".into());
+        }
 
         let mut ops = Vec::new();
         let mut pos = self.position;
         let words = self.axis_words(b);
         for _ in 0..repeats {
+            let rapid = |pos: &mut Axes, z: f64, ops: &mut Vec<Op>| {
+                pos[2] = z;
+                ops.push(Op::Rapid { to: *pos });
+            };
+            // Below R: straight up first, so the move to the hole can't be a diagonal through the part.
+            if pos[2] < r_z {
+                rapid(&mut pos, r_z, &mut ops);
+            }
             for i in 0..2 {
                 if let Some(v) = words[i] {
                     pos[i] = if self.state.absolute {
@@ -1045,13 +1143,6 @@ impl Interpreter {
                         pos[i] + v
                     };
                 }
-            }
-            let rapid = |pos: &mut Axes, z: f64, ops: &mut Vec<Op>| {
-                pos[2] = z;
-                ops.push(Op::Rapid { to: *pos });
-            };
-            if pos[2] < r_z {
-                rapid(&mut pos, r_z, &mut ops);
             }
             ops.push(Op::Rapid { to: pos });
             rapid(&mut pos, r_z, &mut ops);
@@ -1093,7 +1184,7 @@ impl Interpreter {
                     }
                     ops.push(Op::Spindle { state: Spindle::Ccw, rpm });
                     feed_to(&mut pos, r_z, &mut ops);
-                    ops.push(Op::Spindle { state: self.state.spindle, rpm });
+                    ops.push(Op::Spindle { state: Spindle::Cw, rpm });
                 }
                 850 | 890 => {
                     feed_to(&mut pos, bottom, &mut ops);
@@ -1118,6 +1209,52 @@ fn label_of(line: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+/// The program's lines. A `%` line after the start (or a second `%`) ends
+/// the program: anything after it is not run.
+fn program_lines(program: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut seen_code = false;
+    for line in program.lines() {
+        if line.trim_start().starts_with('%') {
+            if seen_code {
+                break;
+            }
+            seen_code = true;
+        } else if !line.trim().is_empty() {
+            seen_code = true;
+        }
+        lines.push(line.to_owned());
+    }
+    lines
+}
+
+/// Two codes from the same modal group on one line is an error (RS274/NGC),
+/// not "the last one wins".
+fn check_modal_groups(gs: &[u32], ms: &[u32]) -> Result<(), String> {
+    const G_GROUPS: &[(&str, &[u32])] = &[
+        ("motion", &[0, 10, 20, 30, 310, 382, 730, 800, 810, 820, 830, 840, 850, 890]),
+        ("plane", &[170, 180, 190]),
+        ("units", &[200, 210]),
+        ("distance", &[900, 910]),
+        ("feed mode", &[930, 940]),
+        ("cutter compensation", &[400, 410, 420]),
+        ("tool length", &[430, 490]),
+        ("coordinate system", &[540, 550, 560, 570, 580, 590]),
+        ("return mode", &[980, 990]),
+    ];
+    const M_GROUPS: &[(&str, &[u32])] = &[("spindle", &[30, 40, 50]), ("stop", &[0, 10, 20, 300])];
+    let check = |letter: char, codes: &[u32], groups: &[(&str, &[u32])]| {
+        for (name, group) in groups {
+            if codes.iter().filter(|c| group.contains(c)).count() > 1 {
+                return Err(format!("two {letter}-codes from the {name} group on one line"));
+            }
+        }
+        Ok(())
+    };
+    check('G', gs, G_GROUPS)?;
+    check('M', ms, M_GROUPS)
+}
+
 fn is_builtin_m(m: u32) -> bool {
     matches!(m, 0..=9 | 30 | 48 | 49 | 98 | 99)
 }
@@ -1126,7 +1263,7 @@ fn check_known_codes(gs: &[u32], _ms: &[u32]) -> Result<(), String> {
     const KNOWN: &[u32] = &[
         0, 10, 20, 30, 40, 100, 170, 180, 190, 200, 210, 280, 281, 300, 301, 310, 382, 400, 410,
         420, 430, 490, 530, 540, 550, 560, 570, 580, 590, 610, 611, 640, 730, 800, 810, 820, 830,
-        840, 850, 890, 900, 901, 910, 911, 920, 921, 922, 930, 940, 980, 990,
+        840, 850, 890, 900, 901, 910, 911, 920, 921, 922, 923, 930, 940, 980, 990,
     ];
     for g in gs {
         if !KNOWN.contains(g) {
@@ -1515,5 +1652,100 @@ mod tests {
                 to: [10.0, 0.0, 0.0, 0.0, 0.0, 0.0]
             }
         );
+    }
+
+    fn first_error(program: &str) -> String {
+        let mut i = Interpreter::new(program);
+        i.run_to_end(10_000).unwrap_err().message
+    }
+
+    #[test]
+    fn units_on_the_same_line_apply_to_f() {
+        let (_, ops) = run("G20\nG21 G1 X1 F100\nM30");
+        assert_eq!(ops[0], Op::Linear { to: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0], feed: 100.0 });
+    }
+
+    #[test]
+    fn a_new_program_starts_from_default_modes() {
+        let mut i = Interpreter::new("G20 G91 G0 X1");
+        i.run_to_end(100).unwrap();
+        i.load("G0 X1\nM30");
+        let ops: Vec<Op> = i.run_to_end(100).unwrap().into_iter().flat_map(|s| s.ops).collect();
+        assert_eq!(ops[0], Op::Rapid { to: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0] });
+    }
+
+    #[test]
+    fn canned_cycles_rise_before_moving_over() {
+        let (_, ops) = run("G0 Z-2\nG81 X10 Y10 R2 Z-5 F100\nG80\nM30");
+        // Straight up to R first, then over to the hole.
+        assert_eq!(ops[1], Op::Rapid { to: [0.0, 0.0, 2.0, 0.0, 0.0, 0.0] });
+        assert_eq!(ops[2], Op::Rapid { to: [10.0, 10.0, 2.0, 0.0, 0.0, 0.0] });
+    }
+
+    #[test]
+    fn canned_cycles_need_r_and_z() {
+        assert!(first_error("G81 X1 Z-5 F100").contains("needs R"));
+        assert!(first_error("G81 X1 R2 Z-5 F100\nG80\nG81 X2 Z-5").contains("needs R"));
+        assert!(first_error("G81 X1 R2 Z5 F100").contains("above R"));
+        assert!(first_error("G93 G81 X1 R2 Z-5 F1").contains("inverse time"));
+    }
+
+    #[test]
+    fn g84_is_refused_before_it_moves() {
+        let mut i = Interpreter::new("M3 S500\nG84 X5 R2 Z-5 F100");
+        i.spindle_reversible = false;
+        let err = i.run_to_end(100).unwrap_err();
+        assert_eq!(err.line, 1);
+        assert!(err.message.contains("reverse"), "{}", err.message);
+        assert!(first_error("M4 S500\nG84 X5 R2 Z-5 F100").contains("forward"));
+        assert!(first_error("G84 X5 R2 Z-5 F100").contains("forward"));
+    }
+
+    #[test]
+    fn g43_h0_is_no_offset() {
+        let mut i = Interpreter::new("G10 L1 P3 Z25\nG43 H3\nG43 H0\nM30");
+        i.run_to_end(100).unwrap();
+        assert_eq!(i.state.tool_length_offset, 0.0);
+        assert_eq!(i.state.tlo_tool, None);
+    }
+
+    #[test]
+    fn g92_2_suspends_and_g92_3_restores() {
+        let mut i = Interpreter::new("G92 X10\nG92.2\n");
+        i.run_to_end(100).unwrap();
+        assert_eq!(i.params.get(num::G92), 0.0);
+        i.execute_line("G92.3").unwrap();
+        assert_eq!(i.params.get(num::G92), -10.0);
+    }
+
+    #[test]
+    fn g90_1_missing_offset_is_zero() {
+        let (_, ops) = run("G90.1 G0 X10 Y0\nG3 X0 Y10 J0 F100\nM30");
+        match &ops[1] {
+            Op::Arc { center, .. } => assert!(close(center[0], 0.0) && close(center[1], 0.0)),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn g93_needs_f_on_every_move() {
+        assert!(first_error("G93 G1 X1 F2\nX2").contains("F on every"));
+    }
+
+    #[test]
+    fn conflicting_codes_are_errors() {
+        assert!(first_error("G0 G1 X5").contains("motion"));
+        assert!(first_error("M3 M5").contains("spindle"));
+        // Nothing on a rejected line takes effect.
+        let mut i = Interpreter::new("");
+        assert!(i.execute_line("G20 G12 X1").is_err());
+        assert_eq!(i.state.units, Units::Mm);
+    }
+
+    #[test]
+    fn closing_percent_ends_the_program() {
+        let (i, ops) = run("%\nG0 X1\n%\nG0 X99\n");
+        assert!(close(i.position[0], 1.0));
+        assert!(!ops.iter().any(|op| matches!(op, Op::Rapid { to } if to[0] == 99.0)));
     }
 }

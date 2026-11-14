@@ -153,6 +153,10 @@ impl MachineConfig {
             axes: [
                 linear(133.3, Input::new(12, false), false, -8.0, -300.0, 200.0),
                 // Home position from the capture (102400 steps); check against the Mach3 DRO.
+                // Mach3's soft limits (Y 0..195, Z -130..0) leave out its own home
+                // positions and the tool setter. They're kept as Mach3 sends them to
+                // the board, but rcnc won't turn soft limits on until they're fixed
+                // (see `validate`): measure the real travel first.
                 linear(133.3, Input::new(13, true), true, 512.0, 0.0, 195.0),
                 linear(100.0, Input::new(15, true), true, 8.0, -130.0, 0.0),
                 // A and B are disabled, but the profile keeps settings for them.
@@ -187,6 +191,68 @@ impl MachineConfig {
         std::array::from_fn(|i| steps[i] as f64 / self.axes[i].steps_per_unit)
     }
 
+    /// Check settings that would otherwise divide by zero, give NaN positions
+    /// or make soft limits block homing and tool changes.
+    pub fn validate(&self) -> Result<(), String> {
+        let positive = |name: &str, v: f64| {
+            if v.is_finite() && v > 0.0 {
+                Ok(())
+            } else {
+                Err(format!("{name} must be more than 0"))
+            }
+        };
+        for (i, a) in self.axes.iter().enumerate().filter(|(_, a)| a.enabled) {
+            let l = gcode::AXIS_LETTERS[i];
+            positive(&format!("{l} steps/mm"), a.steps_per_unit)?;
+            positive(&format!("{l} max speed"), a.max_velocity)?;
+            positive(&format!("{l} acceleration"), a.acceleration)?;
+            positive(&format!("{l} home speed"), a.home_speed)?;
+            if !(a.soft_min < a.soft_max) {
+                return Err(format!("{l} soft min must be below its max"));
+            }
+            if self.soft_limits && a.home_input.is_some() && !(a.soft_min - 1e-6..=a.soft_max + 1e-6).contains(&a.home_position) {
+                return Err(format!(
+                    "{l} home position {} is outside its soft limits {}..{}",
+                    a.home_position, a.soft_min, a.soft_max
+                ));
+            }
+        }
+        positive("arc tolerance", self.arc_tolerance)?;
+        positive("max spindle speed", self.spindle_max_rpm)?;
+        if !(self.junction_deviation >= 0.0) {
+            return Err("corner tolerance can't be negative".into());
+        }
+        if !(self.spindle_spin_up >= 0.0 && self.spindle_spin_down >= 0.0) {
+            return Err("spindle waits can't be negative".into());
+        }
+        if !(self.jog_speed > 0.0 && self.jog_speed <= 1.0) {
+            return Err("jog speed must be between 0 and 100%".into());
+        }
+        let p = &self.probing;
+        for (name, v) in [("probe search feed", p.fast_feed), ("probe latch feed", p.slow_feed), ("probe travel feed", p.travel_feed)] {
+            positive(name, v)?;
+        }
+        if self.soft_limits {
+            let inside = |name: &str, pos: [f64; 3]| {
+                match (0..3).find(|&i| {
+                    let a = &self.axes[i];
+                    a.enabled && (pos[i] < a.soft_min - 1e-6 || pos[i] > a.soft_max + 1e-6)
+                }) {
+                    Some(i) => Err(format!("the {name} ({} {}) is outside the soft limits", gcode::AXIS_LETTERS[i], pos[i])),
+                    None => Ok(()),
+                }
+            };
+            let t = &self.tool_change;
+            if t.guided {
+                let z = t.z.max(self.axes[2].soft_min);
+                inside("tool change position", [t.x, t.y, z])?;
+            }
+            let st = &p.setter;
+            inside("tool setter", [st.x, st.y, st.travel_z.min(self.axes[2].soft_max)])?;
+        }
+        Ok(())
+    }
+
     /// First soft-limit violation for a machine position, if limits are on.
     pub fn soft_limit_violation(&self, pos: &Axes) -> Option<usize> {
         if !self.soft_limits {
@@ -210,6 +276,21 @@ mod tests {
         assert!(!low.is_active(1 << 11));
         let high = Input::new(12, false);
         assert!(high.is_active(1 << 12));
+    }
+
+    #[test]
+    fn settings_are_checked() {
+        let mut c = MachineConfig::dmc2();
+        c.validate().unwrap();
+        c.arc_tolerance = 0.0;
+        assert!(c.validate().is_err());
+        // Mach3's DMC2 limits leave out the home positions: soft limits can't go on like that.
+        let mut c = MachineConfig::dmc2();
+        c.soft_limits = true;
+        assert!(c.validate().unwrap_err().contains("home position"));
+        c.axes[1].soft_max = 512.0;
+        c.axes[2].soft_max = 8.0;
+        c.validate().unwrap();
     }
 
     #[test]

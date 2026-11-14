@@ -2,8 +2,8 @@
 //! listing, cycle controls, overrides and MDI.
 
 use eframe::egui::{
-    self, Align, Button, Color32, CornerRadius, FontId, Key, Layout, Margin, RichText, ScrollArea,
-    Stroke, Vec2,
+    self, Align, Button, Color32, CornerRadius, FontId, Key, Layout, Margin, PointerButton, RichText,
+    ScrollArea, Stroke, Vec2,
 };
 use gcode::{Spindle, AXIS_LETTERS};
 use machine::{Command, ControllerHandle, Mode, Snapshot};
@@ -48,7 +48,16 @@ pub struct App {
     machine: ControllerHandle,
     snap: Snapshot,
     toolpath: Toolpath,
-    toolpath_for: usize,
+    /// The program and the tools/offsets the preview was built for.
+    toolpath_for: (usize, u64),
+    /// A preview being built in the background.
+    toolpath_next: Option<std::sync::mpsc::Receiver<Toolpath>>,
+    /// The program changed: fit the view and look for its sheet once it's built.
+    toolpath_new_program: bool,
+    /// When the Reset/E-stop button last changed what it does.
+    reset_label: (&'static str, std::time::Instant),
+    /// The controller clock last seen moving, and when (wall clock).
+    alive: (f64, std::time::Instant),
     camera: Camera,
     jog_step: JogStep,
     jog_held: Option<(usize, bool)>,
@@ -88,7 +97,11 @@ impl App {
             machine,
             snap,
             toolpath: Toolpath::default(),
-            toolpath_for: 0,
+            toolpath_for: (0, 0),
+            toolpath_next: None,
+            toolpath_new_program: false,
+            reset_label: ("", std::time::Instant::now()),
+            alive: (f64::NAN, std::time::Instant::now()),
             camera: Camera::default(),
             jog_step: JogStep::Continuous,
             jog_held: None,
@@ -180,7 +193,16 @@ impl App {
         });
     }
 
+    /// File dialogs block the window until they close: Stop, Esc and jog
+    /// key-ups would go nowhere. Only while nothing moves.
+    fn can_open_dialogs(&self) -> bool {
+        matches!(self.snap.mode, Mode::Idle | Mode::EStop | Mode::Disconnected | Mode::Alarm)
+    }
+
     fn open_sheet(&mut self) {
+        if !self.can_open_dialogs() {
+            return;
+        }
         let mut dialog = rfd::FileDialog::new().add_filter("Web page", &["html", "htm"]);
         if let Some(dir) = self.program_file.as_ref().and_then(|(p, _)| p.parent()) {
             dialog = dialog.set_directory(dir);
@@ -192,6 +214,9 @@ impl App {
     }
 
     fn open_file(&mut self) {
+        if !self.can_open_dialogs() {
+            return;
+        }
         let Some(path) = rfd::FileDialog::new()
             .add_filter(
                 "G-code",
@@ -206,8 +231,19 @@ impl App {
     }
 
     fn keyboard(&mut self, ctx: &egui::Context) {
-        if ctx.wants_keyboard_input() {
-            return;
+        let input = ctx.input(|i| i.clone());
+        let moving = matches!(self.snap.mode, Mode::Running | Mode::Jog | Mode::Homing | Mode::Probing);
+        // Esc and Space work even while a text box has the keyboard.
+        if input.key_pressed(Key::Escape) {
+            self.machine.send(Command::Stop);
+        }
+        if moving && input.key_pressed(Key::Space) {
+            self.machine.send(Command::FeedHold);
+            // Not typed into the text box as well.
+            ctx.input_mut(|i| {
+                i.events.retain(|e| !matches!(e, egui::Event::Text(t) if t == " "));
+                i.consume_key(egui::Modifiers::NONE, Key::Space);
+            });
         }
         // Mach3-style jog keys: arrows for X/Y, Page Up/Down for Z.
         let keys = [
@@ -218,7 +254,24 @@ impl App {
             (Key::PageUp, 2, true),
             (Key::PageDown, 2, false),
         ];
-        let input = ctx.input(|i| i.clone());
+        // A key jog ends when its key is up, even if the release never
+        // arrived (Alt-Tab, a dialog, a click in the sheet).
+        if self.jog_by_key {
+            let held = keys
+                .iter()
+                .find(|(_, a, p)| self.jog_held == Some((*a, *p)))
+                .is_some_and(|(k, _, _)| input.key_down(*k));
+            if !held || !input.focused {
+                self.stop_jog();
+            }
+        }
+        // Tell the controller the jog is still held; it stops it otherwise.
+        if self.jog_held.is_some() {
+            self.machine.send(Command::JogAlive);
+        }
+        if ctx.wants_keyboard_input() {
+            return;
+        }
         for (key, axis, positive) in keys {
             // Ignore OS key repeat: a held key is one continuous jog, or one step.
             let first_press = input.events.iter().any(|e| {
@@ -231,12 +284,6 @@ impl App {
             if input.key_released(key) && self.jog_held == Some((axis, positive)) {
                 self.stop_jog();
             }
-        }
-        if input.key_pressed(Key::Space) && self.snap.mode == Mode::Running {
-            self.machine.send(Command::FeedHold);
-        }
-        if input.key_pressed(Key::Escape) {
-            self.machine.send(Command::Stop);
         }
         if input.modifiers.alt && input.key_pressed(Key::R) {
             self.machine.send(Command::CycleStart);
@@ -267,16 +314,36 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// No Tab key for egui. Tab moves the keyboard focus onto buttons, and a
+    /// focused button is pressed by Space or Enter: Tab then Space would press
+    /// Reset (or Cycle Start) instead of feed hold, and the jog keys would
+    /// move the focus instead of the machine. Clicks still focus text boxes.
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        raw_input.events.retain(|e| !matches!(e, egui::Event::Key { key: Key::Tab, .. }));
+    }
+
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.snap = self.machine.snapshot();
-        self.watch_file(ctx.input(|i| i.time));
-        if Self::program_id(&self.snap) != self.toolpath_for {
-            self.toolpath = Toolpath::build(&self.snap.program);
-            self.toolpath_for = Self::program_id(&self.snap);
-            self.camera.fit();
-            self.find_sheet();
+        if self.snap.time != self.alive.0 {
+            self.alive = (self.snap.time, std::time::Instant::now());
         }
+        self.watch_file(ctx.input(|i| i.time));
+        self.update_preview(ctx);
         self.keyboard(ctx);
+        if self.alive.1.elapsed() > std::time::Duration::from_millis(500) {
+            egui::TopBottomPanel::top("dead")
+                .frame(egui::Frame::new().fill(RED).inner_margin(Margin::symmetric(14, 8)))
+                .show(ctx, |ui| {
+                    ui.label(
+                        RichText::new(
+                            "CONTROLLER NOT RESPONDING: the screen is not live and its buttons do nothing. \
+                             Use the machine's E-stop, then restart rcnc.",
+                        )
+                        .color(Color32::WHITE)
+                        .strong(),
+                    );
+                });
+        }
 
         egui::TopBottomPanel::top("status")
             .frame(panel_frame().inner_margin(Margin::symmetric(14, 10)))
@@ -357,6 +424,54 @@ impl App {
         std::sync::Arc::as_ptr(&s.program) as usize
     }
 
+    /// What, besides the program, changes the preview: tools, offsets, the tool in use.
+    fn setup_hash(s: &Snapshot) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for (n, t) in &s.tools {
+            (n, t.length.to_bits(), t.diameter.to_bits()).hash(&mut h);
+        }
+        for (k, v) in &s.params {
+            (k, v.to_bits()).hash(&mut h);
+        }
+        (s.coord_system, s.tool, s.tool_length_offset.to_bits(), s.macros.len()).hash(&mut h);
+        h.finish()
+    }
+
+    /// Rebuild the preview, on its own thread, when the program or its setup changes.
+    fn update_preview(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.toolpath_next {
+            match rx.try_recv() {
+                Ok(path) => {
+                    self.toolpath = path;
+                    self.toolpath_next = None;
+                    if std::mem::take(&mut self.toolpath_new_program) {
+                        self.camera.fit();
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.toolpath_next = None,
+            }
+        }
+        let program = Self::program_id(&self.snap);
+        let new_program = program != self.toolpath_for.0;
+        // Offsets change while a program runs (G10, G92): wait until it's done.
+        let busy = matches!(self.snap.mode, Mode::Running | Mode::Probing | Mode::Homing);
+        let key = (program, Self::setup_hash(&self.snap));
+        if new_program || (key != self.toolpath_for && !busy) {
+            self.toolpath_for = key;
+            if new_program {
+                self.toolpath_new_program = true;
+                self.find_sheet();
+            }
+            self.toolpath_next = Some(Toolpath::build_in_background(
+                self.snap.program.clone(),
+                preview::Setup::from_snapshot(&self.snap),
+                ctx.clone(),
+            ));
+        }
+    }
+
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         let s = &self.snap;
         ui.horizontal(|ui| {
@@ -366,7 +481,9 @@ impl App {
                 Mode::Idle => ("READY", GREEN),
                 Mode::Jog => ("JOG", ACCENT),
                 Mode::Homing => ("HOMING", ACCENT),
+                _ if s.stopping => ("STOPPING", AMBER),
                 Mode::Running if s.paused.is_some() => ("PAUSED", AMBER),
+                Mode::Running if s.hold && s.feed_override == 0.0 => ("FEED HOLD (0%)", AMBER),
                 Mode::Running if s.hold => ("FEED HOLD", AMBER),
                 Mode::Running => ("RUNNING", GREEN),
                 Mode::Probing if s.tool_change.is_some() => ("TOOL CHANGE", AMBER),
@@ -376,19 +493,29 @@ impl App {
             badge(ui, label, color);
             ui.add_space(8.0);
 
-            let reset_label = if s.mode == Mode::EStop || s.mode == Mode::Alarm {
-                "Reset"
-            } else {
-                "E-stop"
-            };
-            let reset_color = if reset_label == "Reset" { GREEN } else { RED };
-            if ui
-                .add(big_button(reset_label, reset_color).min_size(Vec2::new(96.0, 32.0)))
-                .clicked()
-            {
-                self.machine.send(Command::Reset);
+            // One button that is E-stop or Reset, and a separate Connect: one
+            // press can never connect and enable the drives.
+            let resettable = s.mode == Mode::EStop || s.mode == Mode::Alarm;
+            let label = if resettable { "Reset" } else { "E-stop" };
+            if self.reset_label.0 != label {
+                self.reset_label = (label, std::time::Instant::now());
+            }
+            let r = ui.add(
+                big_button(label, if resettable { GREEN } else { RED }).min_size(Vec2::new(96.0, 32.0)),
+            );
+            if resettable {
+                // Leaving reset takes a mouse click (not a key on a focused
+                // button), and not the second click of a double click that
+                // started on the E-stop or Connect button.
+                let settled = self.reset_label.1.elapsed() > std::time::Duration::from_millis(750);
+                if r.clicked_by(PointerButton::Primary) && settled {
+                    self.machine.send(Command::Reset);
+                }
+            } else if r.clicked() {
+                self.machine.send(Command::EStop);
             }
             if s.mode == Mode::Disconnected && ui.button("Connect").clicked() {
+                self.reset_label = ("Reset", std::time::Instant::now());
                 self.machine.send(Command::Connect);
             }
             ui.add_space(12.0);
@@ -492,7 +619,8 @@ impl App {
                 )
                 .clicked()
             {
-                self.machine.send(Command::Mdi("G0 X0 Y0".into()));
+                // Up to the top first, so the move over can't drag the tool through the part or a clamp.
+                self.machine.send(Command::Mdi("G53 G0 Z0\nG0 X0 Y0".into()));
             }
         });
         ui.add_space(6.0);
@@ -608,7 +736,7 @@ impl App {
         ui.horizontal(|ui| {
             section_title(ui, s.program_name.as_deref().unwrap_or("No program"));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let can_load = !matches!(s.mode, Mode::Running | Mode::Homing);
+                let can_load = self.can_open_dialogs();
                 if ui.add_enabled(can_load, Button::new("Open…")).clicked() {
                     self.open_file();
                 }
@@ -677,7 +805,7 @@ impl App {
         // Wraps rather than widening the panel: the sheet takes the panel's width.
         ui.horizontal_wrapped(|ui| {
             self.view_switch(ui);
-            if ui.button("Open sheet…").clicked() {
+            if ui.add_enabled(self.can_open_dialogs(), Button::new("Open sheet…")).clicked() {
                 self.open_sheet();
             }
             if let Some((path, _)) = self.sheet.clone() {
@@ -795,14 +923,14 @@ impl App {
             }
             if ui
                 .add_enabled(
-                    s.mode == Mode::Running && !s.hold,
+                    matches!(s.mode, Mode::Running | Mode::Homing | Mode::Probing) && !s.hold,
                     big_button("Feed Hold", AMBER).min_size(Vec2::new(130.0, 56.0)),
                 )
                 .clicked()
             {
                 self.machine.send(Command::FeedHold);
             }
-            let can_stop = matches!(s.mode, Mode::Running | Mode::Jog | Mode::Homing | Mode::Probing);
+            let can_stop = matches!(s.mode, Mode::Running | Mode::Jog | Mode::Homing | Mode::Probing | Mode::Disconnected);
             if ui
                 .add_enabled(
                     can_stop,

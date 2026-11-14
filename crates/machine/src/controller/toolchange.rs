@@ -128,18 +128,9 @@ impl Controller {
         let view = t.view.clone();
         self.loaded_tool = view.to;
         self.info(format!("Tool {} loaded", view.to));
-        if !view.return_to_start {
-            return Ok(vec![]);
-        }
-        self.stage(ToolChangeStage::Returning);
-        let tc = self.config.tool_change.clone();
-        let feed = self.config.probing.travel_feed;
-        let to = |axis, to| Step::MoveTo { axis, to, feed, guarded: true };
-        // Same work Z as before: a longer tool stops higher, so it can't hit the part.
-        let z = start[2] - z_offset + self.interp.program_offset()[2];
-        let pos = self.machine_position();
-        let mut steps = vec![to(2, tc.z.max(pos[2])), to(0, start[0]), to(1, start[1])];
-        steps.push(Step::Then(Box::new(move |c, _| {
+        // The program carries on expecting the spindle and coolant as they
+        // were, whether or not the tool goes back to where it started.
+        let restore = Step::Then(Box::new(move |c, _| {
             c.outputs.spindle_on = outputs.spindle_on;
             c.outputs.spindle_ccw = outputs.spindle_ccw;
             c.outputs.spindle_duty = outputs.spindle_duty;
@@ -147,8 +138,24 @@ impl Controller {
             c.outputs.flood = outputs.flood;
             c.outputs.mist = outputs.mist;
             Ok(if outputs.spindle_on { vec![Step::Wait(c.config.spindle_spin_up)] } else { vec![] })
-        })));
-        steps.push(to(2, z));
+        }));
+        if !view.return_to_start {
+            return Ok(vec![restore]);
+        }
+        self.stage(ToolChangeStage::Returning);
+        let tc = self.config.tool_change.clone();
+        let feed = self.config.probing.travel_feed;
+        let to = |axis, to| Step::MoveTo { axis, to, feed, guarded: true };
+        let pos = self.machine_position();
+        let mut steps = vec![to(2, tc.z.max(pos[2])), to(0, start[0]), to(1, start[1]), restore];
+        if view.measure {
+            // Same work Z as before: a longer tool stops higher, so it can't hit the part.
+            steps.push(to(2, start[2] - z_offset + self.interp.program_offset()[2]));
+        } else {
+            // An unmeasured tool may be longer than the last: stay at the safe
+            // height and let the program's own moves bring it down.
+            self.info("The new tool wasn't measured: staying at the safe height");
+        }
         Ok(steps)
     }
 
