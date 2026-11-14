@@ -3527,4 +3527,70 @@ mod tests {
         assert!((s.machine[0] - middle(0)).abs() < 2.0 && (s.machine[1] - middle(1)).abs() < 2.0, "{:?}", s.machine);
         assert!((s.machine[2] - (top + 10.0)).abs() < 2.0, "{:?} top {top}", s.machine);
     }
+
+    /// Run a CAM job file on the homed simulator from start to M30, answering the tool changes and
+    /// the Find stock wizard as the operator would: `RCNC_JOB=path RCNC_STOCK=x,y,h cargo test --release
+    /// -p cnc-machine runs_a_job_file -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn runs_a_job_file() {
+        let Ok(path) = std::env::var("RCNC_JOB") else { return };
+        let stock: Vec<f64> = std::env::var("RCNC_STOCK").unwrap_or("39,77,20".into()).split(',').map(|v| v.parse().unwrap()).collect();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let clock = Arc::new(ManualClock::default());
+        let config = crate::sim::dmc2_sim_config();
+        let mut sim = Simulator::new(clock.clone());
+        sim.add_stock(&config, stock[0], stock[1], stock[2]);
+        let world = sim.world.clone();
+        let mut c = Controller::new(config.clone(), Box::new(sim), clock.clone());
+        c.handle(Command::Connect);
+        c.handle(Command::Reset);
+        c.handle(Command::Home(None));
+        run_until_idle(&mut c, &clock, 600.0);
+        let spu = |a: usize| config.axes[a].steps_per_unit;
+        let middle = |a: usize| crate::sim::homed_position(&config, &world, a, world.travel[a] as f64 / 2.0 / spu(a));
+        let top = crate::sim::homed_position(&config, &world, 2, world.block.unwrap().2 as f64 / spu(2));
+        c.handle(Command::Load { name: path.clone(), text });
+        c.handle(Command::CycleStart);
+        let mut t = 0.0;
+        let mut changes = vec![];
+        loop {
+            clock.advance(0.005);
+            c.update();
+            t += 0.005;
+            let s = c.snapshot();
+            if s.mode == Mode::Alarm {
+                panic!("alarm after {t:.0}s: {:?}\n{:#?}", s.alarm, s.log);
+            }
+            if let Some(tc) = &s.tool_change {
+                if tc.stage == ToolChangeStage::Loading && c.routine_waiting {
+                    changes.push(tc.to);
+                    c.handle(Command::ToolChangeContinue { measure: None });
+                }
+            }
+            if s.find_stock.as_ref().is_some_and(|f| f.stage == FindStockStage::Locate) && c.routine_waiting && s.mode == Mode::Probing {
+                // the operator: over the middle (a few mm off), tap the top, then 5 above it
+                let go = |c: &mut Controller, axis: usize, to: f64| {
+                    let by = to - c.snapshot().machine[axis];
+                    c.handle(Command::Jog { axis, positive: by > 0.0, step: Some(by.abs()) });
+                    run_until(c, &clock, 120.0, "the end of a jog", |s| s.mode == Mode::Probing);
+                };
+                go(&mut c, 2, s.machine[2].max(top + 30.0));
+                go(&mut c, 0, middle(0) + 2.5);
+                go(&mut c, 1, middle(1) - 3.0);
+                go(&mut c, 2, top - 5.0);
+                go(&mut c, 2, top + 5.0);
+                c.handle(Command::FindStockContinue);
+            }
+            if s.mode == Mode::Idle && s.log.iter().any(|l| l.contains("Program finished")) {
+                break;
+            }
+            assert!(t < 4000.0, "still running after {t:.0}s: {:?}", s.log);
+        }
+        let s = c.snapshot();
+        for l in s.log.iter().filter(|l| l.contains("Stock found") || l.contains("touched off") || l.starts_with("Warning")) {
+            println!("{l}");
+        }
+        println!("{path}: finished after {t:.0} s simulated, tool changes {changes:?}, work offset {:?}", s.work_offsets[0]);
+    }
 }

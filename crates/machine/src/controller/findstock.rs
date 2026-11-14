@@ -211,13 +211,15 @@ impl Controller {
         }
         self.use_z_reference(STOCK_REFERENCE);
         self.set_work_axis(2, top, cz);
+        let rel = setter_top - cz;
         self.report(format!(
             "Stock found: {summary}, centre machine X{} Y{}, top Z{}; tools are now zeroed on the stock top \
-             (setter top {} above it)",
+             (the setter's top is {} mm {} it)",
             fmt(centre[0]),
             fmt(centre[1]),
             fmt(top),
-            fmt(setter_top - cz)
+            fmt(rel.abs()),
+            if rel >= 0.0 { "above" } else { "below" }
         ));
         Ok(steps)
     }
