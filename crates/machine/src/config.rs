@@ -99,10 +99,15 @@ pub struct ToolChangeSettings {
     /// Machine X to change tools at, used only with `move_x`.
     pub x: f64,
     /// Machine Y to change tools at, so the spindle is easy to reach. None:
-    /// the bed all the way back, just short of the Y home switch (see `change_y`).
+    /// the tool setter's Y (see `change_y`).
     pub y: Option<f64>,
     /// Also move X to `x`. Off: X stays where it is and only the bed moves.
     pub move_x: bool,
+    /// Move X to the middle of its travel (`x_travel` from its home end);
+    /// takes the place of `x` and `move_x`.
+    pub centre_x: bool,
+    /// How far X travels from its home switch, mm.
+    pub x_travel: f64,
     /// Lowest machine Z to travel and change tools at; Z is raised to it, never lowered.
     pub z: f64,
     /// Go back to where the tool change started, with the spindle and coolant as they were.
@@ -111,9 +116,21 @@ pub struct ToolChangeSettings {
 
 impl Default for ToolChangeSettings {
     fn default() -> Self {
-        // Top of Z, bed all the way back.
+        // Top of Z, the bed at the tool setter's Y.
         let setter = crate::probing::ToolSetter::default();
-        ToolChangeSettings { guided: true, x: setter.x, y: None, move_x: false, z: 0.0, return_to_start: true }
+        // X travel 343 mm: the DMC2's from the CAD (spindle x -123.7 to 219.3). Its
+        // configured soft limits (Mach3's) don't contain the X home position, so
+        // they can't give the middle.
+        ToolChangeSettings {
+            guided: true,
+            x: setter.x,
+            y: None,
+            move_x: false,
+            centre_x: true,
+            x_travel: 343.0,
+            z: 0.0,
+            return_to_start: true,
+        }
     }
 }
 
@@ -187,17 +204,34 @@ impl MachineConfig {
         }
     }
 
-    /// Machine Y the tool change moves the bed to. On the DMC2, Y+ moves the
-    /// bed back and Y homes at that end, so by default it's the home position
-    /// less a little clearance off the switch.
-    pub fn change_y(&self) -> f64 {
-        const CLEARANCE: f64 = 5.0;
-        let y = &self.axes[1];
-        self.tool_change.y.unwrap_or(if y.home_positive {
-            y.home_position - CLEARANCE
+    /// Machine X the tool change moves to, if it moves X: by default the
+    /// middle of X's travel, so the spindle is easy to reach.
+    pub fn change_x(&self) -> Option<f64> {
+        let t = &self.tool_change;
+        let x = &self.axes[0];
+        let want = if t.centre_x {
+            let half = t.x_travel.abs() / 2.0;
+            if x.home_positive { x.home_position - half } else { x.home_position + half }
+        } else if t.move_x {
+            t.x
         } else {
-            y.home_position + CLEARANCE
-        })
+            return None;
+        };
+        // Never past the configured soft limits, nor beyond the home switch: a
+        // wrong travel or sign must not drive X into its end.
+        let (mut lo, mut hi) = (x.soft_min.min(x.soft_max), x.soft_max.max(x.soft_min));
+        if x.home_positive {
+            hi = hi.min(x.home_position);
+        } else {
+            lo = lo.max(x.home_position);
+        }
+        Some(if lo <= hi { want.clamp(lo, hi) } else { x.home_position })
+    }
+
+    /// Machine Y the tool change moves the bed to: by default the tool
+    /// setter's Y (Jonas: that puts the bed where the spindle is easy to reach).
+    pub fn change_y(&self) -> f64 {
+        self.tool_change.y.unwrap_or(self.probing.setter.y)
     }
 
     pub fn to_steps(&self, pos: &Axes) -> [i64; 6] {
@@ -268,7 +302,7 @@ impl MachineConfig {
             if t.guided {
                 let z = t.z.max(self.axes[2].soft_min);
                 // Without move_x, X stays wherever it is.
-                let x = if t.move_x { t.x } else { self.axes[0].soft_min };
+                let x = self.change_x().unwrap_or(self.axes[0].soft_min);
                 inside("tool change position", [x, self.change_y(), z])?;
             }
             let st = &p.setter;
