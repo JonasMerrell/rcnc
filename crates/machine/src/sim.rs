@@ -94,7 +94,8 @@ pub struct Simulator {
     /// Force the probe input active (for manual probe tests from the UI).
     pub probe_override: bool,
     pub estop_pressed: bool,
-    /// Ignore the stop pin of single-axis moves (a board or pin setting that doesn't stop probes).
+    /// Ignore the probe as the stop pin of single-axis moves (a board or pin
+    /// setting that doesn't stop probes); home switches still stop homing.
     pub ignore_stop_pin: bool,
 }
 
@@ -260,7 +261,8 @@ impl Simulator {
         for _ in 0..n {
             self.step_axis(a.m.axis, dir);
             a.done += 1;
-            if let Some((input, want)) = a.m.stop_on.filter(|_| !self.ignore_stop_pin) {
+            let probe = self.config.as_ref().and_then(|c| c.probe);
+            if let Some((input, want)) = a.m.stop_on.filter(|(i, _)| !(self.ignore_stop_pin && Some(*i) == probe)) {
                 if self.input_active(&input) == want {
                     if Some(input) == self.config.as_ref().and_then(|c| c.probe) {
                         self.world.probe_z += self.world.touch_shifts.pop_front().unwrap_or(0);
