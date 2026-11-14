@@ -103,6 +103,11 @@ pub struct ToolChangeSettings {
     pub y: Option<f64>,
     /// Also move X to `x`. Off: X stays where it is and only the bed moves.
     pub move_x: bool,
+    /// Move X to the middle of its travel (`x_travel` from its home end);
+    /// takes the place of `x` and `move_x`.
+    pub centre_x: bool,
+    /// How far X travels from its home switch, mm.
+    pub x_travel: f64,
     /// Lowest machine Z to travel and change tools at; Z is raised to it, never lowered.
     pub z: f64,
     /// Go back to where the tool change started, with the spindle and coolant as they were.
@@ -113,7 +118,19 @@ impl Default for ToolChangeSettings {
     fn default() -> Self {
         // Top of Z, bed all the way back.
         let setter = crate::probing::ToolSetter::default();
-        ToolChangeSettings { guided: true, x: setter.x, y: None, move_x: false, z: 0.0, return_to_start: true }
+        // X travel 343 mm: the DMC2's from the CAD (spindle x -123.7 to 219.3). Its
+        // configured soft limits (Mach3's) don't contain the X home position, so
+        // they can't give the middle.
+        ToolChangeSettings {
+            guided: true,
+            x: setter.x,
+            y: None,
+            move_x: false,
+            centre_x: true,
+            x_travel: 343.0,
+            z: 0.0,
+            return_to_start: true,
+        }
     }
 }
 
@@ -184,6 +201,19 @@ impl MachineConfig {
             probing: Default::default(),
             tool_change_touch_off: true,
             tool_change: Default::default(),
+        }
+    }
+
+    /// Machine X the tool change moves to, if it moves X: by default the
+    /// middle of X's travel, so the spindle is easy to reach.
+    pub fn change_x(&self) -> Option<f64> {
+        let t = &self.tool_change;
+        let x = &self.axes[0];
+        if t.centre_x {
+            let half = t.x_travel.abs() / 2.0;
+            Some(if x.home_positive { x.home_position - half } else { x.home_position + half })
+        } else {
+            t.move_x.then_some(t.x)
         }
     }
 
@@ -268,7 +298,7 @@ impl MachineConfig {
             if t.guided {
                 let z = t.z.max(self.axes[2].soft_min);
                 // Without move_x, X stays wherever it is.
-                let x = if t.move_x { t.x } else { self.axes[0].soft_min };
+                let x = self.change_x().unwrap_or(self.axes[0].soft_min);
                 inside("tool change position", [x, self.change_y(), z])?;
             }
             let st = &p.setter;

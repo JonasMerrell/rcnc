@@ -199,11 +199,18 @@ impl App {
                     changed = true;
                 }
                 changed |= labelled(ui, "Safe Z", &mut t.z, 0.5, " mm");
-                ui.label("Move X too");
-                changed |= ui.checkbox(&mut t.move_x, "").changed();
+                ui.label("X to the middle");
+                changed |= ui.checkbox(&mut t.centre_x, "").changed();
                 ui.end_row();
-                if t.move_x {
-                    changed |= labelled(ui, "Change X", &mut t.x, 0.5, " mm");
+                if t.centre_x {
+                    changed |= labelled(ui, "X travel", &mut t.x_travel, 1.0, " mm");
+                } else {
+                    ui.label("Move X too");
+                    changed |= ui.checkbox(&mut t.move_x, "").changed();
+                    ui.end_row();
+                    if t.move_x {
+                        changed |= labelled(ui, "Change X", &mut t.x, 0.5, " mm");
+                    }
                 }
             });
             ui.horizontal(|ui| {

@@ -55,7 +55,8 @@ impl Controller {
     pub(super) fn start_tool_change(&mut self, tool: u32) {
         let tc = self.config.tool_change.clone();
         // The change position is in machine coordinates: they mean nothing unhomed.
-        if !(self.homed[1] && self.homed[2]) {
+        let change_x = self.config.change_x();
+        if !(self.homed[1] && self.homed[2] && (change_x.is_none() || self.homed[0])) {
             return self.raise("Home the machine before a tool change: its position is in machine coordinates");
         }
         let change_y = self.config.change_y();
@@ -73,10 +74,10 @@ impl Controller {
         if spinning {
             steps.push_back(Step::Wait(self.config.spindle_spin_down));
         }
-        // Z only ever goes up: to the safe height first, then the bed back.
+        // Z only ever goes up: to the safe height first, then X and the bed back.
         steps.push_back(to(2, tc.z.max(start[2])));
-        if tc.move_x {
-            steps.push_back(to(0, tc.x));
+        if let Some(x) = change_x {
+            steps.push_back(to(0, x));
         }
         steps.push_back(to(1, change_y));
         steps.push_back(Step::Then(Box::new(move |c, _| {
