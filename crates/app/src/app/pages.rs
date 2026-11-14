@@ -104,6 +104,37 @@ impl App {
                             )
                             .changed();
                     });
+                    // What the tool change window draws, or the photo it shows instead.
+                    ui.horizontal(|ui| {
+                        ui.add_space(tw + ui.spacing().item_spacing.x);
+                        egui::ComboBox::from_id_salt(("kind", *n))
+                            .selected_text(t.kind.name())
+                            .width(130.0)
+                            .show_ui(ui, |ui| {
+                                for k in gcode::ToolKind::ALL {
+                                    changed |= ui.selectable_value(&mut t.kind, k, k.name()).changed();
+                                }
+                            });
+                        ui.label(RichText::new("Flutes").color(MUTED));
+                        changed |= ui.add(DragValue::new(&mut t.flute_length).speed(0.1).range(0.0..=500.0).suffix(" mm")).changed();
+                        ui.label(RichText::new("Stick out").color(MUTED));
+                        changed |= ui.add(DragValue::new(&mut t.stickout).speed(0.1).range(0.0..=500.0).suffix(" mm")).changed();
+                    });
+                    ui.horizontal(|ui| {
+                        ui.add_space(tw + ui.spacing().item_spacing.x);
+                        let photo = if t.image.is_empty() { format!("Photo: tools/T{n}.png if there is one") } else { format!("Photo: {}", t.image) };
+                        ui.label(RichText::new(photo).size(12.0).color(MUTED));
+                        if ui.small_button("Pick…").clicked() {
+                            if let Some(path) = rfd::FileDialog::new().add_filter("Image", &["png", "jpg", "jpeg"]).pick_file() {
+                                t.image = path.display().to_string();
+                                changed = true;
+                            }
+                        }
+                        if !t.image.is_empty() && ui.small_button("Clear").clicked() {
+                            t.image.clear();
+                            changed = true;
+                        }
+                    });
                     ui.add_space(4.0);
                     if remove {
                         self.machine.send(Command::SetTool(*n, None));
@@ -152,27 +183,52 @@ impl App {
         let mut changed = false;
         let t = &mut c.tool_change;
         changed |= ui
-            .checkbox(&mut t.guided, "Guided: go to the change position, measure, come back")
+            .checkbox(&mut t.guided, "Guided: raise Z, move the bed back, measure, come back")
             .changed();
         ui.add_enabled_ui(t.guided, |ui| {
+            if !t.position_set {
+                ui.label(
+                    RichText::new(
+                        "Change position not set yet: raise Z, jog the bed all the way back (leave a few mm), \
+                         then press Use the current position.",
+                    )
+                    .color(AMBER),
+                );
+            }
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             egui::Grid::new("tool-change").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                changed |= labelled(ui, "Change X", &mut t.x, 0.5, " mm");
-                changed |= labelled(ui, "Change Y", &mut t.y, 0.5, " mm");
+                let mut moved = labelled(ui, "Change Y (bed back)", &mut t.y, 0.5, " mm");
                 changed |= labelled(ui, "Safe Z", &mut t.z, 0.5, " mm");
+                ui.label("Move X too");
+                changed |= ui.checkbox(&mut t.move_x, "").changed();
+                ui.end_row();
+                if t.move_x {
+                    moved |= labelled(ui, "Change X", &mut t.x, 0.5, " mm");
+                }
+                if moved {
+                    t.position_set = true;
+                    changed = true;
+                }
             });
             if ui
-                .button("Use the current X/Y")
-                .on_hover_text("Jog to where changing tools is easiest, then press this")
+                .button("Use the current position")
+                .on_hover_text("Raise Z and jog the bed back to where the spindle is easiest to reach, then press this")
                 .clicked()
             {
                 t.x = s.machine[0];
                 t.y = s.machine[1];
+                t.position_set = true;
                 changed = true;
             }
             changed |= ui.checkbox(&mut t.return_to_start, "Go back to where the change started").changed();
         });
         changed |= ui.checkbox(&mut c.tool_change_touch_off, "Measure the new tool on the tool setter").changed();
+        ui.horizontal(|ui| {
+            ui.label("It's measured twice; the readings may differ by");
+            changed |= ui
+                .add(DragValue::new(&mut c.probing.setter.repeat_tolerance).speed(0.001).range(0.001..=1.0).max_decimals(3).suffix(" mm"))
+                .changed();
+        });
         ui.label(
             RichText::new("Positions are machine coordinates. The spindle stops during the change and restarts on the way back.")
                 .size(12.0)

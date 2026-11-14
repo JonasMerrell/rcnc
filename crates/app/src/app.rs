@@ -74,6 +74,8 @@ pub struct App {
     file_checked: f64,
     /// The tool change window's "measure" checkbox.
     tc_measure: Option<bool>,
+    /// The tool change window's photo: tool, its image setting, the file found.
+    tc_photo: Option<(u32, String, Option<std::path::PathBuf>)>,
     view: View,
     sheets: Arc<Sheets>,
     /// The loaded program's setup sheet and its modification time.
@@ -98,6 +100,7 @@ impl App {
         web_data: std::path::PathBuf,
     ) -> Self {
         apply_theme(&cc.egui_ctx);
+        egui_extras::install_image_loaders(&cc.egui_ctx);
         machine.send(Command::Connect);
         let snap = machine.snapshot();
         App {
@@ -122,6 +125,7 @@ impl App {
             program_file: None,
             file_checked: 0.0,
             tc_measure: None,
+            tc_photo: None,
             view: View::Toolpath,
             sheets,
             sheet: None,

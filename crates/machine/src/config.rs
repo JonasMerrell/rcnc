@@ -93,23 +93,40 @@ pub struct MachineConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ToolChangeSettings {
-    /// Stop the spindle, move to the change position, wait for the new tool,
+    /// Stop the spindle, raise Z, move the bed back, wait for the new tool,
     /// measure it and go back. Off: just pause at M6, like Mach3.
     pub guided: bool,
-    /// Machine X/Y to change tools at.
+    /// Machine X to change tools at, used only with `move_x`.
     pub x: f64,
+    /// Machine Y with the bed all the way back, so the spindle is easy to reach.
     pub y: f64,
+    /// Also move X to `x`. Off: X stays where it is and only the bed moves.
+    pub move_x: bool,
     /// Lowest machine Z to travel and change tools at; Z is raised to it, never lowered.
     pub z: f64,
+    /// The change position has been set on this machine. The guided change
+    /// won't move until it is: the default Y is a guess at the end of travel.
+    pub position_set: bool,
     /// Go back to where the tool change started, with the spindle and coolant as they were.
     pub return_to_start: bool,
 }
 
 impl Default for ToolChangeSettings {
     fn default() -> Self {
-        // Next to the tool setter, at the top of Z.
+        // Top of Z, bed all the way back. Assumes Mach3's convention that Y+
+        // moves the tool towards the back, which moves the table forward, so
+        // the bed is furthest back at the lowest Y (Mach3's soft limit 0).
+        // Not measured yet: `position_set` keeps it from being used unchecked.
         let setter = crate::probing::ToolSetter::default();
-        ToolChangeSettings { guided: true, x: setter.x, y: setter.y, z: 0.0, return_to_start: true }
+        ToolChangeSettings {
+            guided: true,
+            x: setter.x,
+            y: 5.0,
+            move_x: false,
+            z: 0.0,
+            position_set: false,
+            return_to_start: true,
+        }
     }
 }
 
@@ -229,7 +246,12 @@ impl MachineConfig {
             return Err("jog speed must be between 0 and 100%".into());
         }
         let p = &self.probing;
-        for (name, v) in [("probe search feed", p.fast_feed), ("probe latch feed", p.slow_feed), ("probe travel feed", p.travel_feed)] {
+        for (name, v) in [
+            ("probe search feed", p.fast_feed),
+            ("probe latch feed", p.slow_feed),
+            ("probe travel feed", p.travel_feed),
+            ("tool setter repeat tolerance", p.setter.repeat_tolerance),
+        ] {
             positive(name, v)?;
         }
         if self.soft_limits {
@@ -245,7 +267,9 @@ impl MachineConfig {
             let t = &self.tool_change;
             if t.guided {
                 let z = t.z.max(self.axes[2].soft_min);
-                inside("tool change position", [t.x, t.y, z])?;
+                // Without move_x, X stays wherever it is.
+                let x = if t.move_x { t.x } else { self.axes[0].soft_min };
+                inside("tool change position", [x, t.y, z])?;
             }
             let st = &p.setter;
             inside("tool setter", [st.x, st.y, st.travel_z.min(self.axes[2].soft_max)])?;

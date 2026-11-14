@@ -72,6 +72,9 @@ pub struct SimWorld {
     /// A block on the table the probe can touch from the side or above:
     /// X and Y ranges and top Z, physical steps.
     pub block: Option<([i64; 2], [i64; 2], i64)>,
+    /// Steps added to `probe_z` after each move that stops on the probe, in
+    /// order: a setter that doesn't read the same twice.
+    pub touch_shifts: VecDeque<i64>,
 }
 
 pub struct Simulator {
@@ -99,6 +102,7 @@ impl Simulator {
             travel: [72_000, 52_000, 33_000, 0, 0, 0],
             probe_z: 6_000,
             block: None,
+            touch_shifts: VecDeque::new(),
         };
         let physical = [36_000, 26_000, 30_000, 0, 0, 0];
         let last_time = clock.now();
@@ -216,6 +220,9 @@ impl Simulator {
             a.done += 1;
             if let Some((input, want)) = a.m.stop_on {
                 if self.input_active(&input) == want {
+                    if Some(input) == self.config.as_ref().and_then(|c| c.probe) {
+                        self.world.probe_z += self.world.touch_shifts.pop_front().unwrap_or(0);
+                    }
                     self.active = None;
                     return;
                 }

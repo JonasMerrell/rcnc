@@ -2329,7 +2329,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let (mut c, clock) = setup();
         c.persist_to(dir.clone());
-        c.handle(Command::SetTool(4, Some(Tool { length: 12.5, diameter: 6.0, description: "6 mm".into() })));
+        c.handle(Command::SetTool(4, Some(Tool { length: 12.5, diameter: 6.0, description: "6 mm".into(), ..Default::default() })));
         c.handle(Command::Mdi("G10 L2 P2 X10 Y20 Z-30".into()));
         run_until_idle(&mut c, &clock, 1.0);
         c.handle(Command::Mdi("G55".into()));
@@ -2352,8 +2352,13 @@ mod tests {
 
     /// Simulator with a 60 mm block, X/Y 100..160 mm, top at Z 100, probe at X180 Y130 Z103.
     fn probing_setup() -> (Controller, Arc<ManualClock>) {
+        probing_setup_with(|_| {})
+    }
+
+    fn probing_setup_with(world: impl FnOnce(&mut Simulator)) -> (Controller, Arc<ManualClock>) {
         let clock = Arc::new(ManualClock::default());
         let mut sim = Simulator::new(clock.clone());
+        world(&mut sim);
         sim.world.block = Some(([20_000, 32_000], [20_000, 32_000], 20_000));
         let mut c = Controller::new(MachineConfig::dmc2(), Box::new(sim), clock.clone());
         c.handle(Command::Connect);
@@ -2585,10 +2590,22 @@ mod tests {
     }
 
     fn guided_setup() -> (Controller, Arc<ManualClock>) {
-        let (mut c, clock) = probing_setup();
+        guided_setup_with(|_| {}, |t| t.move_x = true)
+    }
+
+    /// A program with a tool change, run up to the operator wait (spindle
+    /// down, Z up, bed back), on a sim and tool change settings changed by
+    /// `world` and `settings`.
+    fn guided_setup_with(
+        world: impl FnOnce(&mut Simulator),
+        settings: impl FnOnce(&mut crate::config::ToolChangeSettings),
+    ) -> (Controller, Arc<ManualClock>) {
+        let (mut c, clock) = probing_setup_with(world);
         let mut config = MachineConfig::dmc2();
         config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, ..Default::default() };
-        config.tool_change = crate::config::ToolChangeSettings { x: 10.0, y: 20.0, z: 120.0, ..Default::default() };
+        config.tool_change =
+            crate::config::ToolChangeSettings { x: 10.0, y: 20.0, z: 120.0, position_set: true, ..Default::default() };
+        settings(&mut config.tool_change);
         c.handle(Command::SetConfig(Box::new(config)));
         c.handle(Command::Mdi("G53 G0 X130 Y130 Z110".into()));
         run_until_idle(&mut c, &clock, 5.0);
@@ -2665,6 +2682,117 @@ mod tests {
         let s = c.snapshot();
         assert_eq!(s.mode, Mode::Idle);
         assert!(s.tool_change.is_none());
+    }
+
+    /// Run until the tool change is at `stage`, or over.
+    fn run_tool_change_to(c: &mut Controller, clock: &ManualClock, stage: Option<ToolChangeStage>) {
+        for _ in 0..80_000 {
+            clock.advance(0.005);
+            c.update();
+            if c.snapshot().tool_change.map(|t| t.stage) == stage {
+                return;
+            }
+        }
+        panic!("tool change never got to {stage:?}: {:?}", c.snapshot().log);
+    }
+
+    #[test]
+    fn tool_change_raises_z_then_moves_only_the_bed_back() {
+        let (mut c, clock) = probing_setup();
+        let mut config = MachineConfig::dmc2();
+        config.tool_change =
+            crate::config::ToolChangeSettings { x: 10.0, y: 20.0, z: 120.0, position_set: true, ..Default::default() };
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.handle(Command::Mdi("G53 G0 X130 Y130 Z110".into()));
+        run_until_idle(&mut c, &clock, 5.0);
+        c.handle(Command::Mdi("T2 M6".into()));
+        let mut path = Vec::new();
+        for _ in 0..20_000 {
+            clock.advance(0.005);
+            c.update();
+            let s = c.snapshot();
+            path.push(s.machine);
+            if s.tool_change.is_some_and(|t| t.stage == ToolChangeStage::Loading) {
+                break;
+            }
+        }
+        let end = *path.last().unwrap();
+        assert!(close(end[0], 130.0) && close(end[1], 20.0) && close(end[2], 120.0), "{end:?}");
+        // X never moves, and Y only once Z is all the way up.
+        for p in &path {
+            assert!(close(p[0], 130.0), "X moved: {p:?}");
+            if !close(p[1], 130.0) {
+                assert!(close(p[2], 120.0), "Y moved before Z was up: {p:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn tool_change_needs_its_position_set() {
+        let (mut c, clock) = probing_setup();
+        let mut config = MachineConfig::dmc2();
+        config.tool_change.position_set = false;
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.handle(Command::Mdi("T2 M6".into()));
+        tick(&mut c, &clock, 5);
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Alarm);
+        assert!(s.alarm.as_deref().is_some_and(|a| a.contains("tool change position")), "{:?}", s.alarm);
+    }
+
+    #[test]
+    fn tool_change_measures_twice_and_uses_the_average() {
+        // The second reading is 2 steps (0.01 mm) higher: inside the 0.02 mm limit.
+        let (mut c, clock) = guided_setup_with(|sim| sim.world.touch_shifts = [0, 2].into(), |_| {});
+        c.handle(Command::ToolChangeContinue { measure: Some(true) });
+        run_tool_change_to(&mut c, &clock, None);
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Running, "{:?}", s.log);
+        assert!(s.log.iter().any(|l| l.contains("Tool touched off")), "{:?}", s.log);
+        // Touches at machine Z30 and Z30.01: the average reads 13.31 on the setter.
+        assert!(close(s.machine[2] - s.work[2], 30.005 - 13.31), "{:?} {:?}", s.machine, s.work);
+    }
+
+    #[test]
+    fn tool_change_pauses_when_the_readings_disagree_and_measures_again() {
+        // The second reading is 20 steps (0.1 mm) higher, then the setter holds still.
+        let (mut c, clock) = guided_setup_with(|sim| sim.world.touch_shifts = [0, 20].into(), |_| {});
+        let s = c.snapshot();
+        let offset_before = s.machine[2] - s.work[2];
+        c.handle(Command::ToolChangeContinue { measure: Some(true) });
+        run_tool_change_to(&mut c, &clock, Some(ToolChangeStage::Mismatch));
+        // Let it lift off the setter.
+        tick(&mut c, &clock, 400);
+        let s = c.snapshot();
+        let t = s.tool_change.clone().unwrap();
+        let problem = t.problem.expect("a reason for the pause");
+        assert!(problem.contains("differ by 0.100 mm (limit 0.020 mm)"), "{problem}");
+        assert!(problem.contains("setter is clean"), "{problem}");
+        assert!(close(s.machine[2], 120.0), "lifted off the setter: {:?}", s.machine);
+        assert!(close(s.machine[2] - s.work[2], offset_before), "work Z untouched: {:?}", s.work);
+        assert!(!s.log.iter().any(|l| l.contains("Tool touched off")), "{:?}", s.log);
+
+        // Measure again (Cycle Start works too): this time both readings agree.
+        c.handle(Command::CycleStart);
+        run_tool_change_to(&mut c, &clock, None);
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Running, "{:?}", s.log);
+        assert!(s.log.iter().any(|l| l.contains("Measuring the tool again")), "{:?}", s.log);
+        assert!(s.log.iter().any(|l| l.contains("Tool touched off")), "{:?}", s.log);
+        // The setter now sits 0.1 mm higher: machine Z30.1 reads 13.31.
+        assert!(close(s.machine[2] - s.work[2], 30.1 - 13.31), "{:?} {:?}", s.machine, s.work);
+    }
+
+    #[test]
+    fn a_mismatch_can_be_cancelled() {
+        let (mut c, clock) = guided_setup_with(|sim| sim.world.touch_shifts = [0, 20].into(), |_| {});
+        c.handle(Command::ToolChangeContinue { measure: Some(true) });
+        run_tool_change_to(&mut c, &clock, Some(ToolChangeStage::Mismatch));
+        tick(&mut c, &clock, 400);
+        c.handle(Command::Stop);
+        let s = c.snapshot();
+        assert!(s.tool_change.is_none());
+        assert_ne!(s.mode, Mode::Running);
     }
 
     #[test]

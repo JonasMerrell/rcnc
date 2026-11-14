@@ -1,7 +1,8 @@
-//! Guided tool change at M6: stop the spindle, lift Z, move to the change
-//! position, wait for the operator to load the new tool, measure it on the
-//! tool setter, then go back to where the change started, with the tool tip
-//! at the same work height and the spindle and coolant as they were.
+//! Guided tool change at M6: stop the spindle, lift Z, move the bed back,
+//! wait for the operator to load the new tool, measure it twice on the tool
+//! setter (pausing if the two readings disagree), then go back to where the
+//! change started, with the tool tip at the same work height and the spindle
+//! and coolant as they were.
 
 use std::collections::VecDeque;
 
@@ -9,7 +10,7 @@ use gcode::Axes;
 
 use super::{Controller, Exec, Wait};
 use crate::backend::Outputs;
-use crate::probing::{self, ProbeJob, Routine, Step};
+use crate::probing::{self, ProbeSettings, Routine, Step};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolChangeStage {
@@ -19,6 +20,9 @@ pub enum ToolChangeStage {
     Loading,
     /// Measuring the new tool on the tool setter.
     Measuring,
+    /// The two readings on the setter disagreed: waiting for the operator to
+    /// check things and measure again.
+    Mismatch,
     /// Going back to where the tool change started.
     Returning,
 }
@@ -33,6 +37,8 @@ pub struct ToolChangeView {
     /// Whether the new tool will be measured, unless the operator says otherwise.
     pub measure: bool,
     pub return_to_start: bool,
+    /// Why the tool change is paused, at `Mismatch`.
+    pub problem: Option<String>,
 }
 
 pub(super) struct ToolChange {
@@ -47,8 +53,14 @@ impl Controller {
     /// Start a guided tool change from a running program or MDI. The machine
     /// is stopped (M6 waits for motion to finish).
     pub(super) fn start_tool_change(&mut self, tool: u32) {
-        self.sync_position();
         let tc = self.config.tool_change.clone();
+        if !tc.position_set {
+            return self.raise(
+                "Set the tool change position first: on the Tools tab, raise Z, jog the bed all the way back \
+                 and press Use the current position",
+            );
+        }
+        self.sync_position();
         let start = self.machine_position();
         let outputs = self.outputs.clone();
         let spinning = outputs.spindle_on;
@@ -62,8 +74,12 @@ impl Controller {
         if spinning {
             steps.push_back(Step::Wait(self.config.spindle_spin_down));
         }
-        // Z only ever goes up: to the safe height first, then over.
-        steps.extend([to(2, tc.z.max(start[2])), to(0, tc.x), to(1, tc.y)]);
+        // Z only ever goes up: to the safe height first, then the bed back.
+        steps.push_back(to(2, tc.z.max(start[2])));
+        if tc.move_x {
+            steps.push_back(to(0, tc.x));
+        }
+        steps.push_back(to(1, tc.y));
         steps.push_back(Step::Then(Box::new(move |c, _| {
             c.stage(ToolChangeStage::Loading);
             c.info(format!("Load tool {tool}, then press Continue (or Cycle Start)"));
@@ -75,8 +91,7 @@ impl Controller {
                 return Ok(vec![]);
             }
             c.stage(ToolChangeStage::Measuring);
-            let routine = probing::build(ProbeJob::ToolTouchOff, &c.config.probing, c.machine_position());
-            Ok(routine.steps.into())
+            Ok(measure_steps(&c.config.probing))
         })));
         steps.push_back(Step::Then(Box::new(move |c, _| c.tool_change_return())));
 
@@ -88,6 +103,7 @@ impl Controller {
                 stage: ToolChangeStage::Moving,
                 measure: self.config.tool_change_touch_off,
                 return_to_start: tc.return_to_start,
+                problem: None,
             },
             start,
             z_offset: self.interp.program_offset()[2],
@@ -109,10 +125,10 @@ impl Controller {
         }
     }
 
-    /// The operator has loaded the tool.
+    /// The operator has loaded the tool, or checked things after readings that disagreed.
     pub(super) fn tool_change_continue(&mut self, measure: Option<bool>) {
         let Some(t) = &mut self.tool_change else { return };
-        if !self.routine_waiting || t.view.stage != ToolChangeStage::Loading {
+        if !self.routine_waiting || !matches!(t.view.stage, ToolChangeStage::Loading | ToolChangeStage::Mismatch) {
             return;
         }
         if let Some(m) = measure {
@@ -120,6 +136,12 @@ impl Controller {
         }
         self.routine_waiting = false;
         self.routine_step();
+    }
+
+    fn set_problem(&mut self, problem: Option<String>) {
+        if let Some(t) = &mut self.tool_change {
+            t.view.problem = problem;
+        }
     }
 
     fn tool_change_return(&mut self) -> Result<Vec<Step>, String> {
@@ -174,4 +196,32 @@ impl Controller {
             Err(e) => self.raise(format!("Tool change failed: {e}")),
         }
     }
+}
+
+/// Measure the tool twice on the setter. If the readings agree, set work Z
+/// from their average; if not, lift off the setter and wait for the operator
+/// to check things, then measure again.
+fn measure_steps(s: &ProbeSettings) -> Vec<Step> {
+    let mut steps = probing::setter_steps(s);
+    let s = s.clone();
+    steps.push(Step::Then(Box::new(move |c, hits| match probing::setter_reading(&s, hits) {
+        Ok(hit) => Ok(probing::touch_off(c, &s, hit)),
+        Err(e) => {
+            c.info(format!("Tool change paused: {e}"));
+            c.stage(ToolChangeStage::Mismatch);
+            c.set_problem(Some(e));
+            let up = s.setter.travel_z.max(c.machine_position()[2]);
+            Ok(vec![
+                Step::MoveTo { axis: 2, to: up, feed: s.travel_feed, guarded: false },
+                Step::Operator,
+                Step::Then(Box::new(|c, _| {
+                    c.set_problem(None);
+                    c.stage(ToolChangeStage::Measuring);
+                    c.info("Measuring the tool again");
+                    Ok(measure_steps(&c.config.probing))
+                })),
+            ])
+        }
+    })));
+    steps
 }

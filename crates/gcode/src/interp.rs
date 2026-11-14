@@ -63,6 +63,65 @@ pub struct Tool {
     pub length: f64,
     pub diameter: f64,
     pub description: String,
+    /// Cutter shape, for the picture shown at a tool change.
+    pub kind: ToolKind,
+    /// Cutting length, 0 if not known.
+    pub flute_length: f64,
+    /// How far the tool sticks out of the collet, 0 if not known.
+    pub stickout: f64,
+    /// Photo shown at a tool change in place of the drawing, if set.
+    pub image: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolKind {
+    /// Guess from the description.
+    #[default]
+    Auto,
+    Flat,
+    Ball,
+    Bull,
+    Chamfer,
+    Drill,
+}
+
+impl ToolKind {
+    pub const ALL: [ToolKind; 6] =
+        [ToolKind::Auto, ToolKind::Flat, ToolKind::Ball, ToolKind::Bull, ToolKind::Chamfer, ToolKind::Drill];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ToolKind::Auto => "From description",
+            ToolKind::Flat => "Flat end mill",
+            ToolKind::Ball => "Ball end mill",
+            ToolKind::Bull => "Bull nose",
+            ToolKind::Chamfer => "Chamfer / V-bit",
+            ToolKind::Drill => "Drill",
+        }
+    }
+}
+
+impl Tool {
+    /// The tool's shape, guessed from its description when not set.
+    pub fn shape(&self) -> ToolKind {
+        if self.kind != ToolKind::Auto {
+            return self.kind;
+        }
+        let d = self.description.to_lowercase();
+        let has = |words: &[&str]| words.iter().any(|w| d.contains(w));
+        if has(&["ball"]) {
+            ToolKind::Ball
+        } else if has(&["bull", "corner rad", "radius"]) {
+            ToolKind::Bull
+        } else if has(&["chamfer", "v-bit", "vbit", "v bit", "engrav", "spot", "countersink"]) {
+            ToolKind::Chamfer
+        } else if has(&["drill"]) {
+            ToolKind::Drill
+        } else {
+            ToolKind::Flat
+        }
+    }
 }
 
 /// One machine operation. All positions are machine coordinates.
@@ -1339,6 +1398,17 @@ pub fn arc_length(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_shape_from_description() {
+        let t = |d: &str| Tool { description: d.into(), ..Default::default() }.shape();
+        assert_eq!(t("6 mm 2-flute flat"), ToolKind::Flat);
+        assert_eq!(t("1/8in Ball nose"), ToolKind::Ball);
+        assert_eq!(t("90deg V-bit"), ToolKind::Chamfer);
+        assert_eq!(t("5 mm drill"), ToolKind::Drill);
+        let set = Tool { kind: ToolKind::Bull, description: "drill".into(), ..Default::default() };
+        assert_eq!(set.shape(), ToolKind::Bull);
+    }
 
     fn run(program: &str) -> (Interpreter, Vec<Op>) {
         let mut i = Interpreter::new(program);

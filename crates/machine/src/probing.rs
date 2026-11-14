@@ -56,6 +56,8 @@ pub struct ToolSetter {
     pub offset: f64,
     /// Height to retract above the touch.
     pub retract: f64,
+    /// Every tool is measured twice; the two readings may differ by at most this.
+    pub repeat_tolerance: f64,
 }
 
 impl Default for ProbeSettings {
@@ -87,6 +89,7 @@ impl Default for ToolSetter {
             max_distance: 100.0,
             offset: 13.31,
             retract: 10.0,
+            repeat_tolerance: 0.02,
         }
     }
 }
@@ -160,6 +163,44 @@ fn touch(s: &ProbeSettings, axis: usize, positive: bool, distance: f64) -> Vec<S
     ]
 }
 
+/// Go to the tool setter and measure the tool twice: a fast search, then
+/// two slow touches with a back-off between them. Records two touches.
+pub(crate) fn setter_steps(s: &ProbeSettings) -> Vec<Step> {
+    let t = &s.setter;
+    let mut steps = vec![guarded_to(s, 2, t.travel_z), guarded_to(s, 0, t.x), guarded_to(s, 1, t.y)];
+    steps.extend(touch(s, 2, false, t.max_distance));
+    steps.push(Step::Probe { axis: 2, by: -2.0 * s.latch, feed: s.slow_feed, record: true });
+    steps.push(Step::MoveBy { axis: 2, by: s.latch, feed: s.fast_feed, guarded: false });
+    steps
+}
+
+/// The tool's touch on the setter from the last two readings, or why they can't be trusted.
+pub(crate) fn setter_reading(s: &ProbeSettings, hits: &[f64]) -> Result<f64, String> {
+    let [a, b] = hits[hits.len().saturating_sub(2)..] else {
+        return Err("the tool setter wasn't touched twice".into());
+    };
+    let limit = s.setter.repeat_tolerance;
+    if (a - b).abs() > limit + 1e-9 {
+        return Err(format!(
+            "Tool length readings differ by {} mm (limit {} mm). Check that the setter is clean, \
+             the tool is tight in the collet and nothing is loose.",
+            fmt((a - b).abs()),
+            fmt(limit)
+        ));
+    }
+    Ok((a + b) / 2.0)
+}
+
+/// Set work Z from a touch on the setter at machine Z `hit`, then retract.
+pub(crate) fn touch_off(c: &mut Controller, s: &ProbeSettings, hit: f64) -> Vec<Step> {
+    let t = &s.setter;
+    c.set_work_axis(2, hit, t.offset);
+    c.report(format!("Tool touched off: Z zero set, setter top at Z{}", fmt(t.offset)));
+    // Retract, but no higher than the travel height.
+    let to = (hit + t.retract).min(t.travel_z.max(hit));
+    vec![Step::MoveTo { axis: 2, to, feed: s.travel_feed, guarded: false }]
+}
+
 fn guarded_by(s: &ProbeSettings, axis: usize, by: f64) -> Step {
     Step::MoveBy { axis, by, feed: s.travel_feed, guarded: true }
 }
@@ -192,20 +233,9 @@ pub(crate) fn build(job: ProbeJob, s: &ProbeSettings, start: [f64; 6]) -> Routin
     let auto = s.auto_zero;
     match job {
         ProbeJob::ToolTouchOff => {
-            let t = s.setter.clone();
-            steps.push(guarded_to(s, 2, t.travel_z));
-            steps.push(guarded_to(s, 0, t.x));
-            steps.push(guarded_to(s, 1, t.y));
-            steps.extend(touch(s, 2, false, t.max_distance));
-            let feed = s.travel_feed;
-            steps.push(then(move |c, hits| {
-                let hit = hits[0];
-                c.set_work_axis(2, hit, t.offset);
-                c.report(format!("Tool touched off: Z zero set, setter top at Z{}", fmt(t.offset)));
-                // Retract, but no higher than the travel height.
-                let to = (hit + t.retract).min(t.travel_z.max(hit));
-                Ok(vec![Step::MoveTo { axis: 2, to, feed, guarded: false }])
-            }));
+            steps.extend(setter_steps(s));
+            let s2 = s.clone();
+            steps.push(then(move |c, hits| Ok(touch_off(c, &s2, setter_reading(&s2, hits)?))));
         }
         ProbeJob::ZSurface => {
             steps.extend(touch(s, 2, false, s.max_distance));

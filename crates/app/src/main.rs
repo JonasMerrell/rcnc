@@ -132,5 +132,6 @@ fn sim_config() -> MachineConfig {
     c.tool_change.x = 10.0;
     c.tool_change.y = 20.0;
     c.tool_change.z = 120.0;
+    c.tool_change.position_set = true;
     c
 }
