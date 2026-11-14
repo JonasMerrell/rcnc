@@ -375,6 +375,7 @@ impl App {
                     tolerance: None,
                     depth: None,
                     keep_z: false,
+                    jaw: None,
                 }));
             }
             if !probe_in {

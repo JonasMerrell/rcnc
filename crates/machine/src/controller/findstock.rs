@@ -206,6 +206,35 @@ impl Controller {
         let [cx, cy, cz] = req.top_centre;
         self.set_work_axis(0, centre[0], cx);
         self.set_work_axis(1, centre[1], cy);
+        if let Some((side, jaw_z)) = req.jaw {
+            // X from the fixed jaw: touch its face beside the stock's end, outside the stock in Y
+            let s = self.config.probing.clone();
+            let fs = s.find_stock.clone();
+            let r = s.stylus_diameter / 2.0;
+            let face = centre[0] + side * size[0] / 2.0;
+            let start_x = face - side * (fs.clearance + r);
+            let y_out = centre[1] + size[1] / 2.0 + fs.clearance + r;
+            let z = self.work_to_machine(2, jaw_z);
+            let above = top + fs.z_clearance;
+            steps.push(probing::guarded_to(&s, 2, above));
+            steps.push(probing::guarded_to(&s, 1, y_out));
+            steps.push(probing::guarded_to(&s, 0, start_x));
+            steps.push(probing::guarded_to(&s, 2, z));
+            steps.extend(probing::touch(&s, 0, side > 0.0, 2.0 * fs.clearance));
+            steps.push(probing::guarded_to(&s, 2, above));
+            let jaw_work = cx + side * req.size[0] / 2.0;
+            steps.push(Step::Then(Box::new(move |c, hits| {
+                let jaw = hits[hits.len() - 1] + side * r;
+                c.set_work_axis(0, jaw, jaw_work);
+                c.report(format!(
+                    "Fixed jaw at machine X{}: work X set from it (the stock's face against it is X{}; the stock's own face was {} mm from it)",
+                    fmt(jaw),
+                    fmt(jaw_work),
+                    fmt((face - jaw) * -side)
+                ));
+                Ok(vec![probing::guarded_to(&c.config.probing.clone(), 1, centre[1]), probing::guarded_to(&c.config.probing.clone(), 0, jaw - side * req.size[0] / 2.0)])
+            })));
+        }
         if req.keep_z {
             // Z comes from the tools' measurements on a reference: the top is only checked
             let work_top = top - self.interp.program_offset()[2];
