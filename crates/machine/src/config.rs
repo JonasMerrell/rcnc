@@ -99,7 +99,7 @@ pub struct ToolChangeSettings {
     /// Machine X to change tools at, used only with `move_x`.
     pub x: f64,
     /// Machine Y to change tools at, so the spindle is easy to reach. None:
-    /// the bed all the way back, just short of the Y home switch (see `change_y`).
+    /// the tool setter's Y (see `change_y`).
     pub y: Option<f64>,
     /// Also move X to `x`. Off: X stays where it is and only the bed moves.
     pub move_x: bool,
@@ -116,7 +116,7 @@ pub struct ToolChangeSettings {
 
 impl Default for ToolChangeSettings {
     fn default() -> Self {
-        // Top of Z, bed all the way back.
+        // Top of Z, the bed at the tool setter's Y.
         let setter = crate::probing::ToolSetter::default();
         // X travel 343 mm: the DMC2's from the CAD (spindle x -123.7 to 219.3). Its
         // configured soft limits (Mach3's) don't contain the X home position, so
@@ -228,17 +228,10 @@ impl MachineConfig {
         Some(if lo <= hi { want.clamp(lo, hi) } else { x.home_position })
     }
 
-    /// Machine Y the tool change moves the bed to. On the DMC2, Y+ moves the
-    /// bed back and Y homes at that end, so by default it's the home position
-    /// less a little clearance off the switch.
+    /// Machine Y the tool change moves the bed to: by default the tool
+    /// setter's Y (Jonas: that puts the bed where the spindle is easy to reach).
     pub fn change_y(&self) -> f64 {
-        const CLEARANCE: f64 = 5.0;
-        let y = &self.axes[1];
-        self.tool_change.y.unwrap_or(if y.home_positive {
-            y.home_position - CLEARANCE
-        } else {
-            y.home_position + CLEARANCE
-        })
+        self.tool_change.y.unwrap_or(self.probing.setter.y)
     }
 
     pub fn to_steps(&self, pos: &Axes) -> [i64; 6] {
