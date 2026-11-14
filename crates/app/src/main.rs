@@ -97,7 +97,8 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("CNC Controller")
-            .with_inner_size([1440.0, 900.0])
+            // Small enough for a 1280 × 720 screen if Windows doesn't maximize it.
+            .with_inner_size([1180.0, 640.0])
             .with_min_inner_size([800.0, 480.0])
             .with_maximized(true),
         ..Default::default()

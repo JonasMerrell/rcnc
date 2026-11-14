@@ -350,6 +350,7 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        fit_to_window(ctx);
         self.snap = self.machine.snapshot();
         if self.snap.time != self.alive.0 {
             self.alive = (self.snap.time, std::time::Instant::now());
@@ -1139,6 +1140,21 @@ impl App {
                     });
             });
         });
+    }
+}
+
+/// The size the layout needs at full scale, in points.
+const LAYOUT_SIZE: Vec2 = Vec2::new(1200.0, 800.0);
+
+/// Shrink everything to fit a small window (a 1280 × 720 screen, or one Windows
+/// scales up), so no button ends up off its edge; full size when there is room.
+fn fit_to_window(ctx: &egui::Context) {
+    let zoom = ctx.zoom_factor();
+    // the window at zoom 1
+    let size = ctx.content_rect().size() * zoom;
+    let want = (size.x / LAYOUT_SIZE.x).min(size.y / LAYOUT_SIZE.y).clamp(0.6, 1.0);
+    if (want - zoom).abs() > 0.02 {
+        ctx.set_zoom_factor(want);
     }
 }
 
