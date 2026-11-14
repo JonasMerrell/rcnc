@@ -2807,6 +2807,25 @@ mod tests {
     }
 
     #[test]
+    fn homing_finds_the_switch_fast_then_again_slowly() {
+        let (mut c, clock, wire) = flaky_setup();
+        c.handle(Command::Home(Some(0)));
+        run_until_idle(&mut c, &clock, 60.0);
+        assert_eq!(c.mode(), Mode::Idle, "{:?}", c.snapshot().alarm);
+        let moves = wire.lock().unwrap().moves.clone();
+        let [seek, pulloff, latch, backoff, clear] = &moves[..] else { panic!("{moves:?}") };
+        let toward = c.config.axes[0].home_positive;
+        assert!(seek.positive == toward && seek.stop_on.is_some());
+        assert!(pulloff.positive != toward && pulloff.stop_on.is_none());
+        assert_eq!(pulloff.steps, 400, "2 mm at 200 steps/mm");
+        assert!(latch.positive == toward && latch.stop_on.is_some());
+        assert!((latch.velocity - seek.velocity * 0.1).abs() < 1e-9, "the second approach is slow");
+        assert!(backoff.positive != toward && backoff.velocity == latch.velocity);
+        assert!(clear.stop_on.is_none());
+        assert!((c.snapshot().machine[0] - -8.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn estop_forgets_homing() {
         let (mut c, clock) = setup();
         c.handle(Command::Home(None));
@@ -2942,24 +2961,5 @@ mod tests {
         c.recover("test");
         tick(&mut c, &clock, 400);
         assert_eq!(c.mode(), Mode::EStop);
-    }
-
-    #[test]
-    fn homing_finds_the_switch_fast_then_again_slowly() {
-        let (mut c, clock, wire) = flaky_setup();
-        c.handle(Command::Home(Some(0)));
-        run_until_idle(&mut c, &clock, 60.0);
-        assert_eq!(c.mode(), Mode::Idle, "{:?}", c.snapshot().alarm);
-        let moves = wire.lock().unwrap().moves.clone();
-        let [seek, pulloff, latch, backoff, clear] = &moves[..] else { panic!("{moves:?}") };
-        let toward = c.config.axes[0].home_positive;
-        assert!(seek.positive == toward && seek.stop_on.is_some());
-        assert!(pulloff.positive != toward && pulloff.stop_on.is_none());
-        assert_eq!(pulloff.steps, 400, "2 mm at 200 steps/mm");
-        assert!(latch.positive == toward && latch.stop_on.is_some());
-        assert!((latch.velocity - seek.velocity * 0.1).abs() < 1e-9, "the second approach is slow");
-        assert!(backoff.positive != toward && backoff.velocity == latch.velocity);
-        assert!(clear.stop_on.is_none());
-        assert!((c.snapshot().machine[0] - -8.0).abs() < 1e-9);
     }
 }
