@@ -72,6 +72,8 @@ pub struct SimWorld {
     /// A block on the table the probe can touch from the side or above:
     /// X and Y ranges and top Z, physical steps.
     pub block: Option<([i64; 2], [i64; 2], i64)>,
+    /// Round holes through the block: X/Y middle and radius, physical steps (X/Y share steps per mm).
+    pub bores: Vec<([i64; 2], i64)>,
     /// Steps added to `probe_z` after each move that stops on the probe, in
     /// order: a setter that doesn't read the same twice.
     pub touch_shifts: VecDeque<i64>,
@@ -144,6 +146,7 @@ impl Simulator {
             travel: [72_000, 52_000, 33_000, 0, 0, 0],
             probe_z: 6_000,
             block: None,
+            bores: Vec::new(),
             touch_shifts: VecDeque::new(),
         };
         let physical = [36_000, 26_000, 30_000, 0, 0, 0];
@@ -174,9 +177,14 @@ impl Simulator {
         let Some(c) = &self.config else { return false };
         if Some(*input) == c.probe {
             let p = &self.physical;
-            let in_block = self.world.block.is_some_and(|(x, y, top)| {
-                (x[0]..=x[1]).contains(&p[0]) && (y[0]..=y[1]).contains(&p[1]) && p[2] <= top
+            let in_bore = self.world.bores.iter().any(|(c, r)| {
+                let (dx, dy) = ((p[0] - c[0]) as f64, (p[1] - c[1]) as f64);
+                dx.hypot(dy) < *r as f64
             });
+            let in_block = !in_bore
+                && self.world.block.is_some_and(|(x, y, top)| {
+                    (x[0]..=x[1]).contains(&p[0]) && (y[0]..=y[1]).contains(&p[1]) && p[2] <= top
+                });
             return self.probe_override || p[2] <= self.world.probe_z || in_block;
         }
         if Some(*input) == c.estop {

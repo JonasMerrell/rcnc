@@ -374,6 +374,7 @@ impl App {
                     top_centre: [0.0; 3],
                     tolerance: None,
                     depth: None,
+                    keep_z: false,
                 }));
             }
             if !probe_in {
@@ -421,13 +422,28 @@ impl App {
             });
             ui.add_space(4.0);
             ui.label(RichText::new("Z zero references: the setter top's height above each surface").color(MUTED));
-            egui::Grid::new("z-references").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                for r in &mut t.references {
+            let idle = s.mode == Mode::Idle;
+            let mut calibrate = None;
+            egui::Grid::new("z-references").num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
+                for (i, r) in t.references.iter_mut().enumerate() {
                     changed |= ui.add(egui::TextEdit::singleline(&mut r.name).desired_width(90.0)).changed();
                     changed |= num(ui, &mut r.setter_top, 0.001, " mm");
+                    if ui.add_enabled(idle, Button::new("Calibrate (probe)")).on_hover_text("Touch the surface with the measured touch probe").clicked() {
+                        calibrate = Some((i, None));
+                    }
+                    if ui.add_enabled(idle, Button::new("Calibrate (gauge)")).on_hover_text("Jog a measured tool onto a gauge block standing on the surface").clicked() {
+                        calibrate = Some((i, Some(self.cal_gauge)));
+                    }
                     ui.end_row();
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Gauge block").color(MUTED));
+                num(ui, &mut self.cal_gauge, 0.01, " mm");
+            });
+            if let Some((reference, gauge)) = calibrate {
+                self.machine.send(Command::CalibrateZ { reference, gauge });
+            }
             if ui.button("Setter is under the spindle now").clicked() {
                 t.x = s.machine[0];
                 t.y = s.machine[1];
