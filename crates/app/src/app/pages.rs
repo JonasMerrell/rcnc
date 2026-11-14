@@ -499,6 +499,8 @@ impl App {
                 labelled(ui, "Spin-up wait", &mut draft.spindle_spin_up, 0.1, " s");
                 labelled(ui, "Spin-down wait", &mut draft.spindle_spin_down, 0.1, " s");
                 labelled(ui, "Corner tolerance", &mut draft.junction_deviation, 0.001, " mm");
+                labelled(ui, "Home pull-off", &mut draft.home_pulloff, 0.1, " mm");
+                labelled(ui, "Slow home speed", &mut draft.home_latch_speed, 0.01, " × seek");
             });
             ui.add_space(6.0);
             ui.label(

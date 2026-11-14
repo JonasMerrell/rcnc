@@ -185,8 +185,15 @@ struct Persist {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum HomePhase {
+    /// Fast, toward the switch.
     Seek,
+    /// Off the switch by `home_pulloff`.
+    PullOff,
+    /// Slowly back onto the switch: the precise touch.
+    Latch,
+    /// Slowly off it again until it releases.
     BackOff,
+    /// Away by `home_clearance`; the axis is then at its home position.
     Clear,
 }
 
@@ -1188,6 +1195,8 @@ impl Controller {
         let toward = a.home_positive;
         // No further than the axis is long: a broken switch wire must not drive it into its stop.
         let travel = travel_steps(a);
+        let slow = seek * self.config.home_latch_speed;
+        let pulloff = (self.config.home_pulloff * spu).round() as u32;
         let m = match self.home_phase {
             HomePhase::Seek => AxisMove {
                 axis,
@@ -1197,11 +1206,28 @@ impl Controller {
                 acceleration: a.acceleration * spu,
                 stop_on: Some((input, true)),
             },
+            HomePhase::PullOff => AxisMove {
+                axis,
+                positive: !toward,
+                steps: pulloff,
+                velocity: seek,
+                acceleration: a.acceleration * spu,
+                stop_on: None,
+            },
+            // Twice the pull-off: the switch must be found again well before that.
+            HomePhase::Latch => AxisMove {
+                axis,
+                positive: toward,
+                steps: pulloff.saturating_mul(2),
+                velocity: slow,
+                acceleration: a.acceleration * spu,
+                stop_on: Some((input, true)),
+            },
             HomePhase::BackOff => AxisMove {
                 axis,
                 positive: !toward,
                 steps: (20.0 * spu) as u32,
-                velocity: seek / 10.0,
+                velocity: slow,
                 acceleration: a.acceleration * spu,
                 stop_on: Some((input, false)),
             },
@@ -1232,6 +1258,24 @@ impl Controller {
             HomePhase::Seek => {
                 if !input.is_active(self.status.inputs) {
                     return self.raise(format!("{} home switch not found", AXIS_LETTERS[axis]));
+                }
+                self.home_phase = HomePhase::PullOff;
+            }
+            HomePhase::PullOff => {
+                if input.is_active(self.status.inputs) {
+                    return self.raise(format!(
+                        "{} home switch still on after backing off {} mm (raise the home pull-off)",
+                        AXIS_LETTERS[axis], self.config.home_pulloff
+                    ));
+                }
+                self.home_phase = HomePhase::Latch;
+            }
+            HomePhase::Latch => {
+                if !input.is_active(self.status.inputs) {
+                    return self.raise(format!(
+                        "{} home switch not found again on the slow approach",
+                        AXIS_LETTERS[axis]
+                    ));
                 }
                 self.home_phase = HomePhase::BackOff;
             }
@@ -3287,6 +3331,25 @@ mod tests {
         c.handle(Command::Home(Some(0)));
         let m = wire.lock().unwrap().moves.last().unwrap().clone();
         assert!(m.steps <= 510 * 200, "{}", m.steps);
+    }
+
+    #[test]
+    fn homing_finds_the_switch_fast_then_again_slowly() {
+        let (mut c, clock, wire) = flaky_setup();
+        c.handle(Command::Home(Some(0)));
+        run_until_idle(&mut c, &clock, 60.0);
+        assert_eq!(c.mode(), Mode::Idle, "{:?}", c.snapshot().alarm);
+        let moves = wire.lock().unwrap().moves.clone();
+        let [seek, pulloff, latch, backoff, clear] = &moves[..] else { panic!("{moves:?}") };
+        let toward = c.config.axes[0].home_positive;
+        assert!(seek.positive == toward && seek.stop_on.is_some());
+        assert!(pulloff.positive != toward && pulloff.stop_on.is_none());
+        assert_eq!(pulloff.steps, 400, "2 mm at 200 steps/mm");
+        assert!(latch.positive == toward && latch.stop_on.is_some());
+        assert!((latch.velocity - seek.velocity * 0.1).abs() < 1e-9, "the second approach is slow");
+        assert!(backoff.positive != toward && backoff.velocity == latch.velocity);
+        assert!(clear.stop_on.is_none());
+        assert!((c.snapshot().machine[0] - -8.0).abs() < 1e-9);
     }
 
     #[test]
