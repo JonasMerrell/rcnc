@@ -63,12 +63,23 @@ pub struct Generator {
     pub feed_override: f64,
     pub rapid_override: f64,
     pub hold: bool,
+    /// Path length past which no move can limit the speed now (see `tick`).
+    horizon: f64,
 }
 
 impl Generator {
     pub fn new(config: MachineConfig, period: f64, start: Axes) -> Self {
         let steps = config.to_steps(&start);
+        // Fastest the tool can go along any path, and the gentlest acceleration of any axis.
+        let v = config.axes.iter().map(|a| a.max_velocity.powi(2)).sum::<f64>().sqrt();
+        let a = config.axes.iter().map(|a| a.acceleration).fold(f64::INFINITY, f64::min);
+        let horizon = if v.is_finite() && a.is_finite() && a > 0.0 {
+            v * v / (2.0 * a) + 2.0 * v * period
+        } else {
+            f64::INFINITY
+        };
         Generator {
+            horizon,
             config,
             period,
             moves: VecDeque::new(),
@@ -212,6 +223,13 @@ impl Generator {
             if m.exit_limit == 0.0 {
                 break;
             }
+            // Further on, there is room to stop from any speed the axes
+            // allow: nothing beyond can lower the limit. Without this a long
+            // blended path (a big arc, a 3D finishing pass) is walked in
+            // full every 4 ms tick, and the controller falls behind the board.
+            if dist >= self.horizon {
+                break;
+            }
         }
         // A 0% override stops the move like a feed hold.
         let held = self.hold || self.speed_scale(front) <= 0.0;
@@ -287,6 +305,9 @@ fn junction_speed(a: &Axes, b: &Axes, accel: f64, deviation: f64) -> f64 {
     (accel * deviation * sin_half / (1.0 - sin_half)).sqrt()
 }
 
+/// Most chords one arc is split into; past that the chords get longer.
+pub const MAX_ARC_CHORDS: usize = 200_000;
+
 /// Expand an op into straight moves. Non-motion ops yield nothing.
 pub fn op_to_moves(op: &Op, from: &Axes, line: usize, tolerance: f64) -> Vec<Move> {
     match op {
@@ -320,7 +341,9 @@ pub fn op_to_moves(op: &Op, from: &Axes, line: usize, tolerance: f64) -> Vec<Mov
             } else {
                 sweep.abs()
             };
-            let count = ((sweep.abs() / max_step).ceil() as usize).max(1);
+            // Bounded, so a huge radius with a fine tolerance (or many
+            // turns) can't hold up the controller building millions of chords.
+            let count = ((sweep.abs() / max_step).ceil() as usize).clamp(1, MAX_ARC_CHORDS);
             let start = (from[a1] - center[a1]).atan2(from[a0] - center[a0]);
             (1..=count)
                 .map(|k| {
@@ -401,6 +424,38 @@ mod tests {
             assert!(out.len() < 100_000, "generator never finished");
         }
         out
+    }
+
+    #[test]
+    fn look_ahead_horizon_changes_nothing() {
+        let mut config = MachineConfig::dmc2();
+        config.constant_velocity = true;
+        let path = |g: &mut Generator| {
+            for i in 0..3000 {
+                let t = i as f64 * 0.01;
+                g.push(Move { to: [40.0 * t.cos(), 40.0 * t.sin(), -(i as f64) * 0.001, 0.0, 0.0, 0.0], speed: 50.0, rapid: false, line: i, continues: true });
+            }
+        };
+        let mut a = Generator::new(config.clone(), 0.004, [40.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        let mut b = Generator::new(config, 0.004, [40.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        assert!(a.horizon.is_finite());
+        b.horizon = f64::INFINITY;
+        path(&mut a);
+        path(&mut b);
+        assert_eq!(run(&mut a), run(&mut b));
+    }
+
+    #[test]
+    fn huge_arcs_are_bounded() {
+        let arc = Op::Arc {
+            to: [0.0; 6],
+            center: [1e6, 0.0, 0.0, 0.0, 0.0, 0.0],
+            plane: Plane::XY,
+            clockwise: false,
+            turns: 5,
+            feed: 100.0,
+        };
+        assert_eq!(op_to_moves(&arc, &[0.0; 6], 0, 1e-6).len(), MAX_ARC_CHORDS);
     }
 
     #[test]

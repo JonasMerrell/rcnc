@@ -6,6 +6,7 @@ mod preview;
 mod sheet;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use blueskyt::protocol::BoardSetup;
 use blueskyt::BlueSkyBoard;
@@ -74,6 +75,7 @@ fn main() -> eframe::Result<()> {
         controller.report_alarm(e);
     }
     let handle = ControllerHandle::spawn(controller);
+    stop_machine_on_panic(handle.clone());
     let sheets = Arc::new(sheet::Sheets::new(data.join("sheets")));
     link::spawn(handle.clone(), sheets.clone());
     let web_data = data.join("webview");
@@ -85,11 +87,39 @@ fn main() -> eframe::Result<()> {
             .with_maximized(true),
         ..Default::default()
     };
-    eframe::run_native(
+    let ui_handle = handle.clone();
+    let result = eframe::run_native(
         "CNC Controller",
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, handle, sheets, web_data).with_program(program.map(Into::into))))),
-    )
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, ui_handle, sheets, web_data).with_program(program.map(Into::into))))),
+    );
+    // The window is gone, however it went: the machine must not keep going
+    // with nobody watching it.
+    if !handle.shut_down(SHUTDOWN_WAIT) {
+        eprintln!("the controller did not confirm the machine was stopped");
+    }
+    result
+}
+
+/// How long quitting waits for the controller to stop the board.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
+
+/// If the window's thread panics, stop the machine before anything else.
+/// The controller thread catches its own panics; other threads (the
+/// preview, the CAM link) can fail without touching the machine. On Windows
+/// a panic in the window's event loop aborts the process rather than
+/// unwinding out of `run_native`, so this hook is the last chance to switch
+/// the spindle and drives off.
+fn stop_machine_on_panic(handle: ControllerHandle) {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default(info);
+        let thread = std::thread::current();
+        if thread.name() == Some("main") {
+            eprintln!("rcnc crashed: stopping the machine");
+            handle.shut_down(SHUTDOWN_WAIT);
+        }
+    }));
 }
 
 /// The DMC2 with the tool setter and change position where the simulator's
