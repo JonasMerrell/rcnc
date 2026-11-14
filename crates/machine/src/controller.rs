@@ -2604,9 +2604,11 @@ mod tests {
         let mut config = MachineConfig::dmc2();
         config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, ..Default::default() };
         config.tool_change =
-            crate::config::ToolChangeSettings { x: 10.0, y: 20.0, z: 120.0, position_set: true, ..Default::default() };
+            crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, ..Default::default() };
         settings(&mut config.tool_change);
         c.handle(Command::SetConfig(Box::new(config)));
+        // Homing the sim takes a while; the change only needs to know it's been done.
+        c.homed = [true; 6];
         c.handle(Command::Mdi("G53 G0 X130 Y130 Z110".into()));
         run_until_idle(&mut c, &clock, 5.0);
         c.handle(Command::Load {
@@ -2701,8 +2703,9 @@ mod tests {
         let (mut c, clock) = probing_setup();
         let mut config = MachineConfig::dmc2();
         config.tool_change =
-            crate::config::ToolChangeSettings { x: 10.0, y: 20.0, z: 120.0, position_set: true, ..Default::default() };
+            crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, ..Default::default() };
         c.handle(Command::SetConfig(Box::new(config)));
+        c.homed = [true; 6];
         c.handle(Command::Mdi("G53 G0 X130 Y130 Z110".into()));
         run_until_idle(&mut c, &clock, 5.0);
         c.handle(Command::Mdi("T2 M6".into()));
@@ -2728,16 +2731,23 @@ mod tests {
     }
 
     #[test]
-    fn tool_change_needs_its_position_set() {
+    fn tool_change_needs_the_machine_homed() {
         let (mut c, clock) = probing_setup();
-        let mut config = MachineConfig::dmc2();
-        config.tool_change.position_set = false;
-        c.handle(Command::SetConfig(Box::new(config)));
         c.handle(Command::Mdi("T2 M6".into()));
         tick(&mut c, &clock, 5);
         let s = c.snapshot();
         assert_eq!(s.mode, Mode::Alarm);
-        assert!(s.alarm.as_deref().is_some_and(|a| a.contains("tool change position")), "{:?}", s.alarm);
+        assert!(s.alarm.as_deref().is_some_and(|a| a.contains("Home the machine")), "{:?}", s.alarm);
+    }
+
+    #[test]
+    fn tool_change_moves_the_bed_all_the_way_back_by_default() {
+        // Y+ moves the DMC2's bed back and Y homes there, at 512: change just short of the switch.
+        let mut config = MachineConfig::dmc2();
+        assert_eq!(config.tool_change.y, None);
+        assert_eq!(config.change_y(), 507.0);
+        config.tool_change.y = Some(480.0);
+        assert_eq!(config.change_y(), 480.0);
     }
 
     #[test]

@@ -54,12 +54,11 @@ impl Controller {
     /// is stopped (M6 waits for motion to finish).
     pub(super) fn start_tool_change(&mut self, tool: u32) {
         let tc = self.config.tool_change.clone();
-        if !tc.position_set {
-            return self.raise(
-                "Set the tool change position first: on the Tools tab, raise Z, jog the bed all the way back \
-                 and press Use the current position",
-            );
+        // The change position is in machine coordinates: they mean nothing unhomed.
+        if !(self.homed[1] && self.homed[2]) {
+            return self.raise("Home the machine before a tool change: its position is in machine coordinates");
         }
+        let change_y = self.config.change_y();
         self.sync_position();
         let start = self.machine_position();
         let outputs = self.outputs.clone();
@@ -79,7 +78,7 @@ impl Controller {
         if tc.move_x {
             steps.push_back(to(0, tc.x));
         }
-        steps.push_back(to(1, tc.y));
+        steps.push_back(to(1, change_y));
         steps.push_back(Step::Then(Box::new(move |c, _| {
             c.stage(ToolChangeStage::Loading);
             c.info(format!("Load tool {tool}, then press Continue (or Cycle Start)"));

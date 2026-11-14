@@ -98,35 +98,22 @@ pub struct ToolChangeSettings {
     pub guided: bool,
     /// Machine X to change tools at, used only with `move_x`.
     pub x: f64,
-    /// Machine Y with the bed all the way back, so the spindle is easy to reach.
-    pub y: f64,
+    /// Machine Y to change tools at, so the spindle is easy to reach. None:
+    /// the bed all the way back, just short of the Y home switch (see `change_y`).
+    pub y: Option<f64>,
     /// Also move X to `x`. Off: X stays where it is and only the bed moves.
     pub move_x: bool,
     /// Lowest machine Z to travel and change tools at; Z is raised to it, never lowered.
     pub z: f64,
-    /// The change position has been set on this machine. The guided change
-    /// won't move until it is: the default Y is a guess at the end of travel.
-    pub position_set: bool,
     /// Go back to where the tool change started, with the spindle and coolant as they were.
     pub return_to_start: bool,
 }
 
 impl Default for ToolChangeSettings {
     fn default() -> Self {
-        // Top of Z, bed all the way back. Assumes Mach3's convention that Y+
-        // moves the tool towards the back, which moves the table forward, so
-        // the bed is furthest back at the lowest Y (Mach3's soft limit 0).
-        // Not measured yet: `position_set` keeps it from being used unchecked.
+        // Top of Z, bed all the way back.
         let setter = crate::probing::ToolSetter::default();
-        ToolChangeSettings {
-            guided: true,
-            x: setter.x,
-            y: 5.0,
-            move_x: false,
-            z: 0.0,
-            position_set: false,
-            return_to_start: true,
-        }
+        ToolChangeSettings { guided: true, x: setter.x, y: None, move_x: false, z: 0.0, return_to_start: true }
     }
 }
 
@@ -200,6 +187,19 @@ impl MachineConfig {
         }
     }
 
+    /// Machine Y the tool change moves the bed to. On the DMC2, Y+ moves the
+    /// bed back and Y homes at that end, so by default it's the home position
+    /// less a little clearance off the switch.
+    pub fn change_y(&self) -> f64 {
+        const CLEARANCE: f64 = 5.0;
+        let y = &self.axes[1];
+        self.tool_change.y.unwrap_or(if y.home_positive {
+            y.home_position - CLEARANCE
+        } else {
+            y.home_position + CLEARANCE
+        })
+    }
+
     pub fn to_steps(&self, pos: &Axes) -> [i64; 6] {
         std::array::from_fn(|i| (pos[i] * self.axes[i].steps_per_unit).round() as i64)
     }
@@ -269,7 +269,7 @@ impl MachineConfig {
                 let z = t.z.max(self.axes[2].soft_min);
                 // Without move_x, X stays wherever it is.
                 let x = if t.move_x { t.x } else { self.axes[0].soft_min };
-                inside("tool change position", [x, t.y, z])?;
+                inside("tool change position", [x, self.change_y(), z])?;
             }
             let st = &p.setter;
             inside("tool setter", [st.x, st.y, st.travel_z.min(self.axes[2].soft_max)])?;

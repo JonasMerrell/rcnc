@@ -181,45 +181,45 @@ impl App {
         ui.add_space(4.0);
         let mut c = s.config.clone();
         let mut changed = false;
+        let mut y = c.change_y();
         let t = &mut c.tool_change;
         changed |= ui
             .checkbox(&mut t.guided, "Guided: raise Z, move the bed back, measure, come back")
             .changed();
         ui.add_enabled_ui(t.guided, |ui| {
-            if !t.position_set {
-                ui.label(
-                    RichText::new(
-                        "Change position not set yet: raise Z, jog the bed all the way back (leave a few mm), \
-                         then press Use the current position.",
-                    )
-                    .color(AMBER),
-                );
-            }
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             egui::Grid::new("tool-change").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                let mut moved = labelled(ui, "Change Y (bed back)", &mut t.y, 0.5, " mm");
+                if labelled(ui, "Change Y (bed back)", &mut y, 0.5, " mm") {
+                    t.y = Some(y);
+                    changed = true;
+                }
                 changed |= labelled(ui, "Safe Z", &mut t.z, 0.5, " mm");
                 ui.label("Move X too");
                 changed |= ui.checkbox(&mut t.move_x, "").changed();
                 ui.end_row();
                 if t.move_x {
-                    moved |= labelled(ui, "Change X", &mut t.x, 0.5, " mm");
+                    changed |= labelled(ui, "Change X", &mut t.x, 0.5, " mm");
                 }
-                if moved {
-                    t.position_set = true;
+            });
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Use the current position")
+                    .on_hover_text("Jog to where the spindle is easiest to reach, then press this")
+                    .clicked()
+                {
+                    t.x = s.machine[0];
+                    t.y = Some(s.machine[1]);
+                    changed = true;
+                }
+                if ui
+                    .add_enabled(t.y.is_some(), Button::new("Bed all the way back"))
+                    .on_hover_text("Y just short of its home switch, the back end of travel")
+                    .clicked()
+                {
+                    t.y = None;
                     changed = true;
                 }
             });
-            if ui
-                .button("Use the current position")
-                .on_hover_text("Raise Z and jog the bed back to where the spindle is easiest to reach, then press this")
-                .clicked()
-            {
-                t.x = s.machine[0];
-                t.y = s.machine[1];
-                t.position_set = true;
-                changed = true;
-            }
             changed |= ui.checkbox(&mut t.return_to_start, "Go back to where the change started").changed();
         });
         changed |= ui.checkbox(&mut c.tool_change_touch_off, "Measure the new tool on the tool setter").changed();
