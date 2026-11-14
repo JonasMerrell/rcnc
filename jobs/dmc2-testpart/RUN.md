@@ -52,7 +52,7 @@ is opened from the same folder). The rCAD document is `dmc2-testpart.json` (open
 2. Tick **Air cut** (next to Cycle Start), leave it at **+25 mm**. An amber *AIR CUT +25 mm* badge shows.
    Everything the program cuts now happens 25 mm higher. Tool changes, tool measuring and Find stock still
    happen for real.
-3. **Cycle Start.** Z goes up, X goes to the middle of its travel (X163.5), the bed comes forward.
+3. **Cycle Start.** Z goes up, X goes to the middle of its travel (X163.5), the bed goes to the tool setter's Y (Y289).
 4. **T99 screen:** put the probe in, press **Continue**. It measures the probe twice on the setter.
 5. **Find stock window** (top right):
    1. Tap the stylus with a finger. *Tap the stylus* gets a tick, and Continue unlocks.

@@ -263,6 +263,9 @@ pub struct Controller {
     pub(crate) tool_measured: bool,
     /// Mode to go back to when a jog ends (a jog during Find stock).
     jog_return: Option<Mode>,
+    /// The top of Z's travel, found by homing Z at its top: nothing may be
+    /// commanded above it.
+    z_top: Option<f64>,
     /// Air cut: the program's moves run this much higher. Tool changes,
     /// probing and G53 moves near the top of Z stay where they are.
     air_cut: Option<f64>,
@@ -323,6 +326,7 @@ impl Controller {
             tool_measured: false,
             jog_return: None,
             air_cut: None,
+            z_top: None,
             loaded_tool: 0,
             poll_failures: 0,
             stopping: None,
@@ -833,7 +837,19 @@ impl Controller {
         }
     }
 
+    /// The highest machine Z anything may command once Z is homed at the top:
+    /// where homing leaves it, just under the home switch. Above it is the
+    /// switch, then the limit.
+    pub(crate) fn z_ceiling(&self) -> Option<f64> {
+        self.z_top.filter(|_| self.homed[2])
+    }
+
     fn routine_axis_move(&mut self, axis: usize, to: f64, feed: f64, stop_on_probe: bool) -> Result<(), String> {
+        // Lifts and returns (tool change, probing) go no higher than the top of Z.
+        let to = match self.z_ceiling() {
+            Some(top) if axis == 2 && to > top => top,
+            _ => to,
+        };
         let from = self.machine_position()[axis];
         let probe = self.config.probe.ok_or("no probe input configured")?;
         if stop_on_probe && probe.is_active(self.status.inputs) {
@@ -1078,6 +1094,7 @@ impl Controller {
     fn unhome(&mut self) {
         if self.homed.iter().any(|h| *h) {
             self.homed = [false; 6];
+            self.z_top = None;
             self.info("Axes need homing again");
         }
     }
@@ -1128,6 +1145,10 @@ impl Controller {
             Some(d) => (d.abs() * spu).round() as u32,
             None => travel.min(u32::MAX as f64) as u32,
         };
+        if let (2, true, Some(top)) = (axis, positive, self.z_ceiling()) {
+            let room = top - self.machine_position()[2];
+            steps = steps.min((room.max(0.0) * spu).floor() as u32);
+        }
         if self.config.soft_limits && self.homed[axis] {
             let pos = self.machine_position()[axis];
             let room = if positive {
@@ -1296,6 +1317,9 @@ impl Controller {
                 }
                 self.status.position = steps;
                 self.homed[axis] = true;
+                if axis == 2 && a.home_positive {
+                    self.z_top = Some(a.home_position);
+                }
                 self.info(format!("{} homed", AXIS_LETTERS[axis]));
                 self.home.pop_front();
                 self.home_phase = HomePhase::Seek;
@@ -1619,6 +1643,7 @@ impl Controller {
     /// Pull ops into the planner until an action needs the machine stopped.
     fn fill_planner(&mut self) {
         let mut lines_read = 0;
+        let z_top = self.z_ceiling();
         loop {
             let Some(exec) = &mut self.exec else { return };
             if !matches!(exec.wait, Wait::None)
@@ -1698,7 +1723,11 @@ impl Controller {
                     if m.to.iter().any(|v| !v.is_finite()) {
                         Some("invalid coordinate".to_string())
                     } else {
-                        self.config.soft_limit_violation(&m.to).map(|a| format!("move outside {} soft limit", AXIS_LETTERS[a]))
+                        self.config.soft_limit_violation(&m.to).map(|a| format!("move outside {} soft limit", AXIS_LETTERS[a])).or_else(|| {
+                            z_top.filter(|top| m.to[2] > top + 1e-6).map(|top| {
+                                format!("Z would go to machine Z{:.3}, above the top of its travel (Z{top}): check the work offset and the tool length", m.to[2])
+                            })
+                        })
                     }
                 });
                 if let Some(why) = bad {
@@ -3073,11 +3102,11 @@ mod tests {
     }
 
     #[test]
-    fn tool_change_moves_the_bed_all_the_way_back_by_default() {
-        // Y+ moves the DMC2's bed back and Y homes there, at 512: change just short of the switch.
+    fn tool_change_puts_the_bed_at_the_setters_y_by_default() {
+        // Jonas: the bed at the setter's Y (G53 Y289) leaves the spindle easy to reach.
         let mut config = MachineConfig::dmc2();
         assert_eq!(config.tool_change.y, None);
-        assert_eq!(config.change_y(), 507.0);
+        assert_eq!(config.change_y(), 289.0);
         config.tool_change.y = Some(480.0);
         assert_eq!(config.change_y(), 480.0);
     }
@@ -3858,5 +3887,58 @@ mod tests {
         assert!(!s.tools.contains_key(&5));
         assert!(s.log.iter().any(|l| l == "Tool table: added T99, T1 from the program"), "{:?}", s.log);
         assert!(s.log.iter().any(|l| l.contains("updated T24")), "{:?}", s.log);
+    }
+
+    /// What Jonas hit: stopped mid-job with a short tool in, restarted, and the
+    /// change to the longer probe started at G53 Z0. Going back to the same work
+    /// Z put the spindle 16 mm higher, past the top of Z into the limit.
+    #[test]
+    fn nothing_takes_z_above_the_top_of_its_travel() {
+        let clock = Arc::new(ManualClock::default());
+        let config = crate::sim::dmc2_sim_config();
+        let mut sim = Simulator::new(clock.clone());
+        let mut c = Controller::new(config.clone(), Box::new(sim), clock.clone());
+        c.handle(Command::Connect);
+        c.handle(Command::Reset);
+        c.handle(Command::Home(None));
+        run_until_idle(&mut c, &clock, 600.0);
+        let top = config.axes[2].home_position;
+        assert!(close(c.snapshot().machine[2], top));
+        c.handle(Command::Load {
+            name: "t".into(),
+            // The Z zero before the second change is 30 mm lower than the one it
+            // measures: the same work Z is then 30 mm higher, as with a tool 30 mm longer.
+            text: "G53 G0 Z0\nT24 M6\nG10 L2 P1 Z-221.8\nG53 G0 Z0\nT99 M6\nG53 G0 Z0\nM30".into(),
+        });
+        c.handle(Command::CycleStart);
+        let mut highest = f64::NEG_INFINITY;
+        for _ in 0..200_000 {
+            clock.advance(0.005);
+            c.update();
+            let s = c.snapshot();
+            highest = highest.max(s.machine[2]);
+            if s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading) && c.routine_waiting {
+                c.handle(Command::ToolChangeContinue { measure: None });
+            }
+            if matches!(s.mode, Mode::Idle | Mode::Alarm) && s.tool_change.is_none() {
+                break;
+            }
+        }
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?}", s.log);
+        assert!(highest <= top + 0.01, "Z went to {highest}, above the top ({top})");
+
+        // A program move above the top stops with an alarm instead of hitting the limit.
+        c.handle(Command::Mdi("G53 G0 Z20".into()));
+        run_until_idle(&mut c, &clock, 10.0);
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Alarm, "{:?}", s.log);
+        assert!(s.alarm.as_ref().unwrap().contains("above the top of its travel"), "{:?}", s.alarm);
+        assert!(s.machine[2] <= top + 0.01);
+        // A jog up stops at the top too.
+        c.handle(Command::Reset);
+        c.handle(Command::Jog { axis: 2, positive: true, step: Some(30.0) });
+        run_until_idle(&mut c, &clock, 30.0);
+        assert!(c.snapshot().machine[2] <= top + 0.01, "{:?}", c.snapshot().machine);
     }
 }
