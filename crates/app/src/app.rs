@@ -577,6 +577,17 @@ impl App {
                 Mode::Probing => ("PROBING", ACCENT),
                 Mode::Alarm => ("ALARM", RED),
             };
+            // Which build this is, to check against the commit that should be running.
+            let gap = ui.spacing().item_spacing.x;
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(RichText::new(format!("rcnc {}", crate::VERSION)).monospace().color(TEXT))
+                .on_hover_text("rcnc version and the git commit it was built from");
+            if crate::DIRTY {
+                ui.label(RichText::new("+dirty").monospace().color(AMBER))
+                    .on_hover_text("Built with uncommitted changes: this is not exactly that commit");
+            }
+            ui.spacing_mut().item_spacing.x = gap;
+            ui.add_space(10.0);
             badge(ui, label, color);
             if let Some(l) = s.air_cut {
                 ui.add_space(4.0);

@@ -15,9 +15,21 @@ use machine::sim::{RealClock, Simulator};
 use machine::store;
 use machine::{Controller, ControllerHandle, MachineConfig};
 
+/// Which rcnc this is: the version, the git commit it was built from, and
+/// "+dirty" if it was built with uncommitted changes. Shown in the top left
+/// and the title bar, so it can be checked against the commit that should be running.
+pub const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " · ",
+    env!("RCNC_COMMIT"),
+);
+/// Built with uncommitted changes, so the commit alone doesn't say what's running.
+pub const DIRTY: bool = !env!("RCNC_DIRTY").is_empty();
+
 const USAGE: &str = "usage: cnc-controller [--sim [--sim-stock=X,Y,H]] [program.nc]
 
   --sim                run against the built-in simulator instead of the DMC2's USB board
+  -V, --version        print which rcnc build this is
   --sim-stock=X,Y,H    put an X by Y mm block, H mm tall, in the middle of the simulator's table
                        for the probe to find";
 
@@ -35,6 +47,10 @@ fn main() -> eframe::Result<()> {
                     std::process::exit(2);
                 };
                 stock = Some([x, y, h]);
+            }
+            "-V" | "--version" => {
+                println!("rcnc {VERSION}{}", if DIRTY { " +dirty" } else { "" });
+                return Ok(());
             }
             "-h" | "--help" => {
                 println!("{USAGE}");
@@ -96,7 +112,8 @@ fn main() -> eframe::Result<()> {
     let web_data = data.join("webview");
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("CNC Controller")
+            .with_title(format!("rcnc {VERSION}{}", if DIRTY { " +dirty" } else { "" }))
+            .with_icon(icon())
             // Small enough for a 1280 × 720 screen if Windows doesn't maximize it.
             .with_inner_size([1180.0, 640.0])
             .with_min_inner_size([800.0, 480.0])
@@ -115,6 +132,13 @@ fn main() -> eframe::Result<()> {
         eprintln!("the controller did not confirm the machine was stopped");
     }
     result
+}
+
+/// The window and taskbar icon (the .exe's own icon is set by build.rs).
+fn icon() -> eframe::egui::IconData {
+    let img = image::load_from_memory(include_bytes!("../assets/icon.png")).expect("icon.png is a valid PNG").into_rgba8();
+    let (width, height) = img.dimensions();
+    eframe::egui::IconData { rgba: img.into_raw(), width, height }
 }
 
 /// How long quitting waits for the controller to stop the board.
