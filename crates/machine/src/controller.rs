@@ -576,6 +576,7 @@ impl Controller {
                     return;
                 }
                 self.interp.load(&text);
+                self.tools_from_header(&text);
                 self.program = Arc::new(text);
                 self.info(format!("Loaded {name}"));
                 self.program_name = Some(name);
@@ -957,6 +958,47 @@ impl Controller {
     pub(crate) fn use_z_reference(&mut self, name: &str) -> crate::probing::ProbeSettings {
         self.config.probing.setter.reference = name.to_string();
         self.config.probing.clone()
+    }
+
+    /// Fill the tool table from the tool list a CAM post writes at the top of
+    /// a program, `(T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute
+    /// length 19.05, stickout 24)`, so the tool change can show each tool.
+    /// Measured lengths and photos stay as they are.
+    fn tools_from_header(&mut self, text: &str) {
+        let mut added = vec![];
+        let mut updated = vec![];
+        for (n, from) in header_tools(text) {
+            let mut tool = self.interp.tools.get(&n).cloned().unwrap_or_default();
+            let before = tool.clone();
+            let new = !self.interp.tools.contains_key(&n);
+            tool.description = from.description;
+            if from.diameter > 0.0 {
+                tool.diameter = from.diameter;
+            }
+            if from.flute_length > 0.0 {
+                tool.flute_length = from.flute_length;
+            }
+            if from.stickout > 0.0 {
+                tool.stickout = from.stickout;
+            }
+            if tool.kind == gcode::ToolKind::Auto {
+                tool.kind = tool.shape();
+            }
+            if new {
+                added.push(format!("T{n}"));
+            } else if tool != before {
+                updated.push(format!("T{n}"));
+            } else {
+                continue;
+            }
+            self.interp.tools.insert(n, tool);
+        }
+        if !added.is_empty() {
+            self.info(format!("Tool table: added {} from the program", added.join(", ")));
+        }
+        if !updated.is_empty() {
+            self.info(format!("Tool table: updated {} from the program (measured lengths kept)", updated.join(", ")));
+        }
     }
 
     /// Show a problem found outside the controller (unreadable settings) as an alarm.
@@ -2114,6 +2156,44 @@ impl ControllerHandle {
             }
         }
     }
+}
+
+/// The tools listed in a program's opening comments, before its first block:
+/// `(T<n> <description>)`, with `D<diameter>` (or `Ø`) as a word of the
+/// description and optional `flute length <mm>` and `stickout <mm>`.
+pub fn header_tools(text: &str) -> Vec<(u32, Tool)> {
+    let mut out = vec![];
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('%') {
+            continue;
+        }
+        let Some(inner) = line.strip_prefix('(').and_then(|l| l.strip_suffix(')')) else { break };
+        let Some(rest) = inner.strip_prefix('T') else { continue };
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let Ok(n) = digits.parse::<u32>() else { continue };
+        let description = rest[digits.len()..].trim();
+        if !rest[digits.len()..].starts_with(' ') || description.is_empty() {
+            continue;
+        }
+        let number = |s: &str| s.trim_end_matches([',', ')']).parse::<f64>().ok();
+        let words: Vec<&str> = description.split_whitespace().collect();
+        let diameter = words
+            .iter()
+            .find_map(|w| w.strip_prefix('D').or_else(|| w.strip_prefix('Ø')).and_then(number))
+            .unwrap_or(0.0);
+        let after = |key: &str| description.find(key).and_then(|i| description[i + key.len()..].split_whitespace().next()).and_then(number);
+        // the description shown at the tool change, without the sizes appended for rcnc
+        let shown = description.split(", flute length").next().unwrap_or(description).trim().to_string();
+        let tool = Tool {
+            description: shown,
+            diameter,
+            flute_length: after("flute length ").unwrap_or(0.0),
+            stickout: after("stickout ").unwrap_or(0.0),
+            ..Default::default()
+        };
+        out.push((n, tool));
+    }
+    out
 }
 
 /// Name of the controller thread (a panic hook can tell it apart).
@@ -3671,5 +3751,30 @@ mod tests {
         assert!(close(s.machine[2], 7.5), "{:?}", s.machine);
         c.handle(Command::SetAirCut(None));
         assert_eq!(c.snapshot().air_cut, None);
+    }
+
+    #[test]
+    fn reads_the_tools_a_program_lists() {
+        let text = "(Op1 top - made by rCAD)\n(work zero: stock top, centre)\n\
+            (T99 YIDOFENG 3D touch probe - touch probe, D2 stylus ball, flute length 20, stickout 40)\n\
+            (T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)\n\
+            (T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill)\n(estimated time 3:13)\nG21\n(T5 later - D3)\nM30";
+        let t = header_tools(text);
+        assert_eq!(t.iter().map(|(n, _)| *n).collect::<Vec<_>>(), vec![99, 24, 1]);
+        assert_eq!((t[1].1.diameter, t[1].1.flute_length, t[1].1.stickout), (6.35, 19.05, 24.0));
+        assert_eq!(t[1].1.description, "3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes");
+        assert_eq!((t[2].1.diameter, t[2].1.stickout), (6.35, 0.0));
+
+        // a fresh tool table gets them; an existing tool keeps its measured length
+        let (mut c, _clock) = setup();
+        c.handle(Command::SetTool(24, Some(Tool { length: 41.5, diameter: 6.0, description: "old".into(), ..Default::default() })));
+        c.handle(Command::Load { name: "op1.nc".into(), text: text.into() });
+        let s = c.snapshot();
+        assert_eq!(s.tools[&99].shape(), gcode::ToolKind::Probe);
+        assert_eq!(s.tools[&1].shape(), gcode::ToolKind::Chamfer);
+        assert_eq!((s.tools[&24].length, s.tools[&24].diameter, s.tools[&24].kind), (41.5, 6.35, gcode::ToolKind::Flat));
+        assert!(!s.tools.contains_key(&5));
+        assert!(s.log.iter().any(|l| l == "Tool table: added T99, T1 from the program"), "{:?}", s.log);
+        assert!(s.log.iter().any(|l| l.contains("updated T24")), "{:?}", s.log);
     }
 }
