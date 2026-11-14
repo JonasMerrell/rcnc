@@ -573,8 +573,10 @@ fn z_reference_buttons(ui: &mut egui::Ui, s: &machine::Snapshot) -> Option<Probe
     let mut job = None;
     ui.horizontal_wrapped(|ui| {
         for (i, r) in setter.references.iter().enumerate() {
-            let button = Button::new(RichText::new(format!("Set Z: {}", r.name.to_lowercase())).size(20.0).strong())
-                .min_size(Vec2::new(170.0, 56.0));
+            // Table and vise get the big buttons; any others are smaller.
+            let (size, min) = if i < 2 { (20.0, Vec2::new(170.0, 56.0)) } else { (15.0, Vec2::new(0.0, 36.0)) };
+            let button = Button::new(RichText::new(format!("Set Z: {}", r.name.to_lowercase())).size(size).strong())
+                .min_size(min);
             if ui
                 .add_enabled(ready, button)
                 .on_hover_text(format!(

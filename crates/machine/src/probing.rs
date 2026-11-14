@@ -108,8 +108,9 @@ impl Default for ToolSetter {
         // From Jonas's Mach3 screen set (PA Interface_v05.set, "Z- Probing
         // Script"): G53 X-5 Y289, search 100, retract 10. Its two buttons set
         // Z zero on the table, CalibratedOffset 18.96 + 49.99 - 5.145 = 63.805
-        // below the setter top, or on the vise, 23.195 higher (40.610).
-        // (HiddenScript.m1s's 13.860 - 0.55 = 13.31 was an older calibration.)
+        // below the setter top, or on the vise, 23.195 higher (40.610). A third
+        // script, macros/DMC2/HiddenScript.m1s, makes the same move with
+        // CalibratedOffset 0.0 + 13.860 - 0.55 = 13.31: kept as "Other".
         ToolSetter {
             x: -5.0,
             y: 289.0,
@@ -119,6 +120,7 @@ impl Default for ToolSetter {
             references: vec![
                 ZReference { name: "Table".into(), setter_top: 18.96 + 49.99 - 5.145 },
                 ZReference { name: "Vise".into(), setter_top: 18.96 + 49.99 - 5.145 - 23.195 },
+                ZReference { name: "Other (13.31)".into(), setter_top: 13.860 - 0.55 },
             ],
             reference: "Table".into(),
             retract: 10.0,

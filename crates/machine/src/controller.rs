@@ -2820,6 +2820,7 @@ mod tests {
         let s = crate::probing::ToolSetter::default();
         assert_eq!(s.reference, "Table");
         assert!(close(s.references[0].setter_top, 63.805) && close(s.references[1].setter_top, 40.61));
+        assert!(close(s.references[2].setter_top, 13.31), "HiddenScript.m1s kept");
 
         let (mut c, clock) = reference_setup();
         c.handle(Command::Probe(ProbeJob::SetZ(1)));
