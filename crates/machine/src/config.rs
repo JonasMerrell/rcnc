@@ -69,6 +69,11 @@ pub struct MachineConfig {
     pub home_order: Vec<usize>,
     /// Distance moved off the switch after it releases, in mm.
     pub home_clearance: f64,
+    /// After the fast seek finds the switch, back off this far (mm) and
+    /// come back slowly to find it again precisely.
+    pub home_pulloff: f64,
+    /// Speed of that slow second approach, as a fraction of the seek speed.
+    pub home_latch_speed: f64,
     pub soft_limits: bool,
     /// Constant velocity: blend corners. Off means exact stop at each G-code move (Mach3 "CV off").
     pub constant_velocity: bool,
@@ -168,6 +173,8 @@ impl MachineConfig {
             estop: Some(Input::new(10, true)),
             home_order: vec![2, 1, 0],
             home_clearance: 1.0,
+            home_pulloff: 2.0,
+            home_latch_speed: 0.1,
             soft_limits: false,
             constant_velocity: false,
             junction_deviation: 0.01,
@@ -218,6 +225,10 @@ impl MachineConfig {
             }
         }
         positive("arc tolerance", self.arc_tolerance)?;
+        positive("home pull-off", self.home_pulloff)?;
+        if !(self.home_latch_speed > 0.0 && self.home_latch_speed <= 1.0) {
+            return Err("slow homing speed must be between 0 and 100% of the seek speed".into());
+        }
         positive("max spindle speed", self.spindle_max_rpm)?;
         if !(self.junction_deviation >= 0.0) {
             return Err("corner tolerance can't be negative".into());
