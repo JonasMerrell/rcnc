@@ -95,6 +95,8 @@ pub enum Command {
     FindStock(gcode::StockRequest),
     /// The probe is over the stock: carry on with Find stock.
     FindStockContinue,
+    /// Air cut: run programs this many mm higher than written (None: for real). Only while idle.
+    SetAirCut(Option<f64>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +158,8 @@ pub struct Snapshot {
     pub loaded_tool: u32,
     /// The loaded tool has been measured on the tool setter since it went in.
     pub tool_measured: bool,
+    /// Air cut: programs run this many mm higher than written.
+    pub air_cut: Option<f64>,
     /// User M-code macros, for the preview.
     pub macros: Arc<HashMap<u32, String>>,
     /// Persistent parameters (work offsets, G28/G30 homes, G92), for the preview.
@@ -252,6 +256,9 @@ pub struct Controller {
     pub(crate) tool_measured: bool,
     /// Mode to go back to when a jog ends (a jog during Find stock).
     jog_return: Option<Mode>,
+    /// Air cut: the program's moves run this much higher. Tool changes,
+    /// probing and G53 moves near the top of Z stay where they are.
+    air_cut: Option<f64>,
     /// The tool in the spindle, as far as the controller knows (0: unknown).
     loaded_tool: u32,
     /// Status polls that failed in a row.
@@ -308,6 +315,7 @@ impl Controller {
             find_stock: None,
             tool_measured: false,
             jog_return: None,
+            air_cut: None,
             loaded_tool: 0,
             poll_failures: 0,
             stopping: None,
@@ -511,9 +519,13 @@ impl Controller {
 
     fn sync_position(&mut self) {
         let pos = self.machine_position();
-        self.interp.position = pos;
+        // In an air cut the interpreter works where the program thinks the machine is.
+        let mut program = pos;
+        program[2] -= self.air_cut.unwrap_or(0.0);
+        self.interp.position = program;
         self.generator.reset_position(pos);
     }
+
 
     fn is_ready(&self) -> bool {
         matches!(self.mode, Mode::Idle)
@@ -632,6 +644,17 @@ impl Controller {
                 }
             }
             Command::FindStockContinue => self.find_stock_continue(),
+            Command::SetAirCut(lift) => {
+                if !self.is_ready() {
+                    return self.info("Air cut can only be switched while the machine is idle");
+                }
+                self.air_cut = lift.filter(|l| *l > 0.0);
+                self.sync_position();
+                self.info(match self.air_cut {
+                    Some(l) => format!("Air cut: programs run {l} mm above the work"),
+                    None => "Air cut off: programs cut for real".to_string(),
+                });
+            }
         }
     }
 
@@ -1567,8 +1590,21 @@ impl Controller {
                 continue;
             }
             let Some((line, op)) = exec.pending.front().cloned() else { continue };
-            let from = self.generator.end_position();
-            let moves = op_to_moves(&op, &from, line, self.config.arc_tolerance);
+            let mut from = self.generator.end_position();
+            let lift = self.air_cut.unwrap_or(0.0);
+            from[2] -= lift;
+            let mut moves = op_to_moves(&op, &from, line, self.config.arc_tolerance);
+            if lift > 0.0 {
+                // never above just under the Z home switch (G53 Z0 retracts), once Z is homed
+                let z = &self.config.axes[2];
+                let top = match (self.homed[2], z.home_positive) {
+                    (true, true) => z.home_position - 0.5,
+                    _ => f64::INFINITY,
+                };
+                for m in &mut moves {
+                    m.to[2] = (m.to[2] + lift).min(top.max(m.to[2]));
+                }
+            }
             if !moves.is_empty() {
                 // Check the whole op before any of it is queued, and stop
                 // reading: what is queued runs, then the alarm comes at rest.
@@ -1845,6 +1881,7 @@ impl Controller {
             find_stock: self.find_stock.clone(),
             loaded_tool: self.loaded_tool,
             tool_measured: self.tool_measured,
+            air_cut: self.air_cut,
             macros: self.macros.clone(),
             params: self.interp.params.persistent(),
             spindle_reversible: self.config.spindle_reversible,
@@ -3550,10 +3587,14 @@ mod tests {
         let spu = |a: usize| config.axes[a].steps_per_unit;
         let middle = |a: usize| crate::sim::homed_position(&config, &world, a, world.travel[a] as f64 / 2.0 / spu(a));
         let top = crate::sim::homed_position(&config, &world, 2, world.block.unwrap().2 as f64 / spu(2));
+        if let Some(l) = std::env::var("RCNC_AIR_CUT").ok().filter(|l| !l.is_empty()) {
+            c.handle(Command::SetAirCut(Some(l.parse().unwrap())));
+        }
         c.handle(Command::Load { name: path.clone(), text });
         c.handle(Command::CycleStart);
         let mut t = 0.0;
         let mut changes = vec![];
+        let mut lowest_cut = f64::INFINITY;
         loop {
             clock.advance(0.005);
             c.update();
@@ -3561,6 +3602,9 @@ mod tests {
             let s = c.snapshot();
             if s.mode == Mode::Alarm {
                 panic!("alarm after {t:.0}s: {:?}\n{:#?}", s.alarm, s.log);
+            }
+            if s.mode == Mode::Running && s.spindle != Spindle::Off {
+                lowest_cut = lowest_cut.min(s.machine[2] - top);
             }
             if let Some(tc) = &s.tool_change {
                 if tc.stage == ToolChangeStage::Loading && c.routine_waiting {
@@ -3592,5 +3636,40 @@ mod tests {
             println!("{l}");
         }
         println!("{path}: finished after {t:.0} s simulated, tool changes {changes:?}, work offset {:?}", s.work_offsets[0]);
+        println!("lowest the tool went with the spindle on: {lowest_cut:.3} mm from the stock top");
+    }
+
+    #[test]
+    fn air_cut_runs_the_program_higher_but_not_g53_tops() {
+        let clock = Arc::new(ManualClock::default());
+        let mut c = Controller::new(crate::sim::dmc2_sim_config(), Box::new(Simulator::new(clock.clone())), clock.clone());
+        c.handle(Command::Connect);
+        c.handle(Command::Reset);
+        c.handle(Command::Home(None));
+        run_until_idle(&mut c, &clock, 600.0);
+        c.handle(Command::Mdi("G53 G0 X100 Y300 Z-20\nG10 L2 P1 X100 Y300 Z-100".into()));
+        run_until_idle(&mut c, &clock, 30.0);
+        c.handle(Command::SetAirCut(Some(25.0)));
+        assert_eq!(c.snapshot().air_cut, Some(25.0), "{:?} {:?}", c.mode(), c.snapshot().log);
+        c.handle(Command::Load { name: "t".into(), text: "G0 X0 Y0 Z5\nG1 Z-3 F300\nG2 X10 Y0 I5 J0 F300\nG91 G1 Z-1\nG90 G53 G0 Z0\nM30".into() });
+        c.handle(Command::CycleStart);
+        let mut lowest = f64::INFINITY;
+        for _ in 0..40_000 {
+            clock.advance(0.005);
+            c.update();
+            let s = c.snapshot();
+            lowest = lowest.min(s.machine[2]);
+            if s.mode == Mode::Idle {
+                break;
+            }
+        }
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?}", s.log);
+        // Work Z-4 (after the incremental move) is machine -104; 25 higher, -79.
+        assert!(close(lowest, -79.0), "{lowest}");
+        // The machine-coordinate retract to Z0 goes no higher than just under the home switch (Z8).
+        assert!(close(s.machine[2], 7.5), "{:?}", s.machine);
+        c.handle(Command::SetAirCut(None));
+        assert_eq!(c.snapshot().air_cut, None);
     }
 }

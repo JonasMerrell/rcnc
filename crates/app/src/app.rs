@@ -79,6 +79,8 @@ pub struct App {
     fs_step: f64,
     /// Stock size for Find stock started from the Probe page.
     fs_size: [f64; 3],
+    /// Air cut height to switch on, mm.
+    air_lift: f64,
     /// The tool change window's photo: tool, its image setting, the file found.
     tc_photo: Option<(u32, String, Option<std::path::PathBuf>)>,
     view: View,
@@ -132,6 +134,7 @@ impl App {
             tc_measure: None,
             fs_step: 1.0,
             fs_size: [39.0, 20.0, 77.0],
+            air_lift: 25.0,
             tc_photo: None,
             view: View::Toolpath,
             sheets,
@@ -570,6 +573,10 @@ impl App {
                 Mode::Alarm => ("ALARM", RED),
             };
             badge(ui, label, color);
+            if let Some(l) = s.air_cut {
+                ui.add_space(4.0);
+                badge(ui, &format!("AIR CUT +{l} mm"), AMBER);
+            }
             ui.add_space(8.0);
 
             // One button that is E-stop or Reset, and a separate Connect: one
@@ -1028,6 +1035,21 @@ impl App {
             {
                 self.machine.send(Command::Stop);
             }
+            ui.add_space(16.0);
+
+            // Air cut: the whole program runs this much higher, to check it over the vise first.
+            ui.vertical(|ui| {
+                let idle = s.mode == Mode::Idle;
+                let mut on = s.air_cut.is_some();
+                if ui
+                    .add_enabled(idle, egui::Checkbox::new(&mut on, RichText::new("Air cut").strong()))
+                    .on_hover_text("Run programs higher than written, cutting nothing: tool changes, tool measuring and Find stock still happen for real")
+                    .changed()
+                {
+                    self.machine.send(Command::SetAirCut(on.then_some(self.air_lift)));
+                }
+                ui.add_enabled(idle && !on, egui::DragValue::new(&mut self.air_lift).range(5.0..=100.0).speed(0.5).prefix("+").suffix(" mm"));
+            });
             ui.add_space(16.0);
 
             ui.vertical(|ui| {
