@@ -213,6 +213,10 @@ pub struct StockRequest {
     /// `KEEPZ=1`: set only X/Y; Z comes from the tool measurements (a Z
     /// reference), and the top is only checked against `top_centre`.
     pub keep_z: bool,
+    /// `JAWX=-1` (or 1): X comes from the fixed vise jaw on that side of the
+    /// stock, touched beside the stock at work Z `JAWZ` (between the parallels
+    /// and the jaw's top): the stock's face against it is X `AT - SIZE/2`.
+    pub jaw: Option<(f64, f64)>,
 }
 
 /// The reference named in an `(RCNC Z_REFERENCE <name>)` comment.
@@ -345,7 +349,8 @@ impl StockRequest {
         if rest.len() < Self::KEYWORD.len() || !rest[..Self::KEYWORD.len()].eq_ignore_ascii_case(Self::KEYWORD) {
             return None;
         }
-        let mut r = StockRequest { size: [0.0; 3], top_centre: [0.0; 3], tolerance: None, depth: None, keep_z: false };
+        let mut r = StockRequest { size: [0.0; 3], top_centre: [0.0; 3], tolerance: None, depth: None, keep_z: false, jaw: None };
+        let (mut jaw_side, mut jaw_z) = (None, None);
         let mut sized = false;
         let nums = |v: &str| -> Result<Vec<f64>, String> {
             v.split(',').map(|n| n.trim().parse::<f64>().map_err(|_| format!("FIND_STOCK: bad number '{n}'"))).collect()
@@ -367,6 +372,8 @@ impl StockRequest {
                 "TOL" => nums(v).map(|n| r.tolerance = n.first().copied()),
                 "DEPTH" => nums(v).map(|n| r.depth = n.first().copied()),
                 "KEEPZ" => nums(v).map(|n| r.keep_z = n.first().is_some_and(|v| *v != 0.0)),
+                "JAWX" => nums(v).map(|n| jaw_side = n.first().map(|v| v.signum())),
+                "JAWZ" => nums(v).map(|n| jaw_z = n.first().copied()),
                 _ => Err(format!("FIND_STOCK: unknown setting {k}")),
             };
             if let Err(e) = res {
@@ -376,6 +383,11 @@ impl StockRequest {
         if !sized || r.size.iter().any(|v| !(*v > 0.0)) {
             return Some(Err("FIND_STOCK needs SIZE=x,y,z with sizes above zero".into()));
         }
+        r.jaw = match (jaw_side, jaw_z) {
+            (Some(side), Some(z)) if side != 0.0 => Some((side, z)),
+            (None, None) => None,
+            _ => return Some(Err("FIND_STOCK: JAWX=-1 or 1 needs JAWZ= (the height to touch the jaw at)".into())),
+        };
         Some(Ok(r))
     }
 }
@@ -2060,7 +2072,7 @@ mod tests {
         let (_, ops) = run("(RCNC FIND_STOCK SIZE=39,20,77 AT=0,0,-1.5 TOL=0.8)\nM30");
         assert_eq!(
             ops[0],
-            Op::FindStock(StockRequest { size: [39.0, 20.0, 77.0], top_centre: [0.0, 0.0, -1.5], tolerance: Some(0.8), depth: None, keep_z: false })
+            Op::FindStock(StockRequest { size: [39.0, 20.0, 77.0], top_centre: [0.0, 0.0, -1.5], tolerance: Some(0.8), depth: None, keep_z: false, jaw: None })
         );
         assert!(StockRequest::parse("rcnc find_stock size=1,2,3 depth=2").unwrap().is_ok());
         assert!(StockRequest::parse("RCNC FIND_STOCK AT=0,0,0").unwrap().is_err());

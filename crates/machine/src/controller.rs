@@ -3749,6 +3749,15 @@ mod tests {
         let config = crate::sim::dmc2_sim_config();
         let mut sim = Simulator::new(clock.clone());
         sim.add_stock(&config, stock[0], stock[1], stock[2]);
+        // RCNC_BORES="x,y;x,y": Ø8 bores through the block, from its middle
+        if let Ok(b) = std::env::var("RCNC_BORES") {
+            let (bx, by, _) = sim.world.block.unwrap();
+            let spu = config.axes[0].steps_per_unit;
+            for xy in b.split(';').filter(|v| !v.is_empty()) {
+                let v: Vec<f64> = xy.split(',').map(|n| n.trim().parse().unwrap()).collect();
+                sim.world.bores.push(([(bx[0] + bx[1]) / 2 + (v[0] * spu) as i64, (by[0] + by[1]) / 2 + (v[1] * spu) as i64], (4.0 * spu) as i64));
+            }
+        }
         let world = sim.world.clone();
         let mut c = Controller::new(config.clone(), Box::new(sim), clock.clone());
         c.handle(Command::Connect);
@@ -3803,7 +3812,7 @@ mod tests {
             assert!(t < 4000.0, "still running after {t:.0}s: {:?}", s.log);
         }
         let s = c.snapshot();
-        for l in s.log.iter().filter(|l| l.contains("Stock found") || l.contains("touched off") || l.starts_with("Warning")) {
+        for l in s.log.iter().filter(|l| l.contains("Stock found") || l.contains("Bores found") || l.contains("touched off") || l.starts_with("Warning")) {
             println!("{l}");
         }
         println!("{path}: finished after {t:.0} s simulated, tool changes {changes:?}, work offset {:?}", s.work_offsets[0]);
@@ -4072,5 +4081,71 @@ mod tests {
         c.handle(Command::Jog { axis: 2, positive: true, step: Some(30.0) });
         run_until_idle(&mut c, &clock, 30.0);
         assert!(c.snapshot().machine[2] <= top + 0.01, "{:?}", c.snapshot().machine);
+    }
+
+    /// X from the fixed jaw on the left: the raw stock's -X face sits 0.5 mm off
+    /// it (not square), so the jaw, not the stock, gives the X it is clamped at.
+    #[test]
+    fn find_stock_takes_x_from_the_fixed_jaw() {
+        let clock = Arc::new(ManualClock::default());
+        let config = crate::sim::dmc2_sim_config();
+        let mut sim = Simulator::new(clock.clone());
+        sim.add_stock(&config, 39.0, 77.0, 20.0);
+        let (bx, by, _) = sim.world.block.unwrap();
+        let spu = config.axes[0].steps_per_unit;
+        let mm = |v: f64| (v * spu) as i64;
+        // jaw: 12.7 thick, 95.5 long, 4.7 above the parallels, its face 0.5 mm left of the stock
+        let face = bx[0] - mm(0.5);
+        let mid_y = (by[0] + by[1]) / 2;
+        sim.world.blocks.push(([face - mm(12.7), face], [mid_y - mm(47.75), mid_y + mm(47.75)], sim.world.probe_z + (4.7 * config.axes[2].steps_per_unit) as i64));
+        let world = sim.world.clone();
+        let mut c = Controller::new(config.clone(), Box::new(sim), clock.clone());
+        c.handle(Command::Connect);
+        c.handle(Command::Reset);
+        c.handle(Command::Home(None));
+        run_until_idle(&mut c, &clock, 600.0);
+        c.handle(Command::Load {
+            name: "t".into(),
+            text: "(RCNC Z_REFERENCE Vise)\nT99 M6\n(RCNC FIND_STOCK SIZE=39,77,20 AT=0,0,20 KEEPZ=1 JAWX=-1 JAWZ=2.5)\nM30".into(),
+        });
+        c.handle(Command::CycleStart);
+        let spu2 = |a: usize| config.axes[a].steps_per_unit;
+        let middle = |a: usize| crate::sim::homed_position(&config, &world, a, world.travel[a] as f64 / 2.0 / spu2(a));
+        let top = crate::sim::homed_position(&config, &world, 2, world.block.unwrap().2 as f64 / spu2(2));
+        for _ in 0..400_000 {
+            clock.advance(0.005);
+            c.update();
+            let s = c.snapshot();
+            if s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading) && c.routine_waiting {
+                c.handle(Command::ToolChangeContinue { measure: None });
+            }
+            if s.find_stock.as_ref().is_some_and(|f| f.stage == FindStockStage::Locate) && c.routine_waiting && s.mode == Mode::Probing {
+                let go = |c: &mut Controller, axis: usize, to: f64| {
+                    let by = to - c.snapshot().machine[axis];
+                    c.handle(Command::Jog { axis, positive: by > 0.0, step: Some(by.abs()) });
+                    run_until(c, &clock, 120.0, "the end of a jog", |s| s.mode == Mode::Probing);
+                };
+                go(&mut c, 2, s.machine[2].max(top + 30.0));
+                go(&mut c, 0, middle(0));
+                go(&mut c, 1, middle(1));
+                go(&mut c, 2, top - 5.0);
+                go(&mut c, 2, top + 5.0);
+                c.handle(Command::FindStockContinue);
+            }
+            if matches!(s.mode, Mode::Idle | Mode::Alarm) && s.tool_change.is_none() && s.find_stock.is_none() {
+                break;
+            }
+        }
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?} {:?}", s.alarm, s.log);
+        let jaw = s.log.iter().find(|l| l.starts_with("Fixed jaw")).unwrap();
+        assert!(jaw.contains("the stock's own face was 0.500 mm from it"), "{jaw}");
+        // the jaw's face reads X-19.5: the stock's middle is 0.5 mm further right than its own faces say
+        let jaw_machine: f64 = jaw["Fixed jaw at machine X".len()..].split(':').next().unwrap().parse().unwrap();
+        assert!(close(jaw_machine - s.work_offsets[0][0], -19.5), "jaw at work X{}", jaw_machine - s.work_offsets[0][0]);
+        // and that is 0.5 mm left of where the stock's own -X face was found
+        let stock = s.log.iter().find(|l| l.starts_with("Stock found")).unwrap();
+        let centre: f64 = stock[stock.find("centre machine X").unwrap() + 16..].split(' ').next().unwrap().parse().unwrap();
+        assert!(close(centre - 19.5 - jaw_machine, 0.5), "{stock} / {jaw}");
     }
 }
