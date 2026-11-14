@@ -252,6 +252,8 @@ pub struct Controller {
     routine_until: Option<f64>,
     tool_change: Option<toolchange::ToolChange>,
     find_stock: Option<FindStockView>,
+    /// An automatic probing request (Probe Z, Find bores) runs in place of the program.
+    auto_probe: bool,
     /// The tool in the spindle has been measured on the setter since it was loaded.
     pub(crate) tool_measured: bool,
     /// Mode to go back to when a jog ends (a jog during Find stock).
@@ -313,6 +315,7 @@ impl Controller {
             routine_until: None,
             tool_change: None,
             find_stock: None,
+            auto_probe: false,
             tool_measured: false,
             jog_return: None,
             air_cut: None,
@@ -479,6 +482,7 @@ impl Controller {
         self.routine_resume = None;
         self.tool_change = None;
         self.find_stock = None;
+        self.auto_probe = false;
         self.jog_return = None;
     }
 
@@ -1751,6 +1755,14 @@ impl Controller {
             }
             Op::FindStock(request) => {
                 self.start_find_stock(request);
+                return;
+            }
+            Op::ProbeZ(request) => {
+                self.start_probe_z(request);
+                return;
+            }
+            Op::FindBores(request) => {
+                self.start_find_bores(request);
                 return;
             }
             Op::Probe { to, feed } => match self.probe_move(&to, feed) {
@@ -3776,5 +3788,77 @@ mod tests {
         assert!(!s.tools.contains_key(&5));
         assert!(s.log.iter().any(|l| l == "Tool table: added T99, T1 from the program"), "{:?}", s.log);
         assert!(s.log.iter().any(|l| l.contains("updated T24")), "{:?}", s.log);
+    }
+
+    /// Op 2 of the test part: find the stock roughly, then the two locating
+    /// bores op 1 left, and set X/Y from them; a part turned too far stops.
+    #[test]
+    fn finds_two_bores_and_sets_x_y_from_them() {
+        let run = |turn_deg: f64| {
+            let clock = Arc::new(ManualClock::default());
+            let config = crate::sim::dmc2_sim_config();
+            let mut sim = Simulator::new(clock.clone());
+            sim.add_stock(&config, 39.0, 77.0, 20.0);
+            // the bores at (-10, -28) and (11, 22) from the block's middle, the part turned `turn_deg`
+            let (bx, by, _) = sim.world.block.unwrap();
+            let mid = [(bx[0] + bx[1]) / 2, (by[0] + by[1]) / 2];
+            let spu = config.axes[0].steps_per_unit;
+            let (sn, cs) = turn_deg.to_radians().sin_cos();
+            for (x, y) in [(-10.0, -28.0), (11.0, 22.0)] {
+                let (rx, ry) = (x * cs - y * sn, x * sn + y * cs);
+                sim.world.bores.push(([mid[0] + (rx * spu) as i64, mid[1] + (ry * spu) as i64], (4.0 * spu) as i64));
+            }
+            let world = sim.world.clone();
+            let mut c = Controller::new(config.clone(), Box::new(sim), clock.clone());
+            c.handle(Command::Connect);
+            c.handle(Command::Reset);
+            c.handle(Command::Home(None));
+            run_until_idle(&mut c, &clock, 600.0);
+            c.handle(Command::Load {
+                name: "t".into(),
+                text: "T99 M6\n(RCNC FIND_STOCK SIZE=39,77,20 TOL=1)\n(RCNC FIND_BORES A=-10,-28 B=11,22 D=8 TOP=0 DEPTH=3 TOL=0.1 ROT=0.2)\nG0 X0 Y0 Z10\nM30".into(),
+            });
+            c.handle(Command::CycleStart);
+            let spu2 = |a: usize| config.axes[a].steps_per_unit;
+            let middle = |a: usize| crate::sim::homed_position(&config, &world, a, world.travel[a] as f64 / 2.0 / spu2(a));
+            let top = crate::sim::homed_position(&config, &world, 2, world.block.unwrap().2 as f64 / spu2(2));
+            for _ in 0..400_000 {
+                clock.advance(0.005);
+                c.update();
+                let s = c.snapshot();
+                if s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading) && c.routine_waiting {
+                    c.handle(Command::ToolChangeContinue { measure: None });
+                }
+                if s.find_stock.as_ref().is_some_and(|f| f.stage == FindStockStage::Locate) && c.routine_waiting && s.mode == Mode::Probing {
+                    let go = |c: &mut Controller, axis: usize, to: f64| {
+                        let by = to - c.snapshot().machine[axis];
+                        c.handle(Command::Jog { axis, positive: by > 0.0, step: Some(by.abs()) });
+                        run_until(c, &clock, 120.0, "the end of a jog", |s| s.mode == Mode::Probing);
+                    };
+                    go(&mut c, 2, s.machine[2].max(top + 30.0));
+                    go(&mut c, 0, middle(0) + 2.0);
+                    go(&mut c, 1, middle(1) + 1.0);
+                    go(&mut c, 2, top - 5.0);
+                    go(&mut c, 2, top + 5.0);
+                    c.handle(Command::FindStockContinue);
+                }
+                if matches!(s.mode, Mode::Idle | Mode::Alarm) && s.tool_change.is_none() && s.find_stock.is_none() {
+                    break;
+                }
+            }
+            c
+        };
+        let c = run(0.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?} {:?}", s.alarm, s.log);
+        let found = s.log.iter().find(|l| l.starts_with("Bores found")).unwrap();
+        assert!(found.contains("Ø8.000 and Ø8.000") && found.contains("(should be 54.231)") && found.contains("turned 0.000°"), "{found}");
+        assert!(close(s.work[0], 0.0) && close(s.work[1], 0.0), "{:?}", s.work);
+
+        // turned 0.5°: more than 0.2° off square, it stops with nothing set
+        let c = run(0.5);
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Alarm);
+        assert!(s.alarm.as_ref().unwrap().contains("off square"), "{:?}", s.alarm);
     }
 }

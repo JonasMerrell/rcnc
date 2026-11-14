@@ -189,6 +189,10 @@ pub enum Op {
     Message(String),
     /// Find the stock with the touch probe before carrying on (an `(RCNC FIND_STOCK ...)` comment).
     FindStock(StockRequest),
+    /// Touch a surface at a point and set work Z from it (an `(RCNC PROBE_Z ...)` comment).
+    ProbeZ(ZRequest),
+    /// Find two bores and set work X/Y from them (an `(RCNC FIND_BORES ...)` comment).
+    FindBores(BoresRequest),
     ProgramEnd,
 }
 
@@ -203,6 +207,116 @@ pub struct StockRequest {
     pub top_centre: [f64; 3],
     pub tolerance: Option<f64>,
     pub depth: Option<f64>,
+}
+
+/// `(RCNC PROBE_Z AT=x,y Z=z SEARCH=mm)`: with the touch probe loaded, go
+/// over work X/Y `AT`, probe down (up to `SEARCH` past where `Z` should be)
+/// and set work Z so that surface reads `Z`, e.g. a parallel the part sits
+/// on, for an exact thickness. Millimetres, work coordinates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ZRequest {
+    pub at: [f64; 2],
+    pub z: f64,
+    pub search: Option<f64>,
+}
+
+/// `(RCNC FIND_BORES A=x,y B=x,y D=8 TOP=z DEPTH=3 TOL=0.1 ROT=0.2)`: with the
+/// touch probe loaded, find the middles of two bores of diameter `D` that
+/// should be at work X/Y `A` and `B` (their top at work Z `TOP`, touched `DEPTH`
+/// below it), check their spacing (within `TOL` mm) and the part's turn (within
+/// `ROT` degrees), and set work X/Y so the pair's middle is where it should be.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoresRequest {
+    pub a: [f64; 2],
+    pub b: [f64; 2],
+    pub diameter: f64,
+    pub top: f64,
+    pub depth: f64,
+    pub tolerance: f64,
+    pub rotation: f64,
+}
+
+/// `KEY=VALUE` words after a directive's keyword, or None if the comment isn't it.
+fn directive<'a>(comment: &'a str, keyword: &str) -> Option<Result<Vec<(String, Vec<f64>)>, String>> {
+    let rest = comment.trim();
+    if rest.len() < keyword.len() || !rest[..keyword.len()].eq_ignore_ascii_case(keyword) {
+        return None;
+    }
+    let tail = &rest[keyword.len()..];
+    if !tail.is_empty() && !tail.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut out = vec![];
+    for word in tail.split_whitespace() {
+        let Some((k, v)) = word.split_once('=') else {
+            return Some(Err(format!("{keyword}: expected KEY=VALUE, got '{word}'")));
+        };
+        let nums: Result<Vec<f64>, String> =
+            v.split(',').map(|n| n.trim().parse::<f64>().map_err(|_| format!("{keyword}: bad number '{n}'"))).collect();
+        match nums {
+            Ok(n) => out.push((k.to_ascii_uppercase(), n)),
+            Err(e) => return Some(Err(e)),
+        }
+    }
+    Some(Ok(out))
+}
+
+fn take(words: &[(String, Vec<f64>)], key: &str, n: usize, what: &str) -> Result<Option<Vec<f64>>, String> {
+    match words.iter().find(|(k, _)| k == key) {
+        Some((_, v)) if v.len() == n => Ok(Some(v.clone())),
+        Some(_) => Err(format!("{what}: {key} takes {n} number{}", if n == 1 { "" } else { "s" })),
+        None => Ok(None),
+    }
+}
+
+impl ZRequest {
+    pub const KEYWORD: &'static str = "RCNC PROBE_Z";
+
+    pub fn parse(comment: &str) -> Option<Result<ZRequest, String>> {
+        let words = match directive(comment, Self::KEYWORD)? {
+            Ok(w) => w,
+            Err(e) => return Some(Err(e)),
+        };
+        let what = "PROBE_Z";
+        Some((|| {
+            let at = take(&words, "AT", 2, what)?.ok_or("PROBE_Z needs AT=x,y")?;
+            let z = take(&words, "Z", 1, what)?.ok_or("PROBE_Z needs Z=")?[0];
+            let search = take(&words, "SEARCH", 1, what)?.map(|v| v[0]);
+            Ok(ZRequest { at: [at[0], at[1]], z, search })
+        })())
+    }
+}
+
+impl BoresRequest {
+    pub const KEYWORD: &'static str = "RCNC FIND_BORES";
+
+    pub fn parse(comment: &str) -> Option<Result<BoresRequest, String>> {
+        let words = match directive(comment, Self::KEYWORD)? {
+            Ok(w) => w,
+            Err(e) => return Some(Err(e)),
+        };
+        let what = "FIND_BORES";
+        Some((|| {
+            let a = take(&words, "A", 2, what)?.ok_or("FIND_BORES needs A=x,y")?;
+            let b = take(&words, "B", 2, what)?.ok_or("FIND_BORES needs B=x,y")?;
+            let one = |k: &str, d: Option<f64>| -> Result<f64, String> {
+                take(&words, k, 1, what)?.map(|v| v[0]).or(d).ok_or(format!("FIND_BORES needs {k}="))
+            };
+            let r = BoresRequest {
+                a: [a[0], a[1]],
+                b: [b[0], b[1]],
+                diameter: one("D", None)?,
+                top: one("TOP", None)?,
+                depth: one("DEPTH", Some(3.0))?,
+                tolerance: one("TOL", Some(0.1))?,
+                rotation: one("ROT", Some(0.2))?,
+            };
+            if !(r.diameter > 0.0) || (r.a[0] - r.b[0]).hypot(r.a[1] - r.b[1]) < 1.0 {
+                return Err("FIND_BORES needs D above zero and A and B apart".into());
+            }
+            Ok(r)
+        })())
+    }
 }
 
 impl StockRequest {
@@ -660,6 +774,10 @@ impl Interpreter {
                 ops.push(Op::Message(msg.trim().to_string()));
             } else if let Some(req) = StockRequest::parse(c) {
                 ops.push(Op::FindStock(req?));
+            } else if let Some(req) = ZRequest::parse(c) {
+                ops.push(Op::ProbeZ(req?));
+            } else if let Some(req) = BoresRequest::parse(c) {
+                ops.push(Op::FindBores(req?));
             }
         }
 
@@ -1930,5 +2048,16 @@ mod tests {
         assert!(StockRequest::parse("just a comment").is_none());
         let mut i = Interpreter::new("(RCNC FIND_STOCK SIZE=a,b,c)");
         assert!(i.next_step().is_err());
+    }
+
+    #[test]
+    fn probe_z_and_find_bores_comments() {
+        let (_, ops) = run("(RCNC PROBE_Z AT=-14,-44 Z=-19 SEARCH=30)\n(RCNC FIND_BORES A=-10,28 B=11,-22 D=8 TOP=-3 DEPTH=3 TOL=0.1 ROT=0.2)\nM30");
+        assert_eq!(ops[0], Op::ProbeZ(ZRequest { at: [-14.0, -44.0], z: -19.0, search: Some(30.0) }));
+        let Op::FindBores(b) = &ops[1] else { panic!("{ops:?}") };
+        assert_eq!((b.a, b.b, b.diameter, b.top, b.depth, b.tolerance, b.rotation), ([-10.0, 28.0], [11.0, -22.0], 8.0, -3.0, 3.0, 0.1, 0.2));
+        assert!(ZRequest::parse("RCNC PROBE_Z Z=1").unwrap().is_err());
+        assert!(BoresRequest::parse("RCNC FIND_BORES A=0,0 B=0,0 D=8 TOP=0").unwrap().is_err());
+        assert!(ZRequest::parse("RCNC PROBE_ZED AT=0,0 Z=0").is_none());
     }
 }
