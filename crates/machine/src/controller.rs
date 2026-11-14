@@ -40,6 +40,9 @@ const POSITION_SLACK: i64 = 2;
 /// otherwise keep the controller in one cycle for good: no status polls, no
 /// E-stop input, no Stop.
 const MAX_LINES_PER_CYCLE: usize = 2_000;
+/// Steps a probe move may run on past where the probe input was first seen,
+/// beyond its own braking distance, before rcnc stops it itself.
+const PROBE_OVERRUN_SLACK: i64 = 3;
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -244,6 +247,8 @@ pub struct Controller {
     /// Where a probe job started while a program was paused, and the Z
     /// program offset then, to go back before the program carries on.
     routine_resume: Option<(Axes, f64)>,
+    /// The probe or guarded move running now, watched from the status polls.
+    probe_watch: Option<ProbeWatch>,
     macros: Arc<HashMap<u32, String>>,
 }
 
@@ -289,6 +294,7 @@ impl Controller {
             jog_alive: 0.0,
             jog_continuous: false,
             routine_resume: None,
+            probe_watch: None,
             macros: Arc::new(HashMap::new()),
         }
         .with_interp_config()
@@ -451,6 +457,7 @@ impl Controller {
         self.exec = None;
         self.stopping = None;
         self.jog_continuous = false;
+        self.probe_watch = None;
         self.home.clear();
         self.outputs.spindle_on = false;
         self.outputs.flood = false;
@@ -778,9 +785,60 @@ impl Controller {
         if m.steps == 0 {
             return Ok(());
         }
+        self.send_axis_move(m)
+    }
+
+    /// Start a single-axis move; one that stops on the probe is watched (see `watch_probe`).
+    fn send_axis_move(&mut self, m: AxisMove) -> Result<(), String> {
         self.backend.axis_move(&m).map_err(|e| e.to_string())?;
         self.status.idle = false;
+        self.probe_watch = m.stop_on.map(|_| ProbeWatch::new(&m, self.status.position[m.axis]));
         Ok(())
+    }
+
+    /// The board stops a probe move on the probe input by itself. Check it
+    /// did: if the axis keeps going past the point where the input was first
+    /// seen by more than its braking distance, stop it from here and fail
+    /// the probe (a wrong pin or polarity setting, or a board that ignores
+    /// the stop pin, would otherwise drive the probe on until its move
+    /// ends). Also notes where the touch happened, between two polls, for the log.
+    fn watch_probe(&mut self) {
+        let Some(w) = &mut self.probe_watch else { return };
+        let pos = self.status.position[w.axis];
+        let touching = self.config.probe.is_some_and(|p| p.is_active(self.status.inputs));
+        match w.first_seen {
+            None if touching => w.first_seen = Some(pos),
+            None => w.last_clear = pos,
+            Some(seen) => {
+                let past = (pos - seen) * w.dir;
+                if past > w.braking + PROBE_OVERRUN_SLACK {
+                    let axis = AXIS_LETTERS[w.axis];
+                    self.probe_watch = None;
+                    self.info(format!(
+                        "Warning: the board kept moving {axis} {past} steps after the probe input came on; rcnc stopped it. Check the probe pin settings"
+                    ));
+                    // Where it stopped is not where it touched: fail the probe.
+                    self.hold_axis_move("the board did not stop on the probe input");
+                }
+            }
+        }
+    }
+
+    /// A probe move came to rest: say where it touched, and how far past it the axis stopped.
+    fn probe_report(&mut self) {
+        let Some(w) = self.probe_watch.take() else { return };
+        let Some(seen) = w.first_seen else { return };
+        let a = &self.config.axes[w.axis];
+        let mm = |steps: i64| steps as f64 / a.steps_per_unit;
+        let stop = self.status.position[w.axis];
+        self.info(format!(
+            "Probe: touched {} between {:.4} and {:.4}, stopped at {:.4} ({:.4} past the first poll that saw it)",
+            AXIS_LETTERS[w.axis],
+            mm(w.last_clear),
+            mm(seen),
+            mm(stop),
+            mm((stop - seen) * w.dir),
+        ));
     }
 
     fn end_routine(&mut self, result: Result<(), String>) {
@@ -1286,6 +1344,10 @@ impl Controller {
             self.enter_estop("E-stop input");
             return;
         }
+        self.watch_probe();
+        if self.status.idle {
+            self.probe_report();
+        }
         if let Some(deadline) = self.stopping {
             let at_rest = self.status.idle && self.generator.speed() == 0.0;
             if at_rest || self.clock.now() >= deadline {
@@ -1602,9 +1664,7 @@ impl Controller {
             acceleration: a.acceleration * spu,
             stop_on: Some((probe, true)),
         };
-        self.backend.axis_move(&m).map_err(|e| e.to_string())?;
-        self.status.idle = false;
-        Ok(())
+        self.send_axis_move(m)
     }
 
     /// Keep the board's queue topped up from the planner.
@@ -1771,6 +1831,33 @@ impl Controller {
         }
         self.autosave_now();
         self.wait_for_saves();
+    }
+}
+
+/// A single-axis move that stops on the probe, as the status polls see it.
+#[derive(Debug, Clone, Copy)]
+struct ProbeWatch {
+    axis: usize,
+    /// +1 or -1, the direction of travel.
+    dir: i64,
+    /// Steps the axis needs to stop from the move's speed.
+    braking: i64,
+    /// Position at the last poll with the probe input off.
+    last_clear: i64,
+    /// Position at the first poll with it on.
+    first_seen: Option<i64>,
+}
+
+impl ProbeWatch {
+    fn new(m: &AxisMove, start: i64) -> Self {
+        let braking = if m.acceleration > 0.0 { m.velocity * m.velocity / (2.0 * m.acceleration) } else { 0.0 };
+        ProbeWatch {
+            axis: m.axis,
+            dir: if m.positive { 1 } else { -1 },
+            braking: braking.ceil() as i64,
+            last_clear: start,
+            first_seen: None,
+        }
     }
 }
 
@@ -3163,5 +3250,40 @@ mod tests {
         c.recover("test");
         tick(&mut c, &clock, 400);
         assert_eq!(c.mode(), Mode::EStop);
+    }
+
+    #[test]
+    fn rcnc_stops_a_probe_the_board_does_not() {
+        let clock = Arc::new(ManualClock::default());
+        let mut sim = Simulator::new(clock.clone());
+        sim.ignore_stop_pin = true;
+        let mut c = Controller::new(MachineConfig::dmc2(), Box::new(sim), clock.clone());
+        c.handle(Command::Connect);
+        c.handle(Command::Reset);
+        c.handle(Command::Home(None));
+        run_until_idle(&mut c, &clock, 120.0);
+        // The simulated plate is at machine Z -127 (8 - (33000 - 6000) / 200).
+        c.handle(Command::Mdi("G53 G31 Z-150 F300".into()));
+        run_until_idle(&mut c, &clock, 60.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("rcnc stopped it")), "{:?}", s.log);
+        assert_eq!(s.mode, Mode::Alarm, "the overrun position must not be used as a probe result");
+        // A poll or two at 5 mm/s is a fraction of a millimetre; it must not run on towards Z-150.
+        tick(&mut c, &clock, 100);
+        let z = c.snapshot().machine[2];
+        assert!(z > -127.5, "ran on to {z}");
+    }
+
+    #[test]
+    fn a_normal_probe_is_not_stopped_by_rcnc() {
+        let (mut c, clock) = setup();
+        c.handle(Command::Home(None));
+        run_until_idle(&mut c, &clock, 120.0);
+        c.handle(Command::Mdi("G53 G31 Z-150 F300".into()));
+        run_until_idle(&mut c, &clock, 60.0);
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Idle);
+        assert!(!s.log.iter().any(|l| l.contains("rcnc stopped it")), "{:?}", s.log);
+        assert!(s.log.iter().any(|l| l.starts_with("Probe: touched Z between")), "{:?}", s.log);
     }
 }
