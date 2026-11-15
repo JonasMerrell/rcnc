@@ -119,6 +119,17 @@ impl App {
                         changed |= ui.add(DragValue::new(&mut t.flute_length).speed(0.1).range(0.0..=500.0).suffix(" mm")).changed();
                         ui.label(RichText::new("Stick out").color(MUTED));
                         changed |= ui.add(DragValue::new(&mut t.stickout).speed(0.1).range(0.0..=500.0).suffix(" mm")).changed();
+                        // the tool just measured, with its stick-out known for sure, calibrates the stick-out check
+                        if self.snap.last_measured_tool == Some(*n) && t.stickout > 0.0 {
+                            let text = if self.snap.config.tool_change.nut_face_z.is_some() { "Recalibrate stick-out check" } else { "Calibrate stick-out check" };
+                            if ui
+                                .small_button(text)
+                                .on_hover_text(format!("T{n} was just measured on the setter and sticks out exactly {} mm from the collet nut: from it, rcnc works out every measured tool's stick-out", t.stickout))
+                                .clicked()
+                            {
+                                self.machine.send(Command::CalibrateStickout { stickout: t.stickout });
+                            }
+                        }
                     });
                     ui.horizontal(|ui| {
                         ui.add_space(tw + ui.spacing().item_spacing.x);

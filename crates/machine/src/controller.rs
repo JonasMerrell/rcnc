@@ -99,6 +99,8 @@ pub enum Command {
     FindStock(gcode::StockRequest),
     /// The probe is over the stock: carry on with Find stock.
     FindStockContinue,
+    /// The tool last measured on the setter sticks out exactly this far (mm): calibrate the stick-out check.
+    CalibrateStickout { stickout: f64 },
     /// Find stock, before Continue: touch the sides `depth` mm below the top and
     /// accept a size within `tolerance` mm of the job's.
     FindStockSettings { depth: f64, tolerance: f64 },
@@ -181,6 +183,8 @@ pub struct Snapshot {
     /// How far the probe's ball sits off the spindle axis, X/Y mm, as last
     /// measured while it has stayed in the spindle (None: not measured).
     pub probe_runout: Option<[f64; 2]>,
+    /// The tool last measured on the setter (it can calibrate the stick-out check).
+    pub last_measured_tool: Option<u32>,
     /// The tool in the spindle as far as the controller knows (0: unknown).
     pub loaded_tool: u32,
     /// The loaded tool has been measured on the tool setter since it went in.
@@ -290,6 +294,8 @@ pub struct Controller {
     probe_cal: Option<ProbeCalView>,
     /// The loaded probe's ball offset from the spindle axis, measured since it went in.
     probe_runout: Option<[f64; 2]>,
+    /// The last tool measured on the setter and the machine Z its tip touched at (for the stick-out check).
+    last_setter_hit: Option<(u32, f64)>,
     /// An automatic probing request (Probe Z, Find bores) runs in place of the program.
     auto_probe: bool,
     /// The tool in the spindle has been measured on the setter since it was loaded.
@@ -361,6 +367,7 @@ impl Controller {
             calibrate: None,
             probe_cal: None,
             probe_runout: None,
+            last_setter_hit: None,
             auto_probe: false,
             tool_measured: false,
             jog_return: None,
@@ -699,6 +706,7 @@ impl Controller {
                 }
             }
             Command::FindStockContinue => self.find_stock_continue(),
+            Command::CalibrateStickout { stickout } => self.calibrate_stickout(stickout),
             Command::FindStockSettings { depth, tolerance } => self.find_stock_settings(depth, tolerance),
             Command::CalibrateZ { reference, gauge } => self.start_calibrate(reference, gauge),
             Command::CalibrateContinue => self.calibrate_continue(),
@@ -2095,6 +2103,7 @@ impl Controller {
             calibrate: self.calibrate.clone(),
             probe_cal: self.probe_cal.clone(),
             probe_runout: self.probe_runout,
+            last_measured_tool: self.last_setter_hit.map(|h| h.0),
             loaded_tool: self.loaded_tool,
             tool_measured: self.tool_measured,
             air_cut: self.air_cut,
@@ -3074,6 +3083,58 @@ mod tests {
             }
         }
         (c, clock)
+    }
+
+    /// The stick-out check: calibrated from a tool whose stick-out is known, it stops a tool change whose
+    /// tool sticks out more than the tolerance off the program's, and says so.
+    #[test]
+    fn tool_change_checks_the_stickout() {
+        let run = |nut_face: Option<f64>| {
+            let (mut c, clock) = probing_setup_with(|_| {});
+            let mut config = MachineConfig::dmc2();
+            config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, offset: 13.31, reference: String::new(), ..Default::default() };
+            config.tool_change = crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, centre_x: false, nut_face_z: nut_face, ..Default::default() };
+            c.handle(Command::SetConfig(Box::new(config)));
+            c.homed = [true; 6];
+            c.handle(Command::Mdi("G53 G0 X130 Y130 Z110".into()));
+            run_until_idle(&mut c, &clock, 5.0);
+            // the header gives T3 a 24 mm stick-out
+            c.handle(Command::Load { name: "t".into(), text: "(T3 6 mm end mill - D6 flat end mill, 3 flutes, flute length 18, stickout 24)\nT3 M6\nM30".into() });
+            c.handle(Command::CycleStart);
+            for _ in 0..80_000 {
+                clock.advance(0.005);
+                c.update();
+                let s = c.snapshot();
+                if s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading) && c.routine_waiting {
+                    c.handle(Command::ToolChangeContinue { measure: Some(true) });
+                }
+                if s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Mismatch) && c.routine_waiting || s.mode == Mode::Idle {
+                    break;
+                }
+            }
+            (c, clock)
+        };
+        // not calibrated: no check, but the measurement is kept for calibrating
+        let (mut c, _) = run(None);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?}", s.log);
+        assert_eq!(s.last_measured_tool, Some(3));
+        // say T3 really sticks out 24: the setter (sim table) touched at machine Z30
+        c.handle(Command::CalibrateStickout { stickout: 24.0 });
+        assert!(close(c.snapshot().config.tool_change.nut_face_z.unwrap(), 54.0), "{:?}", c.snapshot().config.tool_change.nut_face_z);
+
+        // calibrated as if the nut face were 3 mm lower: T3 measures 21, 3 off the program's 24
+        let (c, _) = run(Some(51.0));
+        let s = c.snapshot();
+        let t = s.tool_change.clone().expect("the change waits");
+        assert_eq!(t.stage, ToolChangeStage::Mismatch);
+        assert!(close(t.measured_stickout.unwrap(), 21.0), "{t:?}");
+        assert!(t.problem.as_ref().unwrap().contains("sticks out 21.0 mm, the program expects 24.0"), "{:?}", t.problem);
+        // within the tolerance: carries on
+        let (c, _) = run(Some(55.0));
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("T3 stick-out measured 25.0 mm (program expects 24.0)")), "{:?}", s.log);
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?}", s.log);
     }
 
     #[test]

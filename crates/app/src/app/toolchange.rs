@@ -77,10 +77,20 @@ impl App {
             if t.flute_length > 0.0 {
                 size += &format!("   ·   flutes {} mm", trim(t.flute_length));
             }
-            if t.stickout > 0.0 {
-                size += &format!("   ·   stick out {} mm", trim(t.stickout));
-            }
             ui.label(RichText::new(size).size(24.0).color(TEXT));
+        }
+        // the stick-out the program (and its simulation) assumed: set it when loading the tool
+        let stick = tool.map(|t| t.stickout).filter(|s| *s > 0.0);
+        let (text, color) = match stick {
+            Some(s) => (format!("Stick-out {} mm", trim(s)), AMBER),
+            None => ("Stick-out not given".to_string(), MUTED),
+        };
+        ui.label(RichText::new(text).size(30.0).color(color).strong());
+        if let Some(m) = tc.measured_stickout {
+            let ok = stick.is_none_or(|s| (m - s).abs() <= self.snap.config.tool_change.stickout_tolerance);
+            ui.label(RichText::new(format!("measured {:.1} mm", m)).size(20.0).color(if ok { GREEN } else { RED }));
+        } else if stick.is_some() {
+            ui.label(RichText::new("from the collet nut's face to the tip").size(15.0).color(MUTED));
         }
         ui.add_space(16.0);
 
@@ -325,6 +335,17 @@ fn draw_tool(p: &egui::Painter, rect: Rect, tool: Option<&Tool>) {
     p.line_segment([pos2(rr.x, tip + 6.0), pos2(rr.x, y + 6.0)], Stroke::new(1.0_f32, ACCENT));
     p.line_segment([l, rr], s);
     p.text(pos2(cx, y + 10.0), Align2::CENTER_TOP, format!("Ø {}", trim(d)), FontId::proportional(30.0), ACCENT);
+    // The stick-out, from the nut's face to the tip, when the program gives it.
+    if tool.stickout > 0.0 {
+        let x = cx + mm(nut_d / 2.0) + 14.0;
+        let st = Stroke::new(2.0_f32, AMBER);
+        p.line_segment([pos2(x, shank_top), pos2(x, tip)], st);
+        for yy in [shank_top, tip] {
+            p.line_segment([pos2(x - 7.0, yy), pos2(x + 7.0, yy)], st);
+        }
+        p.line_segment([pos2(cx + r + 3.0, tip), pos2(x - 7.0, tip)], Stroke::new(1.0_f32, AMBER));
+        p.text(pos2(x + 10.0, (shank_top + tip) / 2.0), Align2::LEFT_CENTER, format!("{} mm", trim(tool.stickout)), FontId::proportional(26.0), AMBER);
+    }
     p.text(rect.left_top(), Align2::LEFT_TOP, kind.name(), FontId::proportional(16.0), MUTED);
 }
 

@@ -117,6 +117,12 @@ pub struct ToolChangeSettings {
     pub z: f64,
     /// Go back to where the tool change started, with the spindle and coolant as they were.
     pub return_to_start: bool,
+    /// Machine Z of the collet nut's face when a tool's tip touches the setter, less the tool's stick-out:
+    /// with it, measuring a tool gives its stick-out. None until calibrated with a tool whose stick-out
+    /// is known (Tools page).
+    pub nut_face_z: Option<f64>,
+    /// How far the measured stick-out may be from the program's before the tool change stops, mm.
+    pub stickout_tolerance: f64,
 }
 
 impl Default for ToolChangeSettings {
@@ -135,6 +141,8 @@ impl Default for ToolChangeSettings {
             x_travel: 343.0,
             z: 0.0,
             return_to_start: true,
+            nut_face_z: None,
+            stickout_tolerance: 1.5,
         }
     }
 }
