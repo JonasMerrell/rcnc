@@ -364,7 +364,9 @@ impl Controller {
         let down = top - r.depth - ball;
         let reach = r.diameter / 2.0 - ball;
         let pos = self.machine_position();
-        let mut steps = vec![probing::guarded_to(&s, 2, pos[2].max(above))];
+        // between the bores, back up to where the probe came from: the part may stand higher than the bores' top
+        let travel = pos[2].max(above);
+        let mut steps = vec![probing::guarded_to(&s, 2, travel)];
         for at in [r.a, r.b] {
             let (x, y) = (self.work_to_machine(0, at[0]), self.work_to_machine(1, at[1]));
             steps.push(probing::guarded_to(&s, 0, x));
@@ -382,7 +384,7 @@ impl Controller {
                 more.extend(probing::touch(&s2, 1, true, reach + 1.5));
                 more.push(probing::guarded_to(&s2, 1, y));
                 more.extend(probing::touch(&s2, 1, false, reach + 1.5));
-                more.push(probing::guarded_to(&s2, 2, above));
+                more.push(probing::guarded_to(&s2, 2, travel));
                 Ok(more)
             })));
         }
