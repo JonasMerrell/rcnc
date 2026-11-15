@@ -83,6 +83,13 @@ pub struct App {
     air_lift: f64,
     /// Gauge block thickness for calibrating a Z reference without the probe, mm.
     cal_gauge: f64,
+    /// Calibrate probe on the Probe page: the reference shape, its X/Y size
+    /// (a round one's diameter is the X), how far below an outer one's top
+    /// the sides are touched, and the Z reference for the Z offset.
+    pc_shape: machine::ProbeCalShape,
+    pc_size: [f64; 2],
+    pc_depth: f64,
+    pc_zref: usize,
     /// The tool change window's photo: tool, its image setting, the file found.
     tc_photo: Option<(u32, String, Option<std::path::PathBuf>)>,
     view: View,
@@ -138,6 +145,10 @@ impl App {
             fs_size: [39.0, 20.0, 77.0],
             air_lift: 25.0,
             cal_gauge: 10.0,
+            pc_shape: machine::ProbeCalShape::InnerBore,
+            pc_size: [20.0, 20.0],
+            pc_depth: 3.0,
+            pc_zref: 0,
             tc_photo: None,
             view: View::Toolpath,
             sheets,
@@ -424,6 +435,7 @@ impl eframe::App for App {
         self.tool_change_window(ctx);
         self.find_stock_window(ctx);
         self.calibrate_window(ctx);
+        self.probe_cal_window(ctx);
 
         // The sheet is a native window over the centre area, drawn above
         // anything egui puts there: keep it out of the way of the tool change

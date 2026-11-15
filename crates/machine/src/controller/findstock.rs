@@ -56,7 +56,7 @@ impl Controller {
     /// Start the wizard, from a program's FIND_STOCK request or from the Probe page.
     /// Why the probe can't put its ball's tip `depth` mm below a surface it hovers over (the probe
     /// body would hit it first): the probe's flute length in the tool table is its stylus length.
-    fn stylus_too_short(&self, depth: f64) -> Option<String> {
+    pub(super) fn stylus_too_short(&self, depth: f64) -> Option<String> {
         let t = self.config.probing.probe_tool;
         let reach = self.interp.tools.get(&t).map(|tool| tool.flute_length).filter(|l| *l > 0.0)?;
         (depth > reach + 1e-9).then(|| format!("but the probe's stylus (T{t}) is only {} mm long", fmt(reach)))
@@ -101,7 +101,8 @@ impl Controller {
         self.mode == Mode::Probing
             && self.routine_waiting
             && (self.find_stock.as_ref().is_some_and(|f| matches!(f.stage, FindStockStage::Locate | FindStockStage::Mismatch))
-                || self.calibrate.as_ref().is_some_and(|c| c.stage == super::CalibrateStage::Locate))
+                || self.calibrate.as_ref().is_some_and(|c| c.stage == super::CalibrateStage::Locate)
+                || self.probe_cal.as_ref().is_some_and(|p| p.stage.locating()))
     }
 
     /// A jog while locating stops on the probe, except a tool jogged onto a gauge block.
@@ -192,7 +193,7 @@ impl Controller {
         ));
         let mut steps = probing::touch(&s, 2, false, fs.z_search);
         steps.push(Step::Then(Box::new(move |c, hits| {
-            let top = hits[0];
+            let top = hits[0] + c.probe_z_offset();
             let depth = req.depth.unwrap_or(fs.depth);
             let mut more = vec![probing::guarded_to(&s, 2, top + fs.z_clearance)];
             more.extend(sides(&s, 0, start[0], req.size[0], top, depth));
@@ -215,10 +216,9 @@ impl Controller {
         let Some(f) = &self.find_stock else { return Ok(vec![]) };
         let (req, tolerance) = (f.request.clone(), f.tolerance);
         let s = self.config.probing.clone();
-        let r = s.stylus_diameter / 2.0;
         // hits: top, X from below, X from above, Y from below, Y from above.
-        let centre = [(hits[1] + hits[2]) / 2.0, (hits[3] + hits[4]) / 2.0];
-        let size = [hits[2] - hits[1] - 2.0 * r, hits[4] - hits[3] - 2.0 * r];
+        let centre = [(hits[1] + hits[2]) / 2.0 + self.ball_offset(0), (hits[3] + hits[4]) / 2.0 + self.ball_offset(1)];
+        let size = [hits[2] - hits[1] - 2.0 * s.ball_radius(0), hits[4] - hits[3] - 2.0 * s.ball_radius(1)];
         let found = StockFound { centre, top, size };
         let over = [0, 1].map(|i| (size[i] - req.size[i]).abs());
         let mut steps = vec![probing::guarded_to(&s, 0, centre[0]), probing::guarded_to(&s, 1, centre[1])];
@@ -259,7 +259,7 @@ impl Controller {
             // X from the fixed jaw: touch its face beside the stock's end, outside the stock in Y
             let s = self.config.probing.clone();
             let fs = s.find_stock.clone();
-            let r = s.stylus_diameter / 2.0;
+            let r = s.ball_radius(0);
             let face = centre[0] + side * size[0] / 2.0;
             let start_x = face - side * (fs.clearance + r);
             let y_out = centre[1] + size[1] / 2.0 + fs.clearance + r;
@@ -273,7 +273,7 @@ impl Controller {
             steps.push(probing::guarded_to(&s, 2, above));
             let jaw_work = cx + side * req.size[0] / 2.0;
             steps.push(Step::Then(Box::new(move |c, hits| {
-                let jaw = hits[hits.len() - 1] + side * r;
+                let jaw = hits[hits.len() - 1] + side * r + c.ball_offset(0);
                 c.set_work_axis(0, jaw, jaw_work);
                 c.report(format!(
                     "Fixed jaw at machine X{}: work X set from it (the stock's face against it is X{}; the stock's own face was {} mm from it)",
@@ -383,7 +383,7 @@ impl Controller {
         steps.extend(probing::touch(&s, 2, false, fs.z_clearance + r.search.unwrap_or(10.0)));
         let z = r.z;
         steps.push(Step::Then(Box::new(move |c, hits| {
-            let hit = hits[0];
+            let hit = hits[0] + c.probe_z_offset();
             c.zero_z_on(hit, z);
             c.report(format!(
                 "Probe Z: surface at machine Z{} is now work Z{} ({} mm from where it was expected); tools are zeroed on it",
@@ -449,9 +449,10 @@ impl Controller {
 
     fn find_bores_done(&mut self, r: &BoresRequest, hits: &[f64]) -> Result<Vec<Step>, String> {
         // hits per bore: X+, X-, Y+, Y-
-        let centre = |i: usize| [(hits[4 * i] + hits[4 * i + 1]) / 2.0, (hits[4 * i + 2] + hits[4 * i + 3]) / 2.0];
+        let off = [self.ball_offset(0), self.ball_offset(1)];
+        let centre = |i: usize| [(hits[4 * i] + hits[4 * i + 1]) / 2.0 + off[0], (hits[4 * i + 2] + hits[4 * i + 3]) / 2.0 + off[1]];
         let (ca, cb) = (centre(0), centre(1));
-        let ball = self.config.probing.stylus_diameter / 2.0;
+        let ball = self.config.probing.ball_radius(0);
         let size = |i: usize| (hits[4 * i] - hits[4 * i + 1]).abs() + 2.0 * ball;
         let spacing = (cb[0] - ca[0]).hypot(cb[1] - ca[1]);
         let nominal = (r.b[0] - r.a[0]).hypot(r.b[1] - r.a[1]);

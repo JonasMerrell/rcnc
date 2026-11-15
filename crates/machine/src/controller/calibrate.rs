@@ -76,7 +76,7 @@ impl Controller {
         self.routine_step();
     }
 
-    fn probe_ready_text(&self) -> Option<String> {
+    pub(super) fn probe_ready_text(&self) -> Option<String> {
         self.config.probe.is_none().then(|| "no probe input is configured".to_string()).or_else(|| {
             let t = self.config.probing.probe_tool;
             if !self.probe_loaded() {
@@ -151,14 +151,14 @@ impl Controller {
             if (a - b).abs() > limit + 1e-9 {
                 return Err(format!("the two touches differ by {} mm (limit {}): check the probe and the surface", fmt((a - b).abs()), fmt(limit)));
             }
-            Ok(c.calibrate_result((a + b) / 2.0))
+            Ok(c.calibrate_result((a + b) / 2.0 + c.probe_z_offset()))
         })));
         Ok(steps)
     }
 
     /// The setter top's height above a surface at machine Z `surface`, shown
     /// for the operator to save; then lift off it.
-    fn calibrate_result(&mut self, surface: f64) -> Vec<Step> {
+    pub(super) fn calibrate_result(&mut self, surface: f64) -> Vec<Step> {
         // The loaded tool was measured with the active reference: at the
         // setter it read that reference's setter top, so the setter is
         // `top - work Z of the surface` above the surface.

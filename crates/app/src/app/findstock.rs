@@ -3,7 +3,7 @@
 //! jogs over the middle of the stock and presses Continue; rcnc does the rest.
 
 use eframe::egui::{self, pos2, Align2, Button, Color32, CornerRadius, FontId, Margin, Rect, RichText, Sense, Stroke, Vec2};
-use machine::{CalibrateStage, CalibrateView, Command, FindStockStage, FindStockView};
+use machine::{CalibrateStage, CalibrateView, Command, FindStockStage, FindStockView, ProbeCalShape, ProbeCalStage, ProbeCalTarget, ProbeCalView};
 
 use super::palette::*;
 use super::{big_button, App};
@@ -119,6 +119,158 @@ impl App {
                     if ui.add(big_button("Cancel", RED).min_size(Vec2::new(150.0, 56.0))).clicked() {
                         self.machine.send(Command::Stop);
                     }
+                });
+            }
+        }
+    }
+
+    /// The probe calibration window, in the same place and style.
+    pub(super) fn probe_cal_window(&mut self, ctx: &egui::Context) {
+        let Some(k) = self.snap.probe_cal.clone() else { return };
+        egui::Window::new("Calibrate probe")
+            .title_bar(false)
+            .anchor(Align2::RIGHT_TOP, Vec2::new(-16.0, 64.0))
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size(Vec2::new(460.0, 0.0))
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .fill(PANEL)
+                    .stroke(Stroke::new(2.0_f32, ACCENT))
+                    .corner_radius(CornerRadius::same(14))
+                    .inner_margin(Margin::same(20)),
+            )
+            .show(ctx, |ui| self.probe_cal_body(ui, &k));
+    }
+
+    fn probe_cal_body(&mut self, ui: &mut egui::Ui, k: &ProbeCalView) {
+        let s = self.snap.clone();
+        let shape = match k.target {
+            ProbeCalTarget::Shape { shape, .. } => Some(shape),
+            ProbeCalTarget::ZReference(_) => None,
+        };
+        ui.label(RichText::new("CALIBRATE PROBE").size(16.0).color(MUTED).strong());
+        ui.label(RichText::new(&k.on).size(26.0).color(TEXT).strong());
+        let old = &k.old;
+        let stored = match shape {
+            Some(_) if old.diameter.iter().all(|d| *d > 0.0) => {
+                format!("Stored: ball X {:.3} / Y {:.3} mm (Ø{:.3} nominal)", old.diameter[0], old.diameter[1], k.nominal)
+            }
+            Some(_) => format!("Stored: not calibrated, the Ø{:.3} nominal ball is used", k.nominal),
+            None => format!("Stored Z offset: {:+.3} mm", old.z_offset),
+        };
+        ui.label(RichText::new(stored).size(15.0).color(MUTED));
+        if let Some(shape) = shape {
+            ui.add_space(4.0);
+            shape_sketch(ui, shape);
+        }
+        ui.add_space(8.0);
+        let check = |ui: &mut egui::Ui, done: bool, text: &str| {
+            let (mark, color) = if done { ("✔", GREEN) } else { ("○", MUTED) };
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(mark).size(20.0).color(color));
+                ui.label(RichText::new(text).size(17.0).color(TEXT));
+            });
+        };
+        let stop = |ui: &mut egui::Ui, app: &mut Self, label: &str| {
+            if ui.add(big_button(label, RED).min_size(Vec2::new(150.0, 56.0))).clicked() {
+                app.machine.send(Command::Stop);
+            }
+        };
+        match k.stage {
+            ProbeCalStage::Locate => {
+                check(ui, k.tapped, "Tap the stylus with a finger");
+                let (text, color) = if s.probe_active { ("ON", AMBER) } else { ("off", MUTED) };
+                ui.label(RichText::new(format!("      Probe input: {text}")).size(15.0).color(color).strong());
+                let place = match shape {
+                    Some(sh) if sh.inside() => "Jog the ball into the middle, about 3 mm below the top",
+                    Some(_) => "Jog it over the middle, 2–10 mm above the top",
+                    None => "Jog it over the surface, 2–10 mm above it",
+                };
+                check(ui, false, place);
+                if shape.is_none() {
+                    ui.label(RichText::new("Use a reference you trust: one calibrated with a gauge block and a real tool.").size(13.0).color(MUTED));
+                }
+                ui.add_space(6.0);
+                self.find_stock_jog(ui);
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(k.tapped && !s.probe_active, big_button("Continue", GREEN).min_size(Vec2::new(250.0, 56.0))).clicked() {
+                        self.machine.send(Command::CalibrateProbeContinue);
+                    }
+                    stop(ui, self, "Stop");
+                });
+            }
+            ProbeCalStage::Turn => {
+                check(ui, true, "First measurement done");
+                check(ui, false, "Spindle off: turn the probe half a turn in the spindle by hand");
+                check(ui, false, "Leave the machine where it is");
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!s.probe_active, big_button("Measure again", GREEN).min_size(Vec2::new(250.0, 56.0))).clicked() {
+                        self.machine.send(Command::CalibrateProbeContinue);
+                    }
+                    stop(ui, self, "Cancel");
+                });
+            }
+            ProbeCalStage::Probing => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    let what = if shape.is_some() { "Centring, then touching X and Y both ways twice…" } else { "Touching the surface twice…" };
+                    ui.label(RichText::new(what).size(17.0).color(ACCENT));
+                });
+                ui.add_space(10.0);
+                stop(ui, self, "Stop");
+            }
+            ProbeCalStage::Result => {
+                let new = k.new.clone().unwrap_or_default();
+                let row = |ui: &mut egui::Ui, name: &str, old: String, new: String, delta: String| {
+                    ui.label(RichText::new(name).size(15.0).color(MUTED));
+                    ui.label(RichText::new(old).size(17.0).color(TEXT));
+                    ui.label(RichText::new(new).size(19.0).color(GREEN).strong());
+                    ui.label(RichText::new(delta).size(15.0).color(MUTED));
+                    ui.end_row();
+                };
+                egui::Grid::new("probe-cal-result").num_columns(4).spacing([14.0, 6.0]).show(ui, |ui| {
+                    ui.label("");
+                    ui.label(RichText::new("stored").size(13.0).color(MUTED));
+                    ui.label(RichText::new("measured").size(13.0).color(MUTED));
+                    ui.label(RichText::new("change").size(13.0).color(MUTED));
+                    ui.end_row();
+                    match shape {
+                        Some(_) => {
+                            for (i, axis) in ["Ball X", "Ball Y"].iter().enumerate() {
+                                let was = if old.diameter[i] > 0.0 { old.diameter[i] } else { k.nominal };
+                                let tag = if old.diameter[i] > 0.0 { "" } else { " nom." };
+                                row(ui, axis, format!("{was:.3}{tag}"), format!("{:.3}", new.diameter[i]), format!("{:+.3}", new.diameter[i] - was));
+                            }
+                            if let Some(r) = k.runout {
+                                let was = k.old_runout.map_or("—".to_string(), |o| format!("{:+.3} / {:+.3}", o[0], o[1]));
+                                row(ui, "Off centre X / Y", was, format!("{:+.3} / {:+.3}", r[0], r[1]), format!("TIR {:.3}", 2.0 * r[0].hypot(r[1])));
+                            }
+                        }
+                        None => row(ui, "Z offset", format!("{:+.3}", old.z_offset), format!("{:+.3}", new.z_offset), format!("{:+.3}", new.z_offset - old.z_offset)),
+                    }
+                });
+                if let Some(r) = k.repeat {
+                    let color = if r <= s.config.probing.setter.repeat_tolerance { MUTED } else { AMBER };
+                    ui.label(RichText::new(format!("Repeat: the same span twice was {r:.3} mm apart")).size(14.0).color(color));
+                }
+                if k.runout.is_some() {
+                    ui.label(RichText::new("The off-centre offset is used until the probe comes out of the spindle.").size(13.0).color(MUTED));
+                }
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.add(big_button("Save", GREEN).min_size(Vec2::new(170.0, 56.0))).clicked() {
+                        self.machine.send(Command::CalibrateProbeContinue);
+                    }
+                    if shape.is_some() && k.centres.len() < 2 {
+                        let turn = ui.add(big_button("Turn probe", ACCENT).min_size(Vec2::new(120.0, 56.0)));
+                        if turn.on_hover_text("Turn the probe half a turn and measure again, to find how far its ball is off centre").clicked() {
+                            self.machine.send(Command::CalibrateProbeTurn);
+                        }
+                    }
+                    stop(ui, self, "Cancel");
                 });
             }
         }
@@ -264,6 +416,35 @@ fn stock_sketch(ui: &mut egui::Ui, f: &FindStockView) {
         p.text(rect.left_bottom() + Vec2::new(8.0, -6.0), Align2::LEFT_BOTTOM, text, FontId::proportional(15.0), if ok { GREEN } else { RED });
     }
     p.text(rect.left_top() + Vec2::new(8.0, 6.0), Align2::LEFT_TOP, "top view, +X right, +Y up", FontId::proportional(12.0), MUTED);
+}
+
+/// Top view of a calibration shape, with where the ball touches it.
+fn shape_sketch(ui: &mut egui::Ui, shape: ProbeCalShape) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 110.0), Sense::hover());
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, CornerRadius::same(8), RAISED);
+    let c = rect.center();
+    let metal = Color32::from_rgb(0x9a, 0xa3, 0xad);
+    let (hw, hh) = if shape.round() { (38.0, 38.0) } else { (58.0, 34.0) };
+    let inside = shape.inside();
+    if inside {
+        // a block of metal with the bore or pocket cut in it
+        p.rect_filled(Rect::from_center_size(c, Vec2::new(2.0 * hw + 50.0, 2.0 * hh + 24.0)), CornerRadius::same(2), metal);
+    }
+    let fill = if inside { RAISED } else { metal };
+    if shape.round() {
+        p.circle_filled(c, hw, fill);
+    } else {
+        p.rect_filled(Rect::from_center_size(c, Vec2::new(2.0 * hw, 2.0 * hh)), CornerRadius::same(2), fill);
+    }
+    let arrow = Stroke::new(2.0_f32, AMBER);
+    let d = if inside { -1.0 } else { 1.0 };
+    for (dir, half) in [(Vec2::new(1.0, 0.0), hw), (Vec2::new(-1.0, 0.0), hw), (Vec2::new(0.0, 1.0), hh), (Vec2::new(0.0, -1.0), hh)] {
+        let edge = c + dir * (half + 3.0 * d);
+        let from = c + dir * (half + 20.0 * d);
+        p.arrow(from, edge - from, arrow);
+    }
+    p.text(rect.left_top() + Vec2::new(8.0, 6.0), Align2::LEFT_TOP, "top view", FontId::proportional(12.0), MUTED);
 }
 
 fn trim(v: f64) -> String {
