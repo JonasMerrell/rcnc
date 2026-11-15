@@ -114,8 +114,8 @@ fn main() -> eframe::Result<()> {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title(format!("rcnc {VERSION}{}", if DIRTY { " +dirty" } else { "" }))
             .with_icon(icon())
-            // Small enough for a 1280 × 720 screen if Windows doesn't maximize it.
-            .with_inner_size([1180.0, 640.0])
+            // Small enough for a 720p screen, even at 125% scaling (1024 × 576), if Windows doesn't maximize it.
+            .with_inner_size([1000.0, 540.0])
             .with_min_inner_size([800.0, 480.0])
             .with_maximized(true),
         ..Default::default()
