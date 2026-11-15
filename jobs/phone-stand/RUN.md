@@ -36,8 +36,8 @@ at least about 35 thick everywhere (the finished underside is at Z34); up to 48 
 
 1. Open `op1-underside.nc`, Cycle Start.
 2. T99 + Find stock: tap, jog over the middle a few mm above the sloping top, Continue. It touches the
-   top there, then the four sides 20 mm below that point (on real material even where the slab is
-   thinnest, and well above the jaws). Size 76 × 76, tolerance 3 mm; the top height only warns (it
+   top there, then the four sides 10 mm below that point (on real material as long as the slab is
+   within about 8 mm of level, and well above the jaws). Size 76 × 76, tolerance 3 mm; the top height only warns (it
    expects 48, a sloped top reads lower: fine).
 3. T24: face the saw cut from Z48 down to Z34 in 1.5 mm passes (about 12 min; where the slab is thinner it
    cuts air), rough + one full-height finish pass round the 74 × 74 plinth (14.5 deep), the 2 mm recess,

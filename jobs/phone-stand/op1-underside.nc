@@ -7,7 +7,7 @@
 (T99 YIDOFENG 3D touch probe - touch probe, D2 stylus ball, flute length 20, stickout 40)
 (T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)
 (T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill, flute length 18, stickout 22)
-(estimated time 15:32)
+(estimated time 15:29)
 G21 G17 G40 G49 G80 G90 G91.1 G94 G64
 G54
 (RCNC Z_REFERENCE Vise)
@@ -16,7 +16,7 @@ G54
 G53 G0 Z0
 T99 M6
 (rcnc Find stock: jog the probe over the middle of the stock, a few mm above it, and press Continue)
-(RCNC FIND_STOCK SIZE=76,76,48 AT=0,0,48 TOL=3 DEPTH=20 KEEPZ=1)
+(RCNC FIND_STOCK SIZE=76,76,48 AT=0,0,48 TOL=3 DEPTH=10 KEEPZ=1)
 
 (Probe stock centre - Probe)
 
