@@ -152,7 +152,19 @@ impl App {
                 check(ui, false, "Jog it over the middle of the stock, 2–10 mm above the top");
                 ui.add_space(6.0);
                 self.find_stock_jog(ui);
-                ui.add_space(10.0);
+                ui.add_space(8.0);
+                // from the program; changed here, they hold for this Find stock only
+                let (mut depth, mut tolerance) = (f.depth, f.tolerance);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Touch the sides").size(15.0).color(TEXT));
+                    let d = ui.add(egui::DragValue::new(&mut depth).range(0.5..=60.0).speed(0.1).fixed_decimals(1).suffix(" mm"));
+                    ui.label(RichText::new("below the top, size within ±").size(15.0).color(TEXT));
+                    let t = ui.add(egui::DragValue::new(&mut tolerance).range(0.1..=20.0).speed(0.05).fixed_decimals(1).suffix(" mm"));
+                    if d.changed() || t.changed() {
+                        self.machine.send(Command::FindStockSettings { depth, tolerance });
+                    }
+                });
+                ui.add_space(8.0);
                 let ready = f.tapped && !s.probe_active;
                 let label = if f.stage == FindStockStage::Mismatch { "Probe again" } else { "Continue" };
                 ui.horizontal(|ui| {

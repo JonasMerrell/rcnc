@@ -39,6 +39,9 @@ pub struct FindStockView {
     pub found: Option<StockFound>,
     pub problem: Option<String>,
     pub tolerance: f64,
+    /// How far below the top the sides are touched (the program's DEPTH, or the
+    /// default); the operator can change it, and the tolerance, before Continue.
+    pub depth: f64,
 }
 
 /// Name of the Z reference the stock's top is kept as.
@@ -70,16 +73,16 @@ impl Controller {
         } else if self.outputs.spindle_on {
             Some("the spindle is on".to_string())
         } else {
-            let depth = request.depth.unwrap_or(self.config.probing.find_stock.depth);
-            // the ball's middle is DEPTH below the top
-            self.stylus_too_short(depth + self.config.probing.stylus_diameter / 2.0).map(|e| format!("the sides would be touched {} mm below the top, {e}: lower DEPTH in the program", fmt(depth)))
+            None
         };
         if let Some(why) = why {
             return self.raise(format!("Find stock: {why}"));
         }
         let tolerance = request.tolerance.unwrap_or(self.config.probing.find_stock.tolerance);
-        self.find_stock =
-            Some(FindStockView { request, stage: FindStockStage::Locate, tapped: false, found: None, problem: None, tolerance });
+        let depth = request.depth.unwrap_or(self.config.probing.find_stock.depth);
+        // a depth the stylus can't reach is shown, to change in the window (Continue waits for it)
+        let problem = self.depth_problem(depth);
+        self.find_stock = Some(FindStockView { request, stage: FindStockStage::Locate, tapped: false, found: None, problem, tolerance, depth });
         self.info("Find stock: tap the probe's stylus, jog it over the middle of the stock, a few mm above the top, then press Continue");
         self.sync_position();
         self.routine = Some(Routine { name: "Find stock".into(), steps: locate_steps().into(), hits: Vec::new() });
@@ -118,10 +121,41 @@ impl Controller {
     }
 
     /// The operator is over the stock (or wants to try again after a mismatch).
+    /// What's wrong with touching the sides `depth` mm below the top, if anything.
+    fn depth_problem(&self, depth: f64) -> Option<String> {
+        self.stylus_too_short(depth + self.config.probing.stylus_diameter / 2.0)
+            .map(|e| format!("The sides would be touched {} mm below the top, {e}. Lower the depth below.", fmt(depth)))
+    }
+
+    /// The operator changed how far below the top the sides are touched, or the size tolerance.
+    pub(super) fn find_stock_settings(&mut self, depth: f64, tolerance: f64) {
+        let Some(f) = &self.find_stock else { return };
+        if !matches!(f.stage, FindStockStage::Locate | FindStockStage::Mismatch) {
+            return self.info("Find stock: the depth and tolerance can only be changed before Continue");
+        }
+        if !(depth > 0.0 && depth.is_finite() && tolerance > 0.0 && tolerance.is_finite()) {
+            return self.info("Find stock: the depth and the tolerance must be more than zero");
+        }
+        let problem = self.depth_problem(depth);
+        if let Some(f) = &mut self.find_stock {
+            f.depth = depth;
+            f.request.depth = Some(depth);
+            f.tolerance = tolerance;
+            // a size mismatch stays on show until the next try
+            f.problem = problem.clone().or(f.problem.clone().filter(|_| f.stage == FindStockStage::Mismatch));
+        }
+        if let Some(p) = problem {
+            self.info(format!("Find stock: {p}"));
+        }
+    }
+
     pub(super) fn find_stock_continue(&mut self) {
         let Some(f) = &self.find_stock else { return };
         if !self.routine_waiting || self.mode != Mode::Probing {
             return;
+        }
+        if let Some(p) = self.depth_problem(f.depth) {
+            return self.info(format!("Find stock: {p}"));
         }
         if f.stage == FindStockStage::Locate && !f.tapped {
             return self.info("Tap the probe's stylus first, so rcnc knows the probe input works");
@@ -142,7 +176,7 @@ impl Controller {
     /// Touch the top, then X both sides, then Y both sides about the X centre.
     fn find_stock_probe(&mut self) -> Result<Vec<Step>, String> {
         let Some(f) = &self.find_stock else { return Ok(vec![]) };
-        let req = f.request.clone();
+        let (req, depth, tolerance) = (f.request.clone(), f.depth, f.tolerance);
         self.find_stock_stage(FindStockStage::Probing);
         if let Some(r) = &mut self.routine {
             r.hits.clear();
@@ -150,7 +184,12 @@ impl Controller {
         let s = self.config.probing.clone();
         let fs = s.find_stock.clone();
         let start = self.machine_position();
-        self.info(format!("Find stock: probing down from machine Z{}", fmt(start[2])));
+        self.info(format!(
+            "Find stock: probing down from machine Z{}; the sides {} mm below the top, size within ±{} mm",
+            fmt(start[2]),
+            fmt(depth),
+            fmt(tolerance)
+        ));
         let mut steps = probing::touch(&s, 2, false, fs.z_search);
         steps.push(Step::Then(Box::new(move |c, hits| {
             let top = hits[0];

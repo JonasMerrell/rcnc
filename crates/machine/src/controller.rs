@@ -97,6 +97,9 @@ pub enum Command {
     FindStock(gcode::StockRequest),
     /// The probe is over the stock: carry on with Find stock.
     FindStockContinue,
+    /// Find stock, before Continue: touch the sides `depth` mm below the top and
+    /// accept a size within `tolerance` mm of the job's.
+    FindStockSettings { depth: f64, tolerance: f64 },
     /// Air cut: run programs this many mm higher than written (None: for real). Only while idle.
     SetAirCut(Option<f64>),
     /// Calibrate the Z reference with this index: with the touch probe, or
@@ -675,6 +678,7 @@ impl Controller {
                 }
             }
             Command::FindStockContinue => self.find_stock_continue(),
+            Command::FindStockSettings { depth, tolerance } => self.find_stock_settings(depth, tolerance),
             Command::CalibrateZ { reference, gauge } => self.start_calibrate(reference, gauge),
             Command::CalibrateContinue => self.calibrate_continue(),
             Command::SetAirCut(lift) => {
@@ -4193,7 +4197,7 @@ mod tests {
     /// X from the fixed jaw on the left: the raw stock's -X face sits 0.5 mm off
     /// it (not square), so the jaw, not the stock, gives the X it is clamped at.
     #[test]
-    fn find_stock_refuses_a_depth_the_stylus_cannot_reach() {
+    fn find_stock_waits_for_a_depth_the_stylus_can_reach() {
         let clock = Arc::new(ManualClock::default());
         let config = crate::sim::dmc2_sim_config();
         let mut sim = Simulator::new(clock.clone());
@@ -4215,15 +4219,22 @@ mod tests {
             if s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading) && c.routine_waiting {
                 c.handle(Command::ToolChangeContinue { measure: None });
             }
-            if s.mode == Mode::Alarm || (s.mode == Mode::Idle && s.tool_change.is_none()) {
+            if s.find_stock.is_some() && c.routine_waiting || s.mode == Mode::Alarm {
                 break;
             }
         }
+        // the wizard waits with the problem shown, and won't go on until the depth fits the stylus
         let s = c.snapshot();
-        assert_eq!(s.mode, Mode::Alarm, "{:?}", s.log);
-        let alarm = s.alarm.clone().unwrap_or_default();
-        assert!(alarm.contains("20.000 mm below the top") && alarm.contains("stylus (T99) is only 12.000 mm long"), "{alarm}");
-        assert!(s.find_stock.is_none(), "the wizard didn't start");
+        let f = s.find_stock.clone().expect("the wizard is up");
+        assert_eq!(f.depth, 20.0);
+        let p = f.problem.clone().unwrap_or_default();
+        assert!(p.contains("20.000 mm below the top") && p.contains("stylus (T99) is only 12.000 mm long"), "{p}");
+        c.handle(Command::FindStockSettings { depth: 12.5, tolerance: 2.0 });
+        assert!(c.snapshot().find_stock.unwrap().problem.is_some(), "12.5 is past the 12 mm stylus (the simulator's ball is a point)");
+        c.handle(Command::FindStockSettings { depth: 10.0, tolerance: 2.0 });
+        let f = c.snapshot().find_stock.unwrap();
+        assert_eq!((f.depth, f.request.depth, f.tolerance, f.problem), (10.0, Some(10.0), 2.0, None));
+        assert_eq!(c.snapshot().mode, Mode::Probing);
     }
 
     #[test]
