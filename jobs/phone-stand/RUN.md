@@ -49,13 +49,15 @@ the table): the probe's tip (stick-out 40) is about 87 above the parallels, 39 a
 55 above it, T1 57, T11 58. Before the first run, jog the probe over the slab at Z top and check there is
 at least 25 mm under it.
 
-## Op 2: the sculpted top (about 70 min)
+## Op 2: the sculpted top (about 90 min)
 
 Flip it: **finished underside down** on the parallels, a finished plinth wall against the fixed jaw.
 
 1. Open `op2-top.nc`, Cycle Start.
 2. T99 + Find stock on the raw top band (rough X/Y).
-3. T24: face to the crest, 3D adaptive rough (about 30 min). This opens the two bores in the groove floor.
+3. T24: face to the crest, 3D adaptive rough in 4 mm steps (about 34 min), then a rest rough in 1.5 mm steps
+   that takes the terraces off the slopes (about 16 min) so the ball never takes a deep cut. This opens the
+   two bores in the groove floor.
 4. T99: Find bores runs by itself, sets X/Y from the bores (spacing 36 ± 0.1, turn ≤ 0.2°).
 5. T11: parallel finish front to back, then waterline on the steep faces (about 33 min). Nothing goes below
    Z10 (the groove floor) near the jaws, whose tops are at Z4.7.
