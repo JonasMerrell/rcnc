@@ -79,6 +79,9 @@ pub struct SimWorld {
     /// Steps added to `probe_z` after each move that stops on the probe, in
     /// order: a setter that doesn't read the same twice.
     pub touch_shifts: VecDeque<i64>,
+    /// Chips (or a burr): boxes the probe touches like the block, even inside a bore, each knocked
+    /// off after it has been touched that many times.
+    pub chips: Vec<(([i64; 2], [i64; 2], i64), u32)>,
 }
 
 pub struct Simulator {
@@ -157,6 +160,7 @@ impl Simulator {
             bores: Vec::new(),
             blocks: Vec::new(),
             touch_shifts: VecDeque::new(),
+            chips: Vec::new(),
         };
         let physical = [36_000, 26_000, 30_000, 0, 0, 0];
         let last_time = clock.now();
@@ -191,7 +195,9 @@ impl Simulator {
                 dx.hypot(dy) < *r as f64
             });
             let inside = |(x, y, top): ([i64; 2], [i64; 2], i64)| (x[0]..=x[1]).contains(&p[0]) && (y[0]..=y[1]).contains(&p[1]) && p[2] <= top;
-            let in_block = (!in_bore && self.world.block.is_some_and(inside)) || self.world.blocks.iter().any(|b| inside(*b));
+            let in_block = (!in_bore && self.world.block.is_some_and(inside))
+                || self.world.blocks.iter().any(|b| inside(*b))
+                || self.world.chips.iter().any(|(b, _)| inside(*b));
             return self.probe_override || p[2] <= self.world.probe_z || in_block;
         }
         if Some(*input) == c.estop {
@@ -281,6 +287,14 @@ impl Simulator {
                 if self.input_active(&input) == want {
                     if Some(input) == self.config.as_ref().and_then(|c| c.probe) {
                         self.world.probe_z += self.world.touch_shifts.pop_front().unwrap_or(0);
+                        // a chip knocked off by the touches before goes now (not while it reads touching)
+                        self.world.chips.retain(|(_, left)| *left > 0);
+                        let p = self.physical;
+                        for (b, left) in &mut self.world.chips {
+                            if (b.0[0]..=b.0[1]).contains(&p[0]) && (b.1[0]..=b.1[1]).contains(&p[1]) && p[2] <= b.2 {
+                                *left = left.saturating_sub(1);
+                            }
+                        }
                     }
                     self.active = None;
                     return;

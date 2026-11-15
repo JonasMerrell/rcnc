@@ -44,6 +44,58 @@ pub struct FindStockView {
     pub depth: f64,
 }
 
+/// A probing step in a running program failed: the probe went back up, nothing was set and the
+/// program waits at that line for Probe again, Accept anyway or Stop.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeRetryView {
+    /// Find stock, Find bores or Probe Z.
+    pub name: String,
+    /// What it measured and why that failed.
+    pub reason: String,
+    /// Only for a measurement outside a tolerance: how far out it is (Accept anyway sets it).
+    pub accept: Option<String>,
+}
+
+/// The request to run again.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ProbeAgain {
+    Stock(StockRequest),
+    Z(ZRequest),
+    Bores(BoresRequest),
+}
+
+impl ProbeAgain {
+    fn name(&self) -> &'static str {
+        match self {
+            ProbeAgain::Stock(_) => "Find stock",
+            ProbeAgain::Z(_) => "Probe Z",
+            ProbeAgain::Bores(_) => "Find bores",
+        }
+    }
+}
+
+/// What a measurement outside its tolerance would set: (axis, machine, work) each, and the report.
+#[derive(Debug, Clone)]
+pub(crate) struct Accept {
+    off: String,
+    set: Vec<(usize, f64, f64)>,
+    report: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ProbeRetry {
+    pub view: ProbeRetryView,
+    again: ProbeAgain,
+    accept: Option<Accept>,
+}
+
+/// A failure the operator can fix and probe again after: a touch that found nothing or came early
+/// (chips, a burr, the part not where the program expects) or a measurement outside its tolerance.
+/// Anything else (a soft limit, the board) stays an alarm.
+fn retryable(e: &str) -> bool {
+    ["without touching", "Probe touched during", "Probe is touching before", "Find bores: bores"].iter().any(|k| e.contains(k))
+}
+
 /// Name of the Z reference the stock's top is kept as.
 pub const STOCK_REFERENCE: &str = "Stock";
 
@@ -185,6 +237,7 @@ impl Controller {
         let s = self.config.probing.clone();
         let fs = s.find_stock.clone();
         let start = self.machine_position();
+        self.probe_safe_z = Some(start[2]);
         self.info(format!(
             "Find stock: probing down from machine Z{}; the sides {} mm below the top, size within ±{} mm",
             fmt(start[2]),
@@ -345,8 +398,11 @@ impl Controller {
     }
 
     /// Run `steps` as a routine in place of the program until they end.
-    fn run_probe_routine(&mut self, name: &str, steps: Vec<Step>) {
+    fn run_probe_routine(&mut self, name: &str, steps: Vec<Step>, again: ProbeAgain, safe_z: f64) {
         self.sync_position();
+        self.probe_again = Some(again);
+        self.probe_accept = None;
+        self.probe_safe_z = Some(safe_z);
         self.routine = Some(Routine { name: name.into(), steps: steps.into(), hits: Vec::new() });
         self.routine_move = None;
         self.routine_resume = None;
@@ -394,7 +450,7 @@ impl Controller {
             Ok(vec![probing::guarded_to(&c.config.probing.clone(), 2, hit + c.config.probing.find_stock.z_clearance)])
         })));
         self.info(format!("Probe Z at X{} Y{}", fmt(r.at[0]), fmt(r.at[1])));
-        self.run_probe_routine("Probe Z", steps);
+        self.run_probe_routine("Probe Z", steps, ProbeAgain::Z(r), pos[2].max(above));
     }
 
     /// `(RCNC FIND_BORES ...)`: find two bores' middles and set work X/Y from them.
@@ -444,7 +500,7 @@ impl Controller {
         let r2 = r.clone();
         steps.push(Step::Then(Box::new(move |c, hits| c.find_bores_done(&r2, hits))));
         self.info(format!("Find bores: Ø{} at X{} Y{} and X{} Y{}", fmt(r.diameter), fmt(r.a[0]), fmt(r.a[1]), fmt(r.b[0]), fmt(r.b[1])));
-        self.run_probe_routine("Find bores", steps);
+        self.run_probe_routine("Find bores", steps, ProbeAgain::Bores(r), travel);
     }
 
     fn find_bores_done(&mut self, r: &BoresRequest, hits: &[f64]) -> Result<Vec<Step>, String> {
@@ -466,18 +522,34 @@ impl Controller {
             fmt(nominal),
             fmt(turn)
         );
-        if (spacing - nominal).abs() > r.tolerance + 1e-9 {
-            return Err(format!("Find bores: {summary}: the spacing is more than {} mm off. Nothing was set", fmt(r.tolerance)));
-        }
-        if turn.abs() > r.rotation + 1e-9 {
-            return Err(format!(
-                "Find bores: {summary}: more than {}° off square. Nothing was set: square the part in the vise and run it again",
-                fmt(r.rotation)
-            ));
-        }
         let mid = [(ca[0] + cb[0]) / 2.0, (ca[1] + cb[1]) / 2.0];
-        self.set_work_axis(0, mid[0], (r.a[0] + r.b[0]) / 2.0);
-        self.set_work_axis(1, mid[1], (r.a[1] + r.b[1]) / 2.0);
+        let set = vec![(0, mid[0], (r.a[0] + r.b[0]) / 2.0), (1, mid[1], (r.a[1] + r.b[1]) / 2.0)];
+        // a bore reading small has something in it: a chip or a burr pushes the touch in, and its middle
+        let small = (0..2).filter(|&i| size(i) < r.diameter - 0.1).count();
+        let hint = match small {
+            0 => "",
+            1 => ". One bore reads small, so something is in it (chips or a burr): clean the bores and Probe again",
+            _ => ". Both bores read small, so something is in the bores (chips or a burr): clean them and Probe again",
+        };
+        let spacing_off = (spacing - nominal).abs() - r.tolerance;
+        let turn_off = turn.abs() - r.rotation;
+        if spacing_off > 1e-9 || turn_off > 1e-9 {
+            let (why, off) = if spacing_off > 1e-9 {
+                (format!("the spacing is more than {} mm off", fmt(r.tolerance)), format!("the spacing is {} mm off, {} mm over the {} mm tolerance", fmt(spacing - nominal), fmt(spacing_off), fmt(r.tolerance)))
+            } else {
+                (format!("more than {}° off square", fmt(r.rotation)), format!("the part is turned {}°, {}° over the {}° allowed", fmt(turn), fmt(turn_off), fmt(r.rotation)))
+            };
+            let hint = if hint.is_empty() && spacing_off <= 1e-9 { ": square the part in the vise and Probe again" } else { hint };
+            self.probe_accept = Some(Accept {
+                off,
+                set,
+                report: format!("Bores found: {summary}; accepted outside the tolerance: work X/Y set from their middle"),
+            });
+            return Err(format!("Find bores: {summary}: {why}. Nothing was set{hint}"));
+        }
+        for (axis, machine, work) in set {
+            self.set_work_axis(axis, machine, work);
+        }
         self.report(format!("Bores found: {summary}; work X/Y set from their middle"));
         Ok(vec![])
     }
@@ -485,7 +557,11 @@ impl Controller {
     /// The wizard's routine ended; let the program carry on, or stop it.
     pub(super) fn end_find_stock(&mut self, result: &Result<(), String>) {
         let auto = std::mem::take(&mut self.auto_probe);
-        if self.find_stock.take().is_none() && !auto {
+        let stock = self.find_stock.take();
+        let again = self.probe_again.take();
+        let accept = self.probe_accept.take();
+        let safe_z = self.probe_safe_z.take();
+        if stock.is_none() && !auto {
             return;
         }
         match result {
@@ -494,7 +570,76 @@ impl Controller {
                     *wait = Wait::None;
                 }
             }
-            Err(e) => self.raise(format!("Find stock failed: {e}")),
+            Err(e) => {
+                let in_program = matches!(&self.exec, Some(Exec { wait: Wait::Routine, .. })) && self.mode == Mode::Running;
+                match again.or(stock.map(|f| ProbeAgain::Stock(f.request))) {
+                    Some(again) if in_program && retryable(e) => self.hold_for_retry(e, again, accept, safe_z),
+                    _ => {
+                        self.last_probe = Some(format!("Failed: {e}"));
+                        self.raise(format!("Find stock failed: {e}"))
+                    }
+                }
+            }
+        }
+    }
+
+    /// A probing step in the program failed but can be tried again: lift the probe back to where it
+    /// started from, and hold the program at this line for the operator.
+    fn hold_for_retry(&mut self, e: &str, again: ProbeAgain, accept: Option<Accept>, safe_z: Option<f64>) {
+        let name = again.name();
+        let reason = e.strip_prefix(&format!("{name}: ")).unwrap_or(e).to_string();
+        self.last_probe = Some(format!("{name} failed: {reason}"));
+        self.info(format!("{name} failed: {reason}. Nothing was set; the program is held: Probe again, or Stop"));
+        let view = ProbeRetryView { name: name.into(), reason, accept: accept.as_ref().map(|a| a.off.clone()) };
+        self.probe_retry = Some(ProbeRetry { view, again, accept });
+        if let Some(exec) = &mut self.exec {
+            exec.wait = Wait::ProbeRetry;
+        }
+        let pos = self.machine_position();
+        let z = safe_z.unwrap_or(pos[2]).max(pos[2]);
+        let feed = self.config.probing.travel_feed;
+        // not guarded: a probe that touched early may still be touching
+        self.routine = Some(Routine { name: "Lift the probe".into(), steps: [Step::MoveTo { axis: 2, to: z, feed, guarded: false }].into(), hits: Vec::new() });
+        self.routine_move = None;
+        self.routine_resume = None;
+        self.routine_return = self.mode;
+        self.mode = Mode::Probing;
+        self.routine_step();
+    }
+
+    fn retry_waiting(&self) -> bool {
+        self.mode == Mode::Running && self.status.idle && matches!(&self.exec, Some(Exec { wait: Wait::ProbeRetry, .. }))
+    }
+
+    /// Probe again: the same request, from the top.
+    pub(super) fn probe_again(&mut self) {
+        if !self.retry_waiting() {
+            return;
+        }
+        let Some(r) = self.probe_retry.take() else { return };
+        self.info(format!("{}: probing again", r.again.name()));
+        match r.again {
+            ProbeAgain::Stock(req) => self.start_find_stock(req),
+            ProbeAgain::Z(req) => self.start_probe_z(req),
+            ProbeAgain::Bores(req) => self.start_find_bores(req),
+        }
+    }
+
+    /// Accept anyway: set what a measurement outside its tolerance found, and carry on.
+    pub(super) fn probe_accept(&mut self) {
+        if !self.retry_waiting() {
+            return;
+        }
+        let Some(accept) = self.probe_retry.as_ref().and_then(|r| r.accept.clone()) else {
+            return self.info("Only a measurement outside its tolerance can be accepted: Probe again, or Stop");
+        };
+        self.probe_retry = None;
+        for (axis, machine, work) in accept.set {
+            self.set_work_axis(axis, machine, work);
+        }
+        self.report(format!("{} ({})", accept.report, accept.off));
+        if let Some(exec) = &mut self.exec {
+            exec.wait = Wait::None;
         }
     }
 }
