@@ -51,6 +51,14 @@ impl Controller {
     }
 
     /// Start the wizard, from a program's FIND_STOCK request or from the Probe page.
+    /// Why the probe can't put its ball's tip `depth` mm below a surface it hovers over (the probe
+    /// body would hit it first): the probe's flute length in the tool table is its stylus length.
+    fn stylus_too_short(&self, depth: f64) -> Option<String> {
+        let t = self.config.probing.probe_tool;
+        let reach = self.interp.tools.get(&t).map(|tool| tool.flute_length).filter(|l| *l > 0.0)?;
+        (depth > reach + 1e-9).then(|| format!("but the probe's stylus (T{t}) is only {} mm long", fmt(reach)))
+    }
+
     pub(super) fn start_find_stock(&mut self, request: StockRequest) {
         let probe_tool = self.config.probing.probe_tool;
         let why = if self.config.probe.is_none() {
@@ -62,7 +70,9 @@ impl Controller {
         } else if self.outputs.spindle_on {
             Some("the spindle is on".to_string())
         } else {
-            None
+            let depth = request.depth.unwrap_or(self.config.probing.find_stock.depth);
+            // the ball's middle is DEPTH below the top
+            self.stylus_too_short(depth + self.config.probing.stylus_diameter / 2.0).map(|e| format!("the sides would be touched {} mm below the top, {e}: lower DEPTH in the program", fmt(depth)))
         };
         if let Some(why) = why {
             return self.raise(format!("Find stock: {why}"));
@@ -355,6 +365,10 @@ impl Controller {
         }
         let s = self.config.probing.clone();
         let ball = s.stylus_diameter / 2.0;
+        // the ball's top goes DEPTH below the bores' top
+        if let Some(e) = self.stylus_too_short(r.depth + 2.0 * ball) {
+            return self.raise(format!("Find bores: the ball's tip goes {} mm into the bores, {e}: lower DEPTH in the program", fmt(r.depth + 2.0 * ball)));
+        }
         if r.diameter / 2.0 - ball < 0.3 {
             return self.raise(format!("Find bores: the Ø{} ball doesn't fit Ø{} bores", fmt(2.0 * ball), fmt(r.diameter)));
         }

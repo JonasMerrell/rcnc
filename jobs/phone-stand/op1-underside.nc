@@ -4,7 +4,7 @@
 (fixture fixed vise jaw [LEFT, -X]; the 76 x 76 slab [up to 48 thick, saw cut uneven], factory face down on the built-in parallels [Z0, the Vise reference]. For 76 mm: moving jaw base one 25 mm hole further out [+X] than for the 39 mm block, jaw opened about 12 mm more; jaws grip the bottom 4.7 mm: X-50.7 to -38, Y-47.75 to 47.75, Z0 to 4.7 [work])
 (fixture moving vise jaw [right, +X]: X38 to 50.7, Y-47.75 to 47.75, Z0 to 4.7 [work])
 (retracts use G53 G0 Z0 - home the machine first)
-(T99 YIDOFENG 3D touch probe - touch probe, D2 stylus ball, flute length 20, stickout 40)
+(T99 YIDOFENG 3D touch probe - touch probe, D2 stylus ball, flute length 12, stickout 40)
 (T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)
 (T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill, flute length 18, stickout 22)
 (estimated time 15:29)

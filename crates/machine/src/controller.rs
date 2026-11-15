@@ -4193,6 +4193,40 @@ mod tests {
     /// X from the fixed jaw on the left: the raw stock's -X face sits 0.5 mm off
     /// it (not square), so the jaw, not the stock, gives the X it is clamped at.
     #[test]
+    fn find_stock_refuses_a_depth_the_stylus_cannot_reach() {
+        let clock = Arc::new(ManualClock::default());
+        let config = crate::sim::dmc2_sim_config();
+        let mut sim = Simulator::new(clock.clone());
+        sim.add_stock(&config, 39.0, 77.0, 20.0);
+        let mut c = Controller::new(config, Box::new(sim), clock.clone());
+        c.handle(Command::Connect);
+        c.handle(Command::Reset);
+        c.handle(Command::Home(None));
+        run_until_idle(&mut c, &clock, 600.0);
+        c.handle(Command::Load {
+            name: "t".into(),
+            text: "(T99 probe - touch probe, D2 stylus ball, flute length 12, stickout 40)\n(RCNC Z_REFERENCE Vise)\nT99 M6\n(RCNC FIND_STOCK SIZE=39,77,20 AT=0,0,20 DEPTH=20 KEEPZ=1)\nM30".into(),
+        });
+        c.handle(Command::CycleStart);
+        for _ in 0..200_000 {
+            clock.advance(0.005);
+            c.update();
+            let s = c.snapshot();
+            if s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading) && c.routine_waiting {
+                c.handle(Command::ToolChangeContinue { measure: None });
+            }
+            if s.mode == Mode::Alarm || (s.mode == Mode::Idle && s.tool_change.is_none()) {
+                break;
+            }
+        }
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Alarm, "{:?}", s.log);
+        let alarm = s.alarm.clone().unwrap_or_default();
+        assert!(alarm.contains("20.000 mm below the top") && alarm.contains("stylus (T99) is only 12.000 mm long"), "{alarm}");
+        assert!(s.find_stock.is_none(), "the wizard didn't start");
+    }
+
+    #[test]
     fn find_stock_takes_x_from_the_fixed_jaw() {
         let clock = Arc::new(ManualClock::default());
         let config = crate::sim::dmc2_sim_config();

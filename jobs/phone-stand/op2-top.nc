@@ -4,7 +4,7 @@
 (fixture fixed vise jaw [LEFT, -X]; the finished plinth [74 wide] against it, underside down on the built-in parallels [Z0]; jaws grip the bottom 4.7 mm: X-49.7 to -37, Y-47.75 to 47.75, Z0 to 4.7 [work])
 (fixture moving vise jaw [right, +X]: X37 to 49.7, Y-47.75 to 47.75, Z0 to 4.7 [work])
 (retracts use G53 G0 Z0 - home the machine first)
-(T99 YIDOFENG 3D touch probe - touch probe, D2 stylus ball, flute length 20, stickout 40)
+(T99 YIDOFENG 3D touch probe - touch probe, D2 stylus ball, flute length 12, stickout 40)
 (T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)
 (T11 6 mm 2FL ball [HSS] - D6 ball end mill, 2 flutes, flute length 18, stickout 21)
 (estimated time 66:40)
@@ -16,7 +16,7 @@ G54
 G53 G0 Z0
 T99 M6
 (rcnc Find stock: jog the probe over the middle of the stock, a few mm above it, and press Continue)
-(RCNC FIND_STOCK SIZE=76,76,35 AT=0,0,34 TOL=3 DEPTH=3 KEEPZ=1)
+(RCNC FIND_STOCK SIZE=76,76,48 AT=0,0,34 TOL=3 DEPTH=3 KEEPZ=1)
 
 (Probe stock centre - Probe)
 
