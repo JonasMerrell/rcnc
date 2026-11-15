@@ -550,7 +550,8 @@ impl Controller {
         for (axis, machine, work) in set {
             self.set_work_axis(axis, machine, work);
         }
-        self.report(format!("Bores found: {summary}; work X/Y set from their middle"));
+        let warn = if small > 0 { format!(". Warning: a bore reads more than 0.1 mm under Ø{}: if something was in it, X/Y are off", fmt(r.diameter)) } else { String::new() };
+        self.report(format!("Bores found: {summary}; work X/Y set from their middle{warn}"));
         Ok(vec![])
     }
 
@@ -589,7 +590,8 @@ impl Controller {
         let name = again.name();
         let reason = e.strip_prefix(&format!("{name}: ")).unwrap_or(e).to_string();
         self.last_probe = Some(format!("{name} failed: {reason}"));
-        self.info(format!("{name} failed: {reason}. Nothing was set; the program is held: Probe again, or Stop"));
+        let unset = if reason.contains("Nothing was set") { "" } else { " Nothing was set;" };
+        self.info(format!("{name} failed: {reason}.{unset} The program is held: Probe again, or Stop"));
         let view = ProbeRetryView { name: name.into(), reason, accept: accept.as_ref().map(|a| a.off.clone()) };
         self.probe_retry = Some(ProbeRetry { view, again, accept });
         if let Some(exec) = &mut self.exec {

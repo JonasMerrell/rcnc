@@ -8,7 +8,7 @@ block = """(CHIP PAUSE: the chip model says chips pack in the groove during the 
 G53 G0 Z0
 M5
 M9
-(MSG,Blow the chips out of the groove [spindle and coolant are off], then press Cycle Start)
+(MSG,Blow the chips out of the groove AND the two locating bores [the probe finds the bores later; a chip or burr there shifts X/Y], spindle and coolant are off; then press Cycle Start)
 M0
 S24000 M3
 M8

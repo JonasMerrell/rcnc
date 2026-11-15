@@ -26,21 +26,36 @@ pub const VERSION: &str = concat!(
 /// Built with uncommitted changes, so the commit alone doesn't say what's running.
 pub const DIRTY: bool = !env!("RCNC_DIRTY").is_empty();
 
-const USAGE: &str = "usage: cnc-controller [--sim [--sim-stock=X,Y,H] [--sim-audio=cut.wav]] [program.nc]
+const USAGE: &str = "usage: cnc-controller [--sim [--sim-stock=X,Y,H] [--sim-bores=X,Y;X,Y [--sim-chips]] [--sim-audio=cut.wav]] [program.nc]
 
   --sim                run against the built-in simulator instead of the DMC2's USB board
   -V, --version        print which rcnc build this is
   --sim-stock=X,Y,H    put an X by Y mm block, H mm tall, in the middle of the simulator's table
                        for the probe to find
+  --sim-bores=X,Y;X,Y  Ø8 bores through that block, X,Y mm from its middle (for FIND_BORES)
+  --sim-chips          a chip in the first of those bores, knocked off by the first try (for Probe again)
   --sim-audio=cut.wav  play a recording in place of the microphone";
 
 fn main() -> eframe::Result<()> {
     let mut simulate = false;
     let mut program = None;
     let mut stock = None;
+    let mut bores: Vec<[f64; 2]> = vec![];
+    let mut chips = false;
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--sim" => simulate = true,
+            "--sim-chips" => chips = true,
+            _ if arg.starts_with("--sim-bores=") => {
+                for xy in arg["--sim-bores=".len()..].split(';').filter(|v| !v.trim().is_empty()) {
+                    let v: Vec<f64> = xy.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+                    let [x, y] = v[..] else {
+                        eprintln!("--sim-bores needs X,Y;X,Y in mm\n{USAGE}");
+                        std::process::exit(2);
+                    };
+                    bores.push([x, y]);
+                }
+            }
             _ if arg.starts_with("--sim-stock=") => {
                 let v: Vec<f64> = arg["--sim-stock=".len()..].split(',').filter_map(|v| v.trim().parse().ok()).collect();
                 let [x, y, h] = v[..] else {
@@ -73,6 +88,9 @@ fn main() -> eframe::Result<()> {
         let mut sim = Simulator::new(clock.clone());
         if let Some([x, y, h]) = stock {
             sim.add_stock(&MachineConfig::dmc2(), x, y, h);
+            for (i, [bx, by]) in bores.iter().enumerate() {
+                sim.add_bore(&MachineConfig::dmc2(), *bx, *by, 8.0, chips && i == 0);
+            }
         }
         Box::new(sim)
     } else {

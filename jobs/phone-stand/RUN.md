@@ -60,10 +60,23 @@ Flip it: **finished underside down** on the parallels, a finished plinth wall ag
    slopes so the ball never takes a deep cut, then a light floor finish at Z10 into the corners. This opens
    the two bores in the groove floor.
    **Chip pause** after the rough: Z goes to the top, spindle and coolant stop, and rcnc says "Blow the
-   chips out of the groove, then press Cycle Start" (the chip model's caution: chips pack in the 23 mm deep
+   chips out of the groove AND the two locating bores, then press Cycle Start" (the chip model's caution: chips pack in the 23 mm deep
    groove). Blow them out, Cycle Start: spindle and coolant come back on. To run without it, delete the
    lines between the CHIP PAUSE comments in op2-top.nc (`add_chip_pause.py` puts it back after a re-post).
 4. T99: Find bores runs by itself, sets X/Y from the bores (spacing 36 ± 0.1, turn ≤ 0.2°).
+   If a check fails (a chip or burr in a bore reads it small and shifts its middle), rcnc lifts the
+   probe, sets nothing and holds the program with **Probe again** / **Stop program** (and **Accept
+   anyway…** for a spacing or turn just out of tolerance, after a confirm). Clean the bores, Probe again.
+   What it found stays on the "Last probe" line under MDI, in the Log window, and with times in `log.txt`
+   in rcnc's data folder.
+
+   **Allowance after re-locating.** Find stock on the raw band set X/Y first; Find bores then moved G54
+   by X −0.381, Y +0.116 on the first real run, more than the 0.3 mm radial stock the rough leaves, so one
+   side of what was roughed before the re-locate can be about 0.08 mm short of cleaning up. For later
+   jobs: locate from op 1's features (the bores) *before* roughing where the probe can reach them;
+   otherwise leave radial stock at least the Find stock uncertainty (say 0.6 mm) for the passes after the
+   re-locate. (A sim/post warning for "re-located after the rough with less allowance than X" belongs in
+   rCAD and is left to the rCAD thread.)
 5. T11 at 24 000 rpm / 3000 mm/min (Jonas's usual for the ball: it barely cuts): parallel finish front to
    back, then waterline on the steep faces (about 15 min, under 10% of the spindle). Nothing goes below
    Z10 (the groove floor) near the jaws, whose tops are at Z4.7.

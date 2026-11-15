@@ -3,7 +3,7 @@
 //! jogs over the middle of the stock and presses Continue; rcnc does the rest.
 
 use eframe::egui::{self, pos2, Align2, Button, Color32, CornerRadius, FontId, Margin, Rect, RichText, Sense, Stroke, Vec2};
-use machine::{CalibrateStage, CalibrateView, Command, FindStockStage, FindStockView, ProbeCalShape, ProbeCalStage, ProbeCalTarget, ProbeCalView};
+use machine::{CalibrateStage, CalibrateView, Command, FindStockStage, FindStockView, Mode, ProbeCalShape, ProbeCalStage, ProbeCalTarget, ProbeCalView, ProbeRetryView};
 
 use super::palette::*;
 use super::{big_button, App};
@@ -31,6 +31,87 @@ impl App {
                     .inner_margin(Margin::same(20)),
             )
             .show(ctx, |ui| self.find_stock_body(ui, &f));
+    }
+
+    /// A probing step in the program failed: what it measured and why, and what to do. Nothing was set.
+    pub(super) fn probe_retry_window(&mut self, ctx: &egui::Context) {
+        let Some(r) = self.snap.probe_retry.clone() else {
+            self.accept_confirm = false;
+            return;
+        };
+        egui::Window::new("Probe again")
+            .title_bar(false)
+            .anchor(Align2::RIGHT_TOP, Vec2::new(-16.0, 64.0))
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size(Vec2::new(500.0, 0.0))
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .fill(PANEL)
+                    .stroke(Stroke::new(2.0_f32, RED))
+                    .corner_radius(CornerRadius::same(14))
+                    .inner_margin(Margin::same(20)),
+            )
+            .show(ctx, |ui| self.probe_retry_body(ui, &r));
+    }
+
+    fn probe_retry_body(&mut self, ui: &mut egui::Ui, r: &ProbeRetryView) {
+        let s = self.snap.clone();
+        ui.label(RichText::new("PROBING FAILED · PROGRAM HELD").size(16.0).color(MUTED).strong());
+        ui.label(RichText::new(&r.name).size(28.0).color(TEXT).strong());
+        if let Some(line) = s.line {
+            ui.label(RichText::new(format!("Line {}: nothing was set, and the probe went back up", line + 1)).size(15.0).color(MUTED));
+        }
+        ui.add_space(8.0);
+        // "what it measured: why. Nothing was set. hint": one paragraph each
+        for (i, part) in r.reason.split(". ").filter(|p| !p.trim().is_empty() && !p.starts_with("Nothing was set")).enumerate() {
+            let text = part.trim_end_matches('.');
+            let (size, color) = if i == 0 { (17.0, TEXT) } else { (16.0, AMBER) };
+            ui.label(RichText::new(format!("{text}.")).size(size).color(color));
+        }
+        ui.add_space(12.0);
+        let ready = s.mode == Mode::Running && s.velocity == 0.0;
+        if !ready {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(RichText::new("Lifting the probe…").size(16.0).color(ACCENT));
+            });
+        }
+        ui.horizontal(|ui| {
+            if ui.add_enabled(ready, big_button("Probe again", GREEN).min_size(Vec2::new(220.0, 56.0))).on_hover_text("Run the same probing again from the top (after cleaning the bores, or moving the probe)").clicked() {
+                self.accept_confirm = false;
+                self.machine.send(Command::ProbeAgain);
+            }
+            if ui.add(big_button("Stop program", RED).min_size(Vec2::new(180.0, 56.0))).clicked() {
+                self.accept_confirm = false;
+                self.machine.send(Command::Stop);
+            }
+        });
+        if let Some(off) = &r.accept {
+            ui.add_space(10.0);
+            ui.separator();
+            if !self.accept_confirm {
+                if ui.add_enabled(ready, Button::new(RichText::new("Accept anyway…").size(15.0))).on_hover_text("Use what it measured although it's outside the tolerance").clicked() {
+                    self.accept_confirm = true;
+                }
+            } else {
+                ui.label(RichText::new(format!("Out of tolerance: {off}.")).size(16.0).color(AMBER).strong());
+                ui.label(
+                    RichText::new("If something was in the way, the work offset will be wrong by about that much and the part may not clean up. Accept only if you know why it reads off.")
+                        .size(14.0)
+                        .color(TEXT),
+                );
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(ready, big_button("Accept and carry on", AMBER).min_size(Vec2::new(220.0, 48.0))).clicked() {
+                        self.accept_confirm = false;
+                        self.machine.send(Command::ProbeAccept);
+                    }
+                    if ui.add(Button::new(RichText::new("Back").size(15.0)).min_size(Vec2::new(90.0, 48.0))).clicked() {
+                        self.accept_confirm = false;
+                    }
+                });
+            }
+        }
     }
 
     /// The Z reference calibration window, in the same place and style.

@@ -13,7 +13,7 @@ pub mod store;
 pub use backend::{Backend, BoardInfo, Outputs, Status};
 pub use config::{AxisConfig, Input, MachineConfig, ToolChangeSettings};
 pub use controller::{
-    CalibrateStage, CalibrateView, Command, ProbeCalShape, ProbeCalStage, ProbeCalTarget, ProbeCalView, Controller, ControllerHandle, FindStockStage, FindStockView, Mode, Snapshot, StockFound, ToolChangeStage,
+    CalibrateStage, CalibrateView, Command, ProbeCalShape, ProbeCalStage, ProbeCalTarget, ProbeCalView, Controller, ControllerHandle, FindStockStage, FindStockView, ProbeRetryView, Mode, Snapshot, StockFound, ToolChangeStage,
     ToolChangeView, STOCK_REFERENCE,
 };
 pub use probing::{FindStockSettings, ProbeCalibration, ProbeJob, ProbeSettings, ToolSetter, ZReference};

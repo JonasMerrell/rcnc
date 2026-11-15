@@ -152,6 +152,19 @@ impl Simulator {
         self.world.block = Some((span(0, x), span(1, y), w.probe_z + (h * c.axes[2].steps_per_unit) as i64));
     }
 
+    /// A Ø`d` bore through the block at `x`, `y` mm from its middle; `chip`: with a 0.6 mm chip on its
+    /// +X wall that two touches knock off. Call after `add_stock`.
+    pub fn add_bore(&mut self, c: &MachineConfig, x: f64, y: f64, d: f64, chip: bool) {
+        let Some((bx, by, top)) = self.world.block else { return };
+        let spu = c.axes[0].steps_per_unit;
+        let st = |mm: f64| (mm * spu) as i64;
+        let m = [(bx[0] + bx[1]) / 2 + st(x), (by[0] + by[1]) / 2 + st(y)];
+        self.world.bores.push((m, st(d / 2.0)));
+        if chip {
+            self.world.chips.push((([m[0] + st(d / 2.0 - 0.6), m[0] + st(d / 2.0 + 1.0)], [m[1] - st(1.0), m[1] + st(1.0)], top), 2));
+        }
+    }
+
     pub fn new(clock: Arc<dyn Clock>) -> Self {
         let world = SimWorld {
             travel: [72_000, 52_000, 33_000, 0, 0, 0],
