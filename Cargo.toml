@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/gcode", "crates/machine", "crates/blueskyt", "crates/app"]
+members = ["crates/gcode", "crates/machine", "crates/blueskyt", "crates/listen", "crates/app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,7 @@ license = "MIT OR Apache-2.0"
 gcode = { path = "crates/gcode", package = "cnc-gcode" }
 machine = { path = "crates/machine", package = "cnc-machine" }
 blueskyt = { path = "crates/blueskyt", package = "cnc-blueskyt" }
+listen = { path = "crates/listen", package = "cnc-listen" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

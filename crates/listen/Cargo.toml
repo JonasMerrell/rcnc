@@ -1,0 +1,18 @@
+[package]
+name = "cnc-listen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Listening to the cut: spindle speed and droop, chatter and loudness from a microphone, logged per program line"
+
+[features]
+default = []
+# Live capture from a sound card (WASAPI on Windows, ALSA on Linux). Without it only WAV replay works.
+audio = ["dep:cpal"]
+
+[dependencies]
+rustfft = "6"
+hound = "3.5"
+serde.workspace = true
+serde_json.workspace = true
+cpal = { version = "0.15", optional = true }
