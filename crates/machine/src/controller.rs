@@ -1429,6 +1429,15 @@ impl Controller {
                 if self.interp.is_finished() {
                     self.interp.rewind();
                 }
+                // a tool change, a probing routine or a G53 move goes to places in machine coordinates:
+                // refuse before the first cut rather than stop halfway
+                let unhomed: Vec<String> = (0..3).filter(|&a| self.config.axes[a].enabled && !self.homed[a]).map(|a| AXIS_LETTERS[a].to_string()).collect();
+                if let (false, Some((line, why))) = (unhomed.is_empty(), self.interp.needs_homing(self.config.tool_change.guided || self.config.tool_change_touch_off)) {
+                    return self.info(format!(
+                        "Home the machine first (Ref All Home): {} not homed, and the program has {why} (line {line}), which goes to machine positions",
+                        unhomed.join(", ")
+                    ));
+                }
                 if self.interp.pc() == 0 {
                     self.path_blend = None;
                 }
@@ -2979,6 +2988,12 @@ mod tests {
             name: "t".into(),
             text: "T3 M6\nG0 Z20\nM30".into(),
         });
+        // the touch-off goes to the setter, in machine coordinates: not before homing
+        c.handle(Command::CycleStart);
+        assert_eq!(c.mode(), Mode::Idle);
+        assert!(c.snapshot().log.iter().any(|l| l.contains("Home the machine first") && l.contains("a tool change (line 1)")), "{:?}", c.snapshot().log);
+        // (as if homed where the simulator stands, so the machine positions below hold)
+        c.homed = [true; 6];
         c.handle(Command::CycleStart);
         for _ in 0..10 {
             clock.advance(0.005);
@@ -3745,6 +3760,7 @@ mod tests {
         assert!(close(s.work[0], 30.0) && close(s.work[1], 30.0) && close(s.work[2] - s.machine[2], -100.0), "{:?}", s.work);
 
         let (mut c, clock) = probing_setup();
+        c.homed = [true; 6];
         c.handle(Command::Load { name: "t".into(), text: "(RCNC FIND_STOCK SIZE=60,60,70)\nM30".into() });
         c.handle(Command::CycleStart);
         run_until_idle(&mut c, &clock, 10.0);
