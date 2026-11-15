@@ -44502,6 +44502,17 @@ G1 Y-15.302
 Y-15.902
 G0 Z39
 
+(CHIP PAUSE: the chip model says chips pack in the groove during the rough; delete down to END CHIP PAUSE to skip)
+G53 G0 Z0
+M5
+M9
+(MSG,Blow the chips out of the groove [spindle and coolant are off], then press Cycle Start)
+M0
+S24000 M3
+M8
+G4 P4
+(END CHIP PAUSE)
+
 (3D semi-rough 1: T24 parallel over the rough's steps [top half] - Parallel)
 X36.784 Y-29.063
 Z20.091

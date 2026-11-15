@@ -59,6 +59,10 @@ Flip it: **finished underside down** on the parallels, a finished plinth wall ag
    semi-rough passes (to 1.7, then to 0.3 over the part, about 3 min) that take the rough's steps off the
    slopes so the ball never takes a deep cut, then a light floor finish at Z10 into the corners. This opens
    the two bores in the groove floor.
+   **Chip pause** after the rough: Z goes to the top, spindle and coolant stop, and rcnc says "Blow the
+   chips out of the groove, then press Cycle Start" (the chip model's caution: chips pack in the 23 mm deep
+   groove). Blow them out, Cycle Start: spindle and coolant come back on. To run without it, delete the
+   lines between the CHIP PAUSE comments in op2-top.nc (`add_chip_pause.py` puts it back after a re-post).
 4. T99: Find bores runs by itself, sets X/Y from the bores (spacing 36 ± 0.1, turn ≤ 0.2°).
 5. T11 at 24 000 rpm / 3000 mm/min (Jonas's usual for the ball: it barely cuts): parallel finish front to
    back, then waterline on the steep faces (about 15 min, under 10% of the spindle). Nothing goes below

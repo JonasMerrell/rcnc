@@ -296,6 +296,8 @@ pub struct Controller {
     probe_runout: Option<[f64; 2]>,
     /// The last tool measured on the setter and the machine Z its tip touched at (for the stick-out check).
     last_setter_hit: Option<(u32, f64)>,
+    /// The program's last (MSG,...), for an M0 that follows it.
+    last_message: Option<String>,
     /// An automatic probing request (Probe Z, Find bores) runs in place of the program.
     auto_probe: bool,
     /// The tool in the spindle has been measured on the setter since it was loaded.
@@ -368,6 +370,7 @@ impl Controller {
             probe_cal: None,
             probe_runout: None,
             last_setter_hit: None,
+            last_message: None,
             auto_probe: false,
             tool_measured: false,
             jog_return: None,
@@ -1897,16 +1900,19 @@ impl Controller {
             } else {
                 format!("Load tool {tool}, touch it off if needed, then press Cycle Start")
             }),
-            Op::Pause { optional } => Wait::Pause(if optional {
-                "Optional stop (M1)".into()
-            } else {
-                "Program paused (M0)".into()
+            // a (MSG,...) just before the stop says what it's for
+            Op::Pause { optional } => Wait::Pause(match (optional, self.last_message.take()) {
+                (true, None) => "Optional stop (M1)".into(),
+                (true, Some(m)) => format!("Optional stop (M1): {m}"),
+                (false, None) => "Program paused (M0)".into(),
+                (false, Some(m)) => format!("Program paused (M0): {m}"),
             }),
             Op::UserMCode { code, .. } => Wait::Pause(format!(
                 "M{code} macro is not available yet; press Cycle Start to skip it"
             )),
             Op::Message(text) => {
-                self.info(text);
+                self.info(text.clone());
+                self.last_message = Some(text);
                 Wait::None
             }
             Op::FindStock(request) => {
@@ -3088,6 +3094,24 @@ mod tests {
     /// The stick-out check: calibrated from a tool whose stick-out is known, it stops a tool change whose
     /// tool sticks out more than the tolerance off the program's, and says so.
     #[test]
+    fn m0_shows_the_message_before_it() {
+        let (mut c, clock) = setup();
+        c.handle(Command::Load { name: "t".into(), text: "(MSG,Blow the chips out of the groove)\nM0\nM0\nM30".into() });
+        c.handle(Command::CycleStart);
+        for _ in 0..20 {
+            clock.advance(0.005);
+            c.update();
+        }
+        assert_eq!(c.snapshot().paused.as_deref(), Some("Program paused (M0): Blow the chips out of the groove"));
+        c.handle(Command::CycleStart);
+        for _ in 0..20 {
+            clock.advance(0.005);
+            c.update();
+        }
+        assert_eq!(c.snapshot().paused.as_deref(), Some("Program paused (M0)"), "the message is used once");
+    }
+
+    #[test]
     fn tool_change_checks_the_stickout() {
         let run = |nut_face: Option<f64>| {
             let (mut c, clock) = probing_setup_with(|_| {});
@@ -3975,6 +3999,10 @@ mod tests {
             }
             if s.mode == Mode::Running && s.spindle != Spindle::Off {
                 lowest_cut = lowest_cut.min(s.machine[2] - top);
+            }
+            if s.paused.as_deref().is_some_and(|p| p.starts_with("Program paused (M0)")) {
+                println!("{} at {t:.0} s", s.paused.as_deref().unwrap_or_default());
+                c.handle(Command::CycleStart);
             }
             if let Some(tc) = &s.tool_change {
                 if tc.stage == ToolChangeStage::Loading && c.routine_waiting {
