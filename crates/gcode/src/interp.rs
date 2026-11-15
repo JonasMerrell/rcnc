@@ -71,6 +71,12 @@ pub struct Tool {
     pub stickout: f64,
     /// Photo shown at a tool change in place of the drawing, if set.
     pub image: String,
+    /// Flutes (teeth), 0 if not known: the tooth-passing tone a microphone hears.
+    pub flutes: u32,
+    /// The tool's first bending mode from a tap test at this stick-out (0: not measured): frequency, Hz,
+    /// and damping ratio, for rCAD's chatter model.
+    pub mode_hz: f64,
+    pub mode_zeta: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -101,6 +101,9 @@ pub enum Command {
     FindStockContinue,
     /// The tool last measured on the setter sticks out exactly this far (mm): calibrate the stick-out check.
     CalibrateStickout { stickout: f64 },
+    /// A tap test measured this tool's ring: keep its frequency and damping in the tool table (allowed
+    /// during a tool change).
+    SetToolMode { tool: u32, hz: f64, zeta: f64 },
     /// Find stock, before Continue: touch the sides `depth` mm below the top and
     /// accept a size within `tolerance` mm of the job's.
     FindStockSettings { depth: f64, tolerance: f64 },
@@ -710,6 +713,11 @@ impl Controller {
             }
             Command::FindStockContinue => self.find_stock_continue(),
             Command::CalibrateStickout { stickout } => self.calibrate_stickout(stickout),
+            Command::SetToolMode { tool, hz, zeta } => {
+                let t = self.interp.tools.entry(tool).or_default();
+                (t.mode_hz, t.mode_zeta) = (hz, zeta);
+                self.report(format!("T{tool} tap test: rings at {hz:.0} Hz, damping {zeta:.3}; kept in the tool table"));
+            }
             Command::FindStockSettings { depth, tolerance } => self.find_stock_settings(depth, tolerance),
             Command::CalibrateZ { reference, gauge } => self.start_calibrate(reference, gauge),
             Command::CalibrateContinue => self.calibrate_continue(),
@@ -1065,6 +1073,9 @@ impl Controller {
             }
             if from.stickout > 0.0 {
                 tool.stickout = from.stickout;
+            }
+            if from.flutes > 0 {
+                tool.flutes = from.flutes;
             }
             if tool.kind == gcode::ToolKind::Auto {
                 tool.kind = tool.shape();
@@ -2378,6 +2389,8 @@ pub fn header_tools(text: &str) -> Vec<(u32, Tool)> {
             diameter,
             flute_length: after("flute length ").unwrap_or(0.0),
             stickout: after("stickout ").unwrap_or(0.0),
+            // "3 flutes"
+            flutes: words.windows(2).find(|w| w[1].trim_end_matches([',', ')']) == "flutes" || w[1].trim_end_matches([',', ')']) == "flute").and_then(|w| w[0].parse().ok()).unwrap_or(0),
             ..Default::default()
         };
         out.push((n, tool));
@@ -4110,7 +4123,7 @@ mod tests {
             (T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill)\n(estimated time 3:13)\nG21\n(T5 later - D3)\nM30";
         let t = header_tools(text);
         assert_eq!(t.iter().map(|(n, _)| *n).collect::<Vec<_>>(), vec![99, 24, 1]);
-        assert_eq!((t[1].1.diameter, t[1].1.flute_length, t[1].1.stickout), (6.35, 19.05, 24.0));
+        assert_eq!((t[1].1.diameter, t[1].1.flute_length, t[1].1.stickout, t[1].1.flutes), (6.35, 19.05, 24.0, 3));
         assert_eq!(t[1].1.description, "3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes");
         assert_eq!((t[2].1.diameter, t[2].1.stickout), (6.35, 0.0));
 

@@ -26,12 +26,13 @@ pub const VERSION: &str = concat!(
 /// Built with uncommitted changes, so the commit alone doesn't say what's running.
 pub const DIRTY: bool = !env!("RCNC_DIRTY").is_empty();
 
-const USAGE: &str = "usage: cnc-controller [--sim [--sim-stock=X,Y,H]] [program.nc]
+const USAGE: &str = "usage: cnc-controller [--sim [--sim-stock=X,Y,H] [--sim-audio=cut.wav]] [program.nc]
 
   --sim                run against the built-in simulator instead of the DMC2's USB board
   -V, --version        print which rcnc build this is
   --sim-stock=X,Y,H    put an X by Y mm block, H mm tall, in the middle of the simulator's table
-                       for the probe to find";
+                       for the probe to find
+  --sim-audio=cut.wav  play a recording in place of the microphone";
 
 fn main() -> eframe::Result<()> {
     let mut simulate = false;
@@ -47,6 +48,9 @@ fn main() -> eframe::Result<()> {
                     std::process::exit(2);
                 };
                 stock = Some([x, y, h]);
+            }
+            _ if arg.starts_with("--sim-audio=") => {
+                let _ = app::ears::SIM_AUDIO.set(std::path::PathBuf::from(&arg["--sim-audio=".len()..]));
             }
             "-V" | "--version" => {
                 println!("rcnc {VERSION}{}", if DIRTY { " +dirty" } else { "" });
@@ -78,6 +82,7 @@ fn main() -> eframe::Result<()> {
     // saved as they change; the DMC2 defaults apply until something is saved.
     // The simulator keeps its own, so trying things out never changes the real machine's.
     let data = if simulate { store::data_dir().join("sim") } else { store::data_dir() };
+    let _ = app::ears::DATA.set(data.clone());
     let mut settings_error = None;
     let config = match store::load::<MachineConfig>(&data.join("machine.json")) {
         Ok(Some(c)) => c,

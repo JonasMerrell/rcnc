@@ -1,0 +1,282 @@
+//! Listening to the cut (the `listen` crate): the microphone's input, what it says about the running
+//! line, the cut log written next to the program, the live indicator, and the tap test at a tool change.
+//! Nothing here touches the machine's motion.
+
+use super::palette::*;
+use eframe::egui::{self, RichText};
+use gcode::Spindle;
+use listen::{Analyzer, Context, CutLog, Frame, Source};
+use machine::{Command, ControllerHandle, Mode, Snapshot};
+use std::sync::Arc;
+
+/// A WAV file to play in place of a microphone (`--sim-audio=file.wav`).
+pub static SIM_AUDIO: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+/// The data folder (the listening settings go there).
+pub static DATA: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Which input to listen on, saved in the data folder.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct EarsSettings {
+    on: bool,
+    device: Option<String>,
+}
+
+pub struct Ears {
+    settings: EarsSettings,
+    file: std::path::PathBuf,
+    source: Option<Source>,
+    analyzer: Option<Analyzer>,
+    /// Why there's no input, if there isn't.
+    problem: Option<String>,
+    /// What the running program sounds like, and where it goes when the program ends.
+    log: Option<(std::path::PathBuf, CutLog)>,
+    pub last: Option<Frame>,
+    /// Recent chatter verdicts, to steady the indicator.
+    chatter_recent: std::collections::VecDeque<bool>,
+    tap: Tap,
+    /// The operation each program line belongs to (its last "(Name - Kind)" comment), per program.
+    ops: (usize, Vec<String>),
+}
+
+enum Tap {
+    Idle,
+    /// Recording for a tap test of this tool until then.
+    Recording { tool: u32, until: std::time::Instant, samples: Vec<f32> },
+    Done { tool: u32, result: Result<listen::tap::Ring, String> },
+}
+
+impl Ears {
+    pub fn new() -> Ears {
+        let file = DATA.get().cloned().unwrap_or_default().join("listen.json");
+        let settings = std::fs::read_to_string(&file).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let mut e = Ears {
+            settings,
+            file,
+            source: None,
+            analyzer: None,
+            problem: None,
+            log: None,
+            last: None,
+            chatter_recent: Default::default(),
+            tap: Tap::Idle,
+            ops: (0, vec![]),
+        };
+        e.reopen();
+        e
+    }
+
+    fn save(&self) {
+        if let Ok(s) = serde_json::to_string_pretty(&self.settings) {
+            let _ = std::fs::write(&self.file, s);
+        }
+    }
+
+    fn reopen(&mut self) {
+        self.source = None;
+        self.analyzer = None;
+        self.problem = None;
+        if let Some(wav) = SIM_AUDIO.get() {
+            match Source::wav(wav) {
+                Ok(s) => self.source = Some(s),
+                Err(e) => self.problem = Some(e),
+            }
+        } else if self.settings.on {
+            match listen::open(self.settings.device.as_deref()) {
+                Ok(s) => self.source = Some(s),
+                Err(e) => self.problem = Some(e),
+            }
+        }
+        if let Some(s) = &self.source {
+            self.analyzer = Some(Analyzer::new(s.rate()));
+        }
+    }
+
+    /// Each frame: take what came in, analyse it against what the machine is doing, log it per line.
+    pub fn poll(&mut self, s: &Snapshot, program: Option<&std::path::Path>) {
+        if self.source.is_none() {
+            return;
+        }
+        let ctx = self.context(s);
+        let Some(src) = &mut self.source else { return };
+        let samples = src.take();
+        if let Tap::Recording { tool, until, samples: rec } = &mut self.tap {
+            rec.extend_from_slice(&samples);
+            if std::time::Instant::now() >= *until {
+                let (tool, rec) = (*tool, std::mem::take(rec));
+                let rate = src.rate();
+                self.tap = Tap::Done { tool, result: listen::tap::analyse(&rec, rate, 500.0, 0.45 * rate as f64) };
+            }
+            return;
+        }
+        let Some(a) = &mut self.analyzer else { return };
+        let frames = a.push(&samples, &ctx);
+        // a program running: log it, and write the log beside the program when it stops
+        let running = matches!(s.mode, Mode::Running) && s.program_name.is_some();
+        if running && self.log.is_none() {
+            if let Some(p) = program {
+                self.log = Some((CutLog::path_for(p), CutLog::new(&p.display().to_string(), &src.name())));
+            }
+        }
+        if let Some((_, log)) = &mut self.log {
+            for f in &frames {
+                log.add(f);
+            }
+        }
+        if !running && !matches!(s.mode, Mode::Probing) && s.paused.is_none() {
+            if let Some((path, log)) = self.log.take() {
+                if !log.lines.is_empty() {
+                    let _ = log.save(&path);
+                }
+            }
+        }
+        if let Some(f) = frames.last() {
+            self.chatter_recent.push_back(f.chatter.is_some());
+            if self.chatter_recent.len() > 6 {
+                self.chatter_recent.pop_front();
+            }
+            self.last = Some(f.clone());
+        }
+    }
+
+    fn context(&mut self, s: &Snapshot) -> Context {
+        let line = s.line.map(|l| l + 1).unwrap_or(0);
+        if self.ops.0 != Arc::as_ptr(&s.program) as usize {
+            let mut cur = String::new();
+            self.ops = (
+                Arc::as_ptr(&s.program) as usize,
+                s.program
+                    .lines()
+                    .map(|l| {
+                        let t = l.trim();
+                        if let Some(name) = t.strip_prefix('(').and_then(|r| r.strip_suffix(')')).and_then(|r| r.rsplit_once(" - ").map(|x| x.0)) {
+                            if !name.starts_with('T') && !name.contains("made by") {
+                                cur = name.to_string();
+                            }
+                        }
+                        cur.clone()
+                    })
+                    .collect(),
+            );
+        }
+        let tool = s.tools.get(&s.tool);
+        Context {
+            line,
+            op: line.checked_sub(1).and_then(|i| self.ops.1.get(i)).cloned().unwrap_or_default(),
+            tool: s.tool,
+            teeth: tool.map(|t| t.flutes).filter(|f| *f > 0).unwrap_or(2),
+            rpm: if s.spindle == Spindle::Off { 0.0 } else { s.rpm },
+            feed: s.feed_rate,
+            cutting: s.spindle != Spindle::Off && matches!(s.mode, Mode::Running) && s.velocity > 0.0,
+        }
+    }
+
+    pub fn listening(&self) -> bool {
+        self.source.is_some()
+    }
+
+    /// The small live readout in the status bar: what the microphone hears.
+    pub fn indicator(&self, ui: &mut egui::Ui) {
+        if self.source.is_none() {
+            if self.settings.on {
+                ui.label(RichText::new("mic: none").size(12.0).color(MUTED)).on_hover_text(self.problem.clone().unwrap_or_default());
+            }
+            return;
+        }
+        let chatter = self.chatter_recent.iter().filter(|c| **c).count() >= 3;
+        let (text, color) = match &self.last {
+            Some(f) if chatter => (format!("mic: CHATTER {:.0} Hz", f.chatter.map(|c| c.0).unwrap_or(0.0)), RED),
+            Some(Frame { droop: Some(d), .. }) => (format!("mic: rpm −{:.1}%", d * 100.0), if *d > 0.06 { AMBER } else { GREEN }),
+            Some(f) if f.ctx.rpm > 0.0 => ("mic: listening".to_string(), MUTED),
+            _ => ("mic: on".to_string(), MUTED),
+        };
+        ui.label(RichText::new(text).size(13.0).color(color).strong()).on_hover_text("From the microphone: the spindle's speed under load (droop) and chatter. Logged per line next to the program as .cutlog.json.");
+    }
+
+    /// The Settings page's part.
+    pub fn settings_ui(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("Listening (microphone)").size(16.0).strong());
+        if SIM_AUDIO.get().is_some() {
+            ui.label(RichText::new(format!("Playing {} in place of a microphone (--sim-audio)", SIM_AUDIO.get().unwrap().display())).color(MUTED));
+            return;
+        }
+        let mut on = self.settings.on;
+        if ui.checkbox(&mut on, "Listen to the cut: spindle speed under load, chatter, logged per line").changed() {
+            self.settings.on = on;
+            self.save();
+            self.reopen();
+        }
+        let inputs = listen::inputs();
+        let current = self.settings.device.clone().unwrap_or_else(|| "Default input".into());
+        let mut picked = None;
+        egui::ComboBox::from_label("Input").selected_text(&current).show_ui(ui, |ui| {
+            if ui.selectable_label(self.settings.device.is_none(), "Default input").clicked() {
+                picked = Some(None);
+            }
+            for name in &inputs {
+                if ui.selectable_label(self.settings.device.as_deref() == Some(name), name).clicked() {
+                    picked = Some(Some(name.clone()));
+                }
+            }
+        });
+        if let Some(p) = picked {
+            self.settings.device = p;
+            self.save();
+            self.reopen();
+        }
+        match (&self.source, &self.problem) {
+            (Some(s), _) => {
+                ui.label(RichText::new(format!("Listening on {} at {} Hz", s.name(), s.rate())).color(GREEN));
+            }
+            (None, Some(p)) => {
+                ui.label(RichText::new(p).color(AMBER));
+            }
+            _ => {}
+        }
+        if inputs.is_empty() {
+            ui.label(RichText::new("No input devices found (plug the microphone in, then open Settings again).").size(12.0).color(MUTED));
+        }
+    }
+
+    /// The tool change window's tap test: record a second while the operator taps the tool, then show what
+    /// it rings at and keep it in the tool table.
+    pub fn tap_ui(&mut self, ui: &mut egui::Ui, tool: u32, machine: &ControllerHandle) {
+        if self.source.is_none() {
+            return;
+        }
+        ui.add_space(6.0);
+        match &self.tap {
+            Tap::Idle => {
+                if ui.button(RichText::new("Tap test").size(16.0)).on_hover_text("Press, then within a second tap the tool near its tip with something hard (a wrench). Measures how it rings for the chatter model.").clicked() {
+                    self.tap = Tap::Recording { tool, until: std::time::Instant::now() + std::time::Duration::from_millis(1500), samples: vec![] };
+                }
+            }
+            Tap::Recording { .. } => {
+                ui.label(RichText::new("Tap the tool now…").size(18.0).color(AMBER).strong());
+                ui.ctx().request_repaint();
+            }
+            Tap::Done { tool: t, result } => {
+                let t = *t;
+                match result.clone() {
+                    Ok(r) => {
+                        ui.label(RichText::new(format!("T{t} rings at {:.0} Hz, damping {:.3} ({:.0} dB over the noise)", r.hz, r.zeta, r.snr_db)).size(16.0).color(GREEN));
+                        ui.horizontal(|ui| {
+                            if ui.button("Keep it").clicked() {
+                                machine.send(Command::SetToolMode { tool: t, hz: r.hz, zeta: r.zeta });
+                                self.tap = Tap::Idle;
+                            }
+                            if ui.button("Again").clicked() {
+                                self.tap = Tap::Idle;
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        ui.label(RichText::new(e).color(AMBER));
+                        if ui.button("Again").clicked() {
+                            self.tap = Tap::Idle;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

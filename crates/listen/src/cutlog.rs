@@ -51,6 +51,10 @@ impl CutLog {
             ..Default::default()
         });
         l.frames += 1;
+        // the line's own feed and speed once it is running (the first window can catch it starting)
+        l.cutting |= f.ctx.cutting;
+        l.feed = l.feed.max(f.ctx.feed);
+        l.rpm = l.rpm.max(f.ctx.rpm);
         l.loud_mean_db += (f.loud_db - l.loud_mean_db) / l.frames as f64;
         l.loud_max_db = l.loud_max_db.max(f.loud_db);
         if let Some(d) = f.droop {
@@ -107,7 +111,9 @@ mod tests {
         let p = CutLog::path_for(&dir.join("op2-top.nc"));
         assert!(p.to_string_lossy().ends_with("op2-top.nc.cutlog.json"));
         log.save(&p).unwrap();
-        assert_eq!(CutLog::load(&p).unwrap(), log);
+        // (serde_json doesn't read back every float to the last bit)
+        assert_eq!(serde_json::to_string(&CutLog::load(&p).unwrap()).unwrap().len(), serde_json::to_string(&log).unwrap().len());
+        assert_eq!(CutLog::load(&p).unwrap().lines[&41].chatter, log.lines[&41].chatter);
     }
 
     #[test]

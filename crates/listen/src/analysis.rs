@@ -89,8 +89,41 @@ impl Analyzer {
         let teeth = ctx.teeth.max(1) as f64;
         let rot = ctx.rpm / 60.0;
         let base = if ctx.cutting && teeth > 1.0 { rot * teeth } else { rot };
-        if let Some(hz) = self.peak_near(&db, base * (1.0 - MAX_DROOP), base * 1.02) {
-            let rpm = hz / base * ctx.rpm;
+        // the rotation speed that best explains the peaks: the sum of the spectrum at its first harmonics (the
+        // rotation, the teeth's beat and theirs), searched from MAX_DROOP slow to 2% fast; so a wrong tooth
+        // count in the tool table doesn't matter
+        let _ = (teeth, base);
+        let lin: Vec<f64> = db.iter().map(|d| 10f64.powf(d / 20.0)).collect();
+        let at = |hz: f64| {
+            let i = (hz / bin).round() as usize;
+            if i + 1 >= lin.len() || i == 0 {
+                0.0
+            } else {
+                lin[i - 1].max(lin[i]).max(lin[i + 1])
+            }
+        };
+        let harmonics = 12usize.min(((self.rate as f64 / 2.0 * 0.9) / rot) as usize).max(1);
+        let score = |f: f64| (1..=harmonics).map(|k| at(k as f64 * f)).sum::<f64>();
+        let (lo_f, hi_f) = (rot * (1.0 - MAX_DROOP), rot * 1.02);
+        let step = bin / (2.0 * harmonics as f64);
+        let mut best = (f64::NEG_INFINITY, rot);
+        let mut f0 = lo_f;
+        while f0 <= hi_f {
+            let sc = score(f0);
+            if sc > best.0 {
+                best = (sc, f0);
+            }
+            f0 += step;
+        }
+        // it must stand out from the harmonics of a frequency well off it
+        let off = score(best.1 * 1.37).max(score(best.1 * 0.71));
+        if best.0 > 2.0 * off {
+            // finer: the strongest of those harmonics, its peak interpolated between bins, over its number
+            let k = (1..=harmonics).max_by(|a, b| at(*a as f64 * best.1).total_cmp(&at(*b as f64 * best.1))).unwrap_or(1);
+            let i = (k as f64 * best.1 / bin).round() as usize;
+            let i = (i.saturating_sub(1)..=(i + 1).min(db.len() - 2)).max_by(|a, b| db[*a].total_cmp(&db[*b])).unwrap_or(i);
+            let fine = self.interp(&db, i) / k as f64;
+            let rpm = fine / rot * ctx.rpm;
             f.rpm = Some(rpm);
             f.droop = Some(1.0 - rpm / ctx.rpm);
         }
@@ -201,6 +234,16 @@ pub(crate) mod tests {
         let frames = a.push(&cut(24_000.0, 3, Some(3730.0), 0.5, 48_000), &ctx);
         let (hz, above) = frames[0].chatter.expect("chatter");
         assert!((hz - 3730.0).abs() < 10.0 && above > 20.0, "{:?}", frames[0]);
+    }
+
+    /// The tool table says 2 teeth, the tool has 3: the speed comes from the rotation, and the teeth's beat
+    /// (a rotation harmonic) isn't taken for chatter.
+    #[test]
+    fn wrong_tooth_count_still_finds_the_speed() {
+        let mut a = Analyzer::new(48_000);
+        let ctx = Context { rpm: 24_000.0, teeth: 2, cutting: true, ..Default::default() };
+        let f = &a.push(&cut(24_000.0 * 0.97, 3, None, 0.5, 48_000), &ctx)[0];
+        assert!((f.droop.unwrap() - 0.03).abs() < 0.004 && f.chatter.is_none(), "{f:?}");
     }
 
     #[test]

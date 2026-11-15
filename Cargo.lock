@@ -793,6 +793,7 @@ version = "0.1.0"
 dependencies = [
  "cnc-blueskyt",
  "cnc-gcode",
+ "cnc-listen",
  "cnc-machine",
  "eframe",
  "egui_extras",

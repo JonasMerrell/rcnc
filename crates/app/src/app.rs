@@ -12,6 +12,7 @@ use std::sync::Arc;
 use crate::preview::{self, Camera, Toolpath};
 use crate::sheet::{self, Sheets, SheetView};
 
+pub mod ears;
 mod findstock;
 mod pages;
 mod toolchange;
@@ -106,6 +107,8 @@ pub struct App {
     confirm_quit: bool,
     /// Quit was confirmed: let the window close.
     quitting: bool,
+    /// The microphone, if there is one.
+    ears: ears::Ears,
 }
 
 impl App {
@@ -158,6 +161,7 @@ impl App {
             program_lines: (0, Vec::new()),
             confirm_quit: false,
             quitting: false,
+            ears: ears::Ears::new(),
         }
     }
 
@@ -367,6 +371,11 @@ impl eframe::App for App {
             self.alive = (self.snap.time, std::time::Instant::now());
         }
         self.watch_file(ctx.input(|i| i.time));
+        let program = self.program_file.as_ref().map(|p| p.0.clone());
+        self.ears.poll(&self.snap, program.as_deref());
+        if self.ears.listening() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         self.update_preview(ctx);
         self.keyboard(ctx);
         self.guard_close(ctx);
@@ -659,6 +668,7 @@ impl App {
                     .map(|b| b.name.as_str())
                     .unwrap_or("No board");
                 ui.label(RichText::new(board).color(MUTED).size(13.0));
+                self.ears.indicator(ui);
                 if let Some(alarm) = &s.alarm {
                     ui.label(RichText::new(alarm).color(RED).strong());
                 } else if let Some(msg) = &s.paused {

@@ -125,6 +125,7 @@ impl App {
                 if ui.checkbox(&mut m, RichText::new("Measure the tool on the setter").size(18.0)).changed() {
                     self.tc_measure = Some(m);
                 }
+                self.ears.tap_ui(ui, tc.to, &self.machine);
                 ui.add_space(10.0);
                 if ui.add(huge_button("Continue", GREEN).min_size(wide)).clicked() {
                     self.machine.send(Command::ToolChangeContinue { measure: Some(m) });
