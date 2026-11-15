@@ -25,7 +25,7 @@ If the screw can't take the slab after one hole, use two holes (50 mm) and close
 
 ## Tools
 
-T99 probe, T24 3 FLUTE DLC 1/4 (stick-out 24), T1 ALUMINUM chamfer 90 (22), T11 6 mm 2FL ball, HSS
+T99 probe, T24 3 FLUTE DLC 1/4 (stick-out 24), T1 ALUMINUM chamfer 90 (22), T11 6 mm 2FL ball, carbide
 (stick-out 21: the ER16 nut just clears the 29.5 mm crest with the ball on the groove floor; don't let it
 stick out less). The program header fills rcnc's tool table.
 

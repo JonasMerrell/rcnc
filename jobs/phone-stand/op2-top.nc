@@ -6,7 +6,7 @@
 (retracts use G53 G0 Z0 - home the machine first)
 (T99 YIDOFENG 3D touch probe - touch probe, D2 stylus ball, flute length 12, stickout 40)
 (T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)
-(T11 6 mm 2FL ball [HSS] - D6 ball end mill, 2 flutes, flute length 18, stickout 21)
+(T11 6 mm 2FL ball [carbide] - D6 ball end mill, 2 flutes, flute length 18, stickout 21)
 (estimated time 65:15)
 G21 G17 G40 G49 G80 G90 G91.1 G94 G64
 G54
