@@ -149,6 +149,10 @@ impl Controller {
         let Some(t) = &self.tool_change else { return Ok(vec![]) };
         let (start, z_offset, outputs) = (t.start, t.z_offset, t.outputs.clone());
         let view = t.view.clone();
+        if self.loaded_tool != view.to {
+            // the probe's offset from the spindle axis changes when it's taken out
+            self.probe_runout = None;
+        }
         self.loaded_tool = view.to;
         self.info(format!("Tool {} loaded", view.to));
         // The program carries on expecting the spindle and coolant as they

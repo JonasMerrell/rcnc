@@ -18,9 +18,11 @@ use crate::probing::{self, ProbeJob, Routine, Step};
 use crate::store::{self, SavedState};
 
 mod calibrate;
+mod probecal;
 mod findstock;
 mod toolchange;
 pub use calibrate::{CalibrateStage, CalibrateView};
+pub use probecal::{ProbeCalShape, ProbeCalStage, ProbeCalTarget, ProbeCalView};
 pub use findstock::{FindStockStage, FindStockView, StockFound, STOCK_REFERENCE};
 pub use toolchange::{ToolChangeStage, ToolChangeView};
 
@@ -107,6 +109,14 @@ pub enum Command {
     CalibrateZ { reference: usize, gauge: Option<f64> },
     /// Carry on with the calibration: over the surface / on the gauge, or save.
     CalibrateContinue,
+    /// Calibrate the touch probe on a known bore, cylinder, pocket, block or Z reference.
+    CalibrateProbe(ProbeCalTarget),
+    /// Carry on with the probe calibration: in place, measure again after the
+    /// probe was turned, or save the result.
+    CalibrateProbeContinue,
+    /// After a shape's result: wait for the probe to be turned half a
+    /// turn in the spindle, then measure again to find how far off centre it is.
+    CalibrateProbeTurn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +176,11 @@ pub struct Snapshot {
     pub find_stock: Option<FindStockView>,
     /// A Z reference calibration in progress.
     pub calibrate: Option<CalibrateView>,
+    /// A touch probe calibration in progress.
+    pub probe_cal: Option<ProbeCalView>,
+    /// How far the probe's ball sits off the spindle axis, X/Y mm, as last
+    /// measured while it has stayed in the spindle (None: not measured).
+    pub probe_runout: Option<[f64; 2]>,
     /// The tool in the spindle as far as the controller knows (0: unknown).
     pub loaded_tool: u32,
     /// The loaded tool has been measured on the tool setter since it went in.
@@ -272,6 +287,9 @@ pub struct Controller {
     tool_change: Option<toolchange::ToolChange>,
     find_stock: Option<FindStockView>,
     calibrate: Option<CalibrateView>,
+    probe_cal: Option<ProbeCalView>,
+    /// The loaded probe's ball offset from the spindle axis, measured since it went in.
+    probe_runout: Option<[f64; 2]>,
     /// An automatic probing request (Probe Z, Find bores) runs in place of the program.
     auto_probe: bool,
     /// The tool in the spindle has been measured on the setter since it was loaded.
@@ -341,6 +359,8 @@ impl Controller {
             tool_change: None,
             find_stock: None,
             calibrate: None,
+            probe_cal: None,
+            probe_runout: None,
             auto_probe: false,
             tool_measured: false,
             jog_return: None,
@@ -511,6 +531,7 @@ impl Controller {
         self.tool_change = None;
         self.find_stock = None;
         self.calibrate = None;
+        self.probe_cal = None;
         self.auto_probe = false;
         self.jog_return = None;
     }
@@ -681,6 +702,9 @@ impl Controller {
             Command::FindStockSettings { depth, tolerance } => self.find_stock_settings(depth, tolerance),
             Command::CalibrateZ { reference, gauge } => self.start_calibrate(reference, gauge),
             Command::CalibrateContinue => self.calibrate_continue(),
+            Command::CalibrateProbe(target) => self.start_probe_cal(target),
+            Command::CalibrateProbeContinue => self.probe_cal_continue(),
+            Command::CalibrateProbeTurn => self.probe_cal_turn(),
             Command::SetAirCut(lift) => {
                 if !self.is_ready() {
                     return self.info("Air cut can only be switched while the machine is idle");
@@ -991,6 +1015,7 @@ impl Controller {
         self.end_tool_change(&result);
         self.end_find_stock(&result);
         self.end_calibrate(&result);
+        self.end_probe_cal(&result);
     }
 
     /// Set the active work offset so machine position `machine` on `axis` reads `work`.
@@ -1404,6 +1429,7 @@ impl Controller {
         match self.mode {
             Mode::Probing if self.find_stock.is_some() => self.find_stock_continue(),
             Mode::Probing if self.calibrate.is_some() => self.calibrate_continue(),
+            Mode::Probing if self.probe_cal.is_some() => self.probe_cal_continue(),
             Mode::Probing => self.tool_change_continue(None),
             Mode::Running => {
                 self.generator.hold = false;
@@ -1566,6 +1592,7 @@ impl Controller {
         self.watch_probe();
         self.find_stock_watch();
         self.calibrate_watch();
+        self.probe_cal_watch();
         if self.status.idle {
             self.probe_report();
         }
@@ -2066,6 +2093,8 @@ impl Controller {
             tool_change: self.tool_change.as_ref().map(|t| t.view.clone()),
             find_stock: self.find_stock.clone(),
             calibrate: self.calibrate.clone(),
+            probe_cal: self.probe_cal.clone(),
+            probe_runout: self.probe_runout,
             loaded_tool: self.loaded_tool,
             tool_measured: self.tool_measured,
             air_cut: self.air_cut,
@@ -4101,6 +4130,170 @@ mod tests {
         let found = s.log.iter().find(|l| l.starts_with("Stock found")).unwrap();
         assert!(found.contains("Warning: the top is at Z110.610, 0.610 mm from the Z110"), "{found}");
         assert_eq!(s.config.probing.setter.reference, "Vise");
+    }
+
+    /// A probe loaded and measured over the sim's block (X/Y 100..160, top Z100)
+    /// with a 2 mm stylus, the setter at Z30 and the Vise reference at -70
+    /// (where the setter's top really is above the block top).
+    fn probe_cal_setup(world: impl FnOnce(&mut Simulator)) -> (Controller, Arc<ManualClock>) {
+        let (mut c, clock) = probing_setup_with(world);
+        let mut config = MachineConfig::dmc2();
+        config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, offset: 13.31, reference: String::new(), ..Default::default() };
+        config.probing.stylus_diameter = 2.0;
+        config.tool_change = crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, ..Default::default() };
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.homed = [true; 6];
+        c.handle(Command::Mdi("G53 G0 Z110\nG53 G0 X130 Y130".into()));
+        run_until_idle(&mut c, &clock, 10.0);
+        c.handle(Command::Load { name: "t".into(), text: "T99 M6\nM30".into() });
+        c.handle(Command::CycleStart);
+        run_until(&mut c, &clock, 60.0, "loading the probe", |s| s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading));
+        c.handle(Command::CycleStart);
+        run_until_idle(&mut c, &clock, 120.0);
+        c.handle(Command::Mdi("G53 G0 Z110".into()));
+        run_until_idle(&mut c, &clock, 10.0);
+        assert!(close(c.snapshot().machine[2], 110.0));
+        (c, clock)
+    }
+
+    fn probe_cal_jog(c: &mut Controller, clock: &ManualClock, axis: usize, by: f64) {
+        c.handle(Command::Jog { axis, positive: by > 0.0, step: Some(by.abs()) });
+        run_until(c, clock, 60.0, "the end of a jog", |s| s.mode == Mode::Probing);
+    }
+
+    fn probe_cal_result(c: &mut Controller, clock: &ManualClock) -> ProbeCalView {
+        run_until(c, clock, 300.0, "the result", |s| s.probe_cal.as_ref().is_some_and(|p| p.stage == ProbeCalStage::Result) && s.mode == Mode::Probing);
+        tick(c, clock, 400);
+        c.snapshot().probe_cal.clone().unwrap()
+    }
+
+    /// The sim's probe is a point, so a Ø20 bore measured as Ø21.9 means a 1.9 mm ball.
+    /// Turned half a turn the centre doesn't move (no runout). Saved, Find stock-style
+    /// edges then use the 0.95 mm radius.
+    #[test]
+    fn calibrates_the_probe_in_an_inner_bore_and_turned() {
+        let (mut c, clock) = probe_cal_setup(|sim| sim.world.bores.push(([26_000, 26_000], 2_000)));
+        c.handle(Command::CalibrateProbe(ProbeCalTarget::Shape { shape: ProbeCalShape::InnerBore, size: [21.9; 2], depth: 3.0 }));
+        assert_eq!(c.snapshot().probe_cal.as_ref().unwrap().stage, ProbeCalStage::Locate);
+        // Continue does nothing before the stylus is tapped
+        c.handle(Command::CalibrateProbeContinue);
+        assert_eq!(c.snapshot().probe_cal.as_ref().unwrap().stage, ProbeCalStage::Locate);
+        // tap on the block top beside the bore, then into the bore, 3 off its middle
+        probe_cal_jog(&mut c, &clock, 0, -18.0);
+        probe_cal_jog(&mut c, &clock, 2, -20.0);
+        assert!(c.snapshot().probe_cal.as_ref().unwrap().tapped);
+        probe_cal_jog(&mut c, &clock, 2, 2.0);
+        probe_cal_jog(&mut c, &clock, 0, 21.0);
+        probe_cal_jog(&mut c, &clock, 1, -2.0);
+        probe_cal_jog(&mut c, &clock, 2, -5.0);
+        c.handle(Command::CalibrateProbeContinue);
+        let p = probe_cal_result(&mut c, &clock);
+        let d = p.new.as_ref().unwrap().diameter;
+        assert!(close(d[0], 1.9) && close(d[1], 1.9), "{p:?}");
+        assert!(p.repeat.unwrap() < 0.02 && p.runout.is_none(), "{p:?}");
+        assert!(close(p.centres[0][0], 130.0) && close(p.centres[0][1], 130.0), "{p:?}");
+        // turn it and measure again
+        c.handle(Command::CalibrateProbeTurn);
+        assert_eq!(c.snapshot().probe_cal.as_ref().unwrap().stage, ProbeCalStage::Turn);
+        c.handle(Command::CalibrateProbeContinue);
+        let p = probe_cal_result(&mut c, &clock);
+        let r = p.runout.unwrap();
+        assert!(close(r[0], 0.0) && close(r[1], 0.0), "{p:?}");
+        // only once round
+        c.handle(Command::CalibrateProbeTurn);
+        assert_eq!(c.snapshot().probe_cal.as_ref().unwrap().stage, ProbeCalStage::Result);
+        c.handle(Command::CalibrateProbeContinue);
+        run_until_idle(&mut c, &clock, 30.0);
+        let s = c.snapshot();
+        assert!(s.probe_cal.is_none());
+        let cal = &s.config.probing.calibration;
+        assert!(close(cal.diameter[0], 1.9) && close(cal.diameter[1], 1.9) && cal.diameter_on == "Ø21.900 inner bore", "{cal:?}");
+        assert!(s.probe_runout.is_some());
+        assert!((s.config.probing.ball_radius(0) - cal.diameter[0] / 2.0).abs() < 1e-12);
+        assert!(s.log.iter().any(|l| l.starts_with("Probe calibrated: ball X 1.9")), "{:?}", s.log);
+    }
+
+    /// The block is 60 × 60: told it's 58.1, the ball measures 1.9. Cancel keeps what was stored.
+    #[test]
+    fn calibrates_the_probe_on_an_outer_rectangle_and_cancel_keeps_the_old() {
+        let (mut c, clock) = probe_cal_setup(|_| {});
+        c.handle(Command::CalibrateProbe(ProbeCalTarget::Shape { shape: ProbeCalShape::OuterRectangle, size: [58.1; 2], depth: 3.0 }));
+        probe_cal_jog(&mut c, &clock, 2, -20.0);
+        probe_cal_jog(&mut c, &clock, 2, 4.0);
+        probe_cal_jog(&mut c, &clock, 1, 3.0);
+        c.handle(Command::CalibrateProbeContinue);
+        let p = probe_cal_result(&mut c, &clock);
+        let d = p.new.as_ref().unwrap().diameter;
+        assert!(close(d[0], 1.9) && close(d[1], 1.9), "{p:?}");
+        assert!(close(p.centres[0][0], 130.0) && close(p.centres[0][1], 130.0), "{p:?}");
+        c.handle(Command::Stop);
+        run_until_idle(&mut c, &clock, 10.0);
+        let s = c.snapshot();
+        assert!(s.probe_cal.is_none());
+        assert_eq!(s.config.probing.calibration, crate::probing::ProbeCalibration::default());
+    }
+
+    /// An outer cylinder (a Ø40 boss standing on the table) and an inner rectangle (a 30 × 20 pocket).
+    #[test]
+    fn calibrates_the_probe_on_an_outer_cylinder_and_an_inner_rectangle() {
+        // the cylinder: a box the sim can't make round, so measure a square boss as a "cylinder"
+        // off-centre in Y: the chord trick still lands the X span on the full width
+        let (mut c, clock) = probe_cal_setup(|_| {});
+        c.handle(Command::CalibrateProbe(ProbeCalTarget::Shape { shape: ProbeCalShape::OuterCylinder, size: [58.0; 2], depth: 3.0 }));
+        probe_cal_jog(&mut c, &clock, 2, -20.0);
+        probe_cal_jog(&mut c, &clock, 2, 4.0);
+        c.handle(Command::CalibrateProbeContinue);
+        let p = probe_cal_result(&mut c, &clock);
+        assert!(close(p.new.as_ref().unwrap().diameter[0], 2.0), "{p:?}");
+        assert_eq!(p.on, "Ø58.000 outer cylinder");
+        c.handle(Command::Stop);
+        run_until_idle(&mut c, &clock, 10.0);
+
+        // a pocket: the sim's bores are round, so a Ø20 bore stands in for a 20 × 20 pocket
+        let (mut c, clock) = probe_cal_setup(|sim| sim.world.bores.push(([26_000, 26_000], 2_000)));
+        c.handle(Command::CalibrateProbe(ProbeCalTarget::Shape { shape: ProbeCalShape::InnerRectangle, size: [21.95, 21.95], depth: 3.0 }));
+        probe_cal_jog(&mut c, &clock, 0, -18.0);
+        probe_cal_jog(&mut c, &clock, 2, -20.0);
+        probe_cal_jog(&mut c, &clock, 2, 2.0);
+        probe_cal_jog(&mut c, &clock, 0, 18.0);
+        probe_cal_jog(&mut c, &clock, 2, -5.0);
+        c.handle(Command::CalibrateProbeContinue);
+        let p = probe_cal_result(&mut c, &clock);
+        assert!(close(p.new.as_ref().unwrap().diameter[1], 1.95), "{p:?}");
+        assert_eq!(p.on, "21.950 × 21.950 inner rectangle");
+    }
+
+    /// The Vise reference stored 0.05 lower than the probe sees it: the probe's Z offset is +0.05,
+    /// and Calibrate Z with the probe then lands on the stored value.
+    #[test]
+    fn calibrates_the_probe_z_offset_on_a_trusted_reference() {
+        let (mut c, clock) = probe_cal_setup(|_| {});
+        let mut config = c.snapshot().config.clone();
+        let vise = config.probing.setter.references.iter().position(|r| r.name == "Vise").unwrap();
+        config.probing.setter.references[vise].setter_top = -70.05;
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.handle(Command::CalibrateProbe(ProbeCalTarget::ZReference(vise)));
+        probe_cal_jog(&mut c, &clock, 2, -20.0);
+        probe_cal_jog(&mut c, &clock, 2, 4.0);
+        c.handle(Command::CalibrateProbeContinue);
+        let p = probe_cal_result(&mut c, &clock);
+        let n = p.new.clone().unwrap();
+        assert!(close(n.z_offset, 0.05) && n.z_offset_on == "Vise" && n.diameter == [0.0; 2], "{p:?}");
+        // a turn is only for shapes
+        c.handle(Command::CalibrateProbeTurn);
+        assert_eq!(c.snapshot().probe_cal.as_ref().unwrap().stage, ProbeCalStage::Result);
+        c.handle(Command::CalibrateProbeContinue);
+        run_until_idle(&mut c, &clock, 30.0);
+        assert!(close(c.snapshot().config.probing.calibration.z_offset, 0.05));
+        // Calibrate Z with the probe now agrees with the stored -70.05
+        c.handle(Command::CalibrateZ { reference: vise, gauge: None });
+        probe_cal_jog(&mut c, &clock, 2, -8.0);
+        probe_cal_jog(&mut c, &clock, 2, 4.0);
+        c.handle(Command::CalibrateContinue);
+        run_until(&mut c, &clock, 120.0, "the result", |s| s.calibrate.as_ref().is_some_and(|k| k.stage == CalibrateStage::Result) && s.mode == Mode::Probing);
+        tick(&mut c, &clock, 400);
+        let k = c.snapshot().calibrate.clone().unwrap();
+        assert!(close(k.new.unwrap(), -70.05), "{k:?}");
     }
 
     /// The probe (and a gauge block) measure how far the setter's top is above

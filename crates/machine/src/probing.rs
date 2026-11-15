@@ -41,6 +41,37 @@ pub struct ProbeSettings {
     /// Tool number of the touch probe. The spindle won't start with it loaded.
     pub probe_tool: u32,
     pub find_stock: FindStockSettings,
+    /// What the Calibrate probe wizard measured; nothing until it has run.
+    pub calibration: ProbeCalibration,
+}
+
+/// The touch probe as measured on known references. A probe triggers a
+/// little after the ball first touches, so the ball acts smaller than it is,
+/// and by a different amount along X and Y; and it triggers on a surface at
+/// a slightly different height than on the tool setter it was measured on.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProbeCalibration {
+    /// The ball's effective diameter touching along X and along Y, mm; zero
+    /// until calibrated (the nominal stylus diameter is used).
+    pub diameter: [f64; 2],
+    /// What the diameter was measured on, e.g. "Ø20.000 bore".
+    pub diameter_on: String,
+    /// Added to every Z touch the probe makes: how far the real surface is
+    /// above where the probe, measured on the setter, says it is.
+    pub z_offset: f64,
+    /// The Z reference the offset was measured on.
+    pub z_offset_on: String,
+}
+
+impl ProbeSettings {
+    /// The ball's effective radius touching along `axis` (0 = X, 1 = Y).
+    pub fn ball_radius(&self, axis: usize) -> f64 {
+        match self.calibration.diameter.get(axis) {
+            Some(d) if *d > 0.0 => d / 2.0,
+            _ => self.stylus_diameter / 2.0,
+        }
+    }
 }
 
 /// The tool-table entry a new table gets for the touch probe.
@@ -139,6 +170,7 @@ impl Default for ProbeSettings {
             setter: ToolSetter::default(),
             probe_tool: 99,
             find_stock: FindStockSettings::default(),
+            calibration: ProbeCalibration::default(),
         }
     }
 }
@@ -311,7 +343,8 @@ fn edge_steps(s: &ProbeSettings, axis: usize, positive: bool) -> Vec<Step> {
 pub(crate) fn build(job: ProbeJob, s: &ProbeSettings, start: [f64; 6]) -> Routine {
     let mut name = job.name();
     let mut steps: Vec<Step> = Vec::new();
-    let r = s.stylus_diameter / 2.0;
+    // the ball's effective radius along X and Y (calibrated, or the nominal ball)
+    let (rx, ry) = (s.ball_radius(0), s.ball_radius(1));
     let auto = s.auto_zero;
     match job {
         ProbeJob::ToolTouchOff => {
@@ -338,7 +371,7 @@ pub(crate) fn build(job: ProbeJob, s: &ProbeSettings, start: [f64; 6]) -> Routin
             let (plate, z0) = (s.plate_thickness, start[2]);
             let feed = s.travel_feed;
             steps.push(then(move |c, hits| {
-                let hit = hits[0];
+                let hit = hits[0] + c.probe_z_offset();
                 if auto {
                     c.set_work_axis(2, hit, plate);
                 }
@@ -349,8 +382,9 @@ pub(crate) fn build(job: ProbeJob, s: &ProbeSettings, start: [f64; 6]) -> Routin
         ProbeJob::Edge { axis, positive } => {
             steps.extend(edge_steps(s, axis, positive));
             let feed = s.travel_feed;
+            let r = s.ball_radius(axis);
             steps.push(then(move |c, hits| {
-                let edge = hits[0] + if positive { r } else { -r };
+                let edge = hits[0] + if positive { r } else { -r } + c.ball_offset(axis);
                 if auto {
                     c.set_work_axis(axis, edge, 0.0);
                 }
@@ -373,8 +407,8 @@ pub(crate) fn build(job: ProbeJob, s: &ProbeSettings, start: [f64; 6]) -> Routin
             steps.push(guarded_to(s, 0, start[0]));
             let feed = s.travel_feed;
             steps.push(then(move |c, hits| {
-                let x = hits[0] + if x_positive { r } else { -r };
-                let y = hits[1] + if y_positive { r } else { -r };
+                let x = hits[0] + if x_positive { rx } else { -rx } + c.ball_offset(0);
+                let y = hits[1] + if y_positive { ry } else { -ry } + c.ball_offset(1);
                 if auto {
                     c.set_work_axis(0, x, 0.0);
                     c.set_work_axis(1, y, 0.0);
@@ -402,10 +436,10 @@ pub(crate) fn build(job: ProbeJob, s: &ProbeSettings, start: [f64; 6]) -> Routin
                 Ok(more)
             }));
             steps.push(then(move |c, hits| {
-                let xc = (hits[0] + hits[1]) / 2.0;
-                let yc = (hits[2] + hits[3]) / 2.0;
-                let dx = hits[0] - hits[1] + 2.0 * r;
-                let dy = hits[2] - hits[3] + 2.0 * r;
+                let xc = (hits[0] + hits[1]) / 2.0 + c.ball_offset(0);
+                let yc = (hits[2] + hits[3]) / 2.0 + c.ball_offset(1);
+                let dx = hits[0] - hits[1] + 2.0 * rx;
+                let dy = hits[2] - hits[3] + 2.0 * ry;
                 if auto {
                     c.set_work_axis(0, xc, 0.0);
                     c.set_work_axis(1, yc, 0.0);
@@ -418,7 +452,7 @@ pub(crate) fn build(job: ProbeJob, s: &ProbeSettings, start: [f64; 6]) -> Routin
             }));
         }
         ProbeJob::BossCentre => {
-            let out = s.boss_size / 2.0 + s.xy_clearance + r;
+            let out = s.boss_size / 2.0 + s.xy_clearance + s.stylus_diameter / 2.0;
             let feed = s.travel_feed;
             for axis in 0..2 {
                 for positive in [true, false] {
@@ -432,10 +466,10 @@ pub(crate) fn build(job: ProbeJob, s: &ProbeSettings, start: [f64; 6]) -> Routin
                 }
             }
             steps.push(then(move |c, hits| {
-                let xc = (hits[0] + hits[1]) / 2.0;
-                let yc = (hits[2] + hits[3]) / 2.0;
-                let dx = hits[1] - hits[0] - 2.0 * r;
-                let dy = hits[3] - hits[2] - 2.0 * r;
+                let xc = (hits[0] + hits[1]) / 2.0 + c.ball_offset(0);
+                let yc = (hits[2] + hits[3]) / 2.0 + c.ball_offset(1);
+                let dx = hits[1] - hits[0] - 2.0 * rx;
+                let dy = hits[3] - hits[2] - 2.0 * ry;
                 if auto {
                     c.set_work_axis(0, xc, 0.0);
                     c.set_work_axis(1, yc, 0.0);
