@@ -1,0 +1,220 @@
+[
+ {
+  "tool": "new_document",
+  "args": {
+   "units": "mm"
+  }
+ },
+ {
+  "tool": "import_file",
+  "args": {
+   "path": "/home/jonas/dmc2/stand/stand-top.stl",
+   "name": "stand top"
+  }
+ },
+ {
+  "tool": "create_sketch",
+  "args": {
+   "plane": {
+    "kind": "origin_plane",
+    "plane": "Top"
+   }
+  }
+ },
+ {
+  "tool": "sketch_add",
+  "args": {
+   "sketch_id": 2,
+   "items": [
+    {
+     "type": "line",
+     "from": [
+      -23,
+      -29
+     ],
+     "to": [
+      23,
+      -29
+     ]
+    },
+    {
+     "type": "arc",
+     "center": [
+      23,
+      -23
+     ],
+     "start": [
+      23,
+      -29
+     ],
+     "end": [
+      29,
+      -23
+     ]
+    },
+    {
+     "type": "line",
+     "from": [
+      29,
+      -23
+     ],
+     "to": [
+      29,
+      23
+     ]
+    },
+    {
+     "type": "arc",
+     "center": [
+      23,
+      23
+     ],
+     "start": [
+      29,
+      23
+     ],
+     "end": [
+      23,
+      29
+     ]
+    },
+    {
+     "type": "line",
+     "from": [
+      23,
+      29
+     ],
+     "to": [
+      -23,
+      29
+     ]
+    },
+    {
+     "type": "arc",
+     "center": [
+      -23,
+      23
+     ],
+     "start": [
+      -23,
+      29
+     ],
+     "end": [
+      -29,
+      23
+     ]
+    },
+    {
+     "type": "line",
+     "from": [
+      -29,
+      23
+     ],
+     "to": [
+      -29,
+      -23
+     ]
+    },
+    {
+     "type": "arc",
+     "center": [
+      -23,
+      -23
+     ],
+     "start": [
+      -29,
+      -23
+     ],
+     "end": [
+      -23,
+      -29
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "tool": "add_feature",
+  "args": {
+   "kind": "extrude",
+   "params": {
+    "profiles": [
+     {
+      "sketch": 2
+     }
+    ],
+    "depth": 2,
+    "op": "remove"
+   },
+   "name": "Underside recess 2"
+  }
+ },
+ {
+  "tool": "create_sketch",
+  "args": {
+   "plane": {
+    "kind": "origin_plane",
+    "plane": "Top"
+   }
+  }
+ },
+ {
+  "tool": "sketch_add",
+  "args": {
+   "sketch_id": 4,
+   "items": [
+    {
+     "type": "circle",
+     "center": [
+      -18,
+      -19.25
+     ],
+     "radius": 4
+    },
+    {
+     "type": "circle",
+     "center": [
+      18,
+      -19.25
+     ],
+     "radius": 4
+    }
+   ]
+  }
+ },
+ {
+  "tool": "add_feature",
+  "args": {
+   "kind": "extrude",
+   "params": {
+    "profiles": [
+     {
+      "sketch": 4
+     }
+    ],
+    "depth": 12,
+    "op": "remove"
+   },
+   "name": "2x locating bore 8 through the groove floor"
+  }
+ },
+ {
+  "tool": "describe",
+  "args": {}
+ },
+ {
+  "tool": "save_document",
+  "args": {
+   "path": "/home/jonas/dmc2/stand/stand.json"
+  }
+ },
+ {
+  "tool": "render",
+  "args": {
+   "path": "t-iso.png",
+   "view": "iso",
+   "width": 1200,
+   "height": 900
+  }
+ }
+]
