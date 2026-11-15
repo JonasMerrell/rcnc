@@ -49,18 +49,19 @@ the table): the probe's tip (stick-out 40) is about 87 above the parallels, 39 a
 55 above it, T1 57, T11 58. Before the first run, jog the probe over the slab at Z top and check there is
 at least 25 mm under it.
 
-## Op 2: the sculpted top (about 82 min)
+## Op 2: the sculpted top (about 67 min)
 
 Flip it: **finished underside down** on the parallels, a finished plinth wall against the fixed jaw.
 
 1. Open `op2-top.nc`, Cycle Start.
 2. T99 + Find stock on the raw top band (rough X/Y).
-3. T24: face to the crest, 3D adaptive rough in 3.3 mm steps (about 34 min), then two quick parallel
+3. T24: face to the crest, 3D adaptive rough in 3.3 mm steps at 2400 mm/min (about 40 min, 72% of the spindle), then two quick parallel
    semi-rough passes (to 1.7, then to 0.3 over the part, about 3 min) that take the rough's steps off the
    slopes so the ball never takes a deep cut, then a light floor finish at Z10 into the corners. This opens
    the two bores in the groove floor.
 4. T99: Find bores runs by itself, sets X/Y from the bores (spacing 36 ± 0.1, turn ≤ 0.2°).
-5. T11: parallel finish front to back, then waterline on the steep faces (about 33 min). Nothing goes below
+5. T11 at 24 000 rpm / 3000 mm/min (Jonas's usual for the ball: it barely cuts): parallel finish front to
+   back, then waterline on the steep faces (about 15 min, under 10% of the spindle). Nothing goes below
    Z10 (the groove floor) near the jaws, whose tops are at Z4.7.
 
 ## Checked
