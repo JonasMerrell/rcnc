@@ -281,6 +281,8 @@ pub struct Controller {
     /// Air cut: the program's moves run this much higher. Tool changes,
     /// probing and G53 moves near the top of Z stay where they are.
     air_cut: Option<f64>,
+    /// G64 / G61 from the program; None: the profile's constant velocity setting.
+    path_blend: Option<bool>,
     /// The tool in the spindle, as far as the controller knows (0: unknown).
     loaded_tool: u32,
     /// Status polls that failed in a row.
@@ -340,6 +342,7 @@ impl Controller {
             tool_measured: false,
             jog_return: None,
             air_cut: None,
+            path_blend: None,
             z_top: None,
             loaded_tool: 0,
             poll_failures: 0,
@@ -1422,6 +1425,9 @@ impl Controller {
                 if self.interp.is_finished() {
                     self.interp.rewind();
                 }
+                if self.interp.pc() == 0 {
+                    self.path_blend = None;
+                }
                 self.sync_position();
                 self.exec = Some(Exec {
                     source: Source::Program,
@@ -1726,6 +1732,12 @@ impl Controller {
                 continue;
             }
             let Some((line, op)) = exec.pending.front().cloned() else { continue };
+            if let Op::PathMode { blend } = op {
+                // the planner blends the moves it gets from now on: no need to stop for it
+                exec.pending.pop_front();
+                self.path_blend = Some(blend);
+                continue;
+            }
             let mut from = self.generator.end_position();
             let lift = self.air_cut.unwrap_or(0.0);
             from[2] -= lift;
@@ -1762,7 +1774,9 @@ impl Controller {
                     return;
                 }
                 exec.pending.pop_front();
-                for m in moves {
+                let blend = self.path_blend.unwrap_or(self.config.constant_velocity);
+                for mut m in moves {
+                    m.continues |= blend;
                     self.generator.push(m);
                 }
                 continue;
@@ -1872,6 +1886,8 @@ impl Controller {
                 Ok(()) => Wait::Probe,
                 Err(msg) => return self.raise(format!("line {}: {msg}", line + 1)),
             },
+            // taken in fill_planner
+            Op::PathMode { .. } => Wait::None,
             Op::ProgramEnd => {
                 self.outputs.spindle_on = false;
                 self.outputs.flood = false;
@@ -3836,6 +3852,7 @@ mod tests {
         c.handle(Command::Load { name: path.clone(), text });
         c.handle(Command::CycleStart);
         let mut t = 0.0;
+        let limit: f64 = std::env::var("RCNC_MAX_S").ok().and_then(|v| v.parse().ok()).unwrap_or(4000.0);
         let mut changes = vec![];
         let mut lowest_cut = f64::INFINITY;
         loop {
@@ -3851,6 +3868,7 @@ mod tests {
             }
             if let Some(tc) = &s.tool_change {
                 if tc.stage == ToolChangeStage::Loading && c.routine_waiting {
+                    println!("T{} at {t:.0} s", tc.to);
                     changes.push(tc.to);
                     c.handle(Command::ToolChangeContinue { measure: None });
                 }
@@ -3872,7 +3890,7 @@ mod tests {
             if s.mode == Mode::Idle && s.log.iter().any(|l| l.contains("Program finished")) {
                 break;
             }
-            assert!(t < 4000.0, "still running after {t:.0}s: {:?}", s.log);
+            assert!(t < limit, "still running after {t:.0}s: {:?}", s.log);
         }
         let s = c.snapshot();
         for l in s.log.iter().filter(|l| l.contains("Stock found") || l.contains("Bores found") || l.contains("touched off") || l.starts_with("Warning")) {
@@ -3880,6 +3898,36 @@ mod tests {
         }
         println!("{path}: finished after {t:.0} s simulated, tool changes {changes:?}, work offset {:?}", s.work_offsets[0]);
         println!("lowest the tool went with the spindle on: {lowest_cut:.3} mm from the stock top");
+    }
+
+    #[test]
+    fn g64_blends_short_moves_that_g61_stops_after() {
+        // a 3D finishing path: many short moves along a gentle curve
+        let mut path = String::from("G90 G0 X0 Y0 Z-10\n");
+        for k in 1..=400 {
+            let x = k as f64 * 0.25;
+            path += &format!("G1 X{x:.3} Y{:.3} F1500\n", (x / 8.0).sin() * 3.0);
+        }
+        let time = |mode: &str| {
+            let clock = Arc::new(ManualClock::default());
+            let mut c = Controller::new(crate::sim::dmc2_sim_config(), Box::new(Simulator::new(clock.clone())), clock.clone());
+            c.handle(Command::Connect);
+            c.handle(Command::Reset);
+            c.handle(Command::Home(None));
+            run_until_idle(&mut c, &clock, 600.0);
+            c.handle(Command::Mdi("G53 G0 X100 Y300 Z-20\nG10 L2 P1 X100 Y300 Z-100".into()));
+            run_until_idle(&mut c, &clock, 30.0);
+            c.handle(Command::Load { name: "t".into(), text: format!("{mode}\n{path}M30") });
+            let start = clock.now();
+            c.handle(Command::CycleStart);
+            run_until_idle(&mut c, &clock, 600.0);
+            assert!(c.snapshot().log.iter().any(|l| l.contains("Program finished")), "{:?}", c.snapshot().log);
+            clock.now() - start
+        };
+        let (blended, stopping) = (time("G64"), time("G61"));
+        // about 105 mm at 25 mm/s is 4.2 s, plus the rapid to the start; stopping dead 400 times takes far longer
+        assert!(blended < 6.0, "G64: {blended} s");
+        assert!(stopping > 1.5 * blended, "G61 {stopping} s, G64 {blended} s");
     }
 
     #[test]

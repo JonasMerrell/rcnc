@@ -196,6 +196,9 @@ pub enum Op {
     /// Zero every tool measured from now on on this setter reference (an
     /// `(RCNC Z_REFERENCE Vise)` comment): the job's Z0 is that surface.
     ZReference(String),
+    /// G64 (`blend`: constant velocity, corners rounded within the planner's
+    /// junction deviation) or G61 / G61.1 (exact stop at the end of every move).
+    PathMode { blend: bool },
     ProgramEnd,
 }
 
@@ -940,7 +943,8 @@ impl Interpreter {
                     self.state.tlo_tool = None;
                 }
                 540..=590 if g % 10 == 0 => self.state.coord_system = ((g - 540) / 10) as usize,
-                610 | 611 | 640 => {}
+                610 | 611 => ops.push(Op::PathMode { blend: false }),
+                640 => ops.push(Op::PathMode { blend: true }),
                 900 => self.state.absolute = true,
                 910 => self.state.absolute = false,
                 901 => self.state.arc_absolute = true,
@@ -1641,6 +1645,18 @@ mod tests {
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-6
+    }
+
+    #[test]
+    fn g64_and_g61_set_the_path_mode() {
+        let (_, ops) = run("G64 G1 X1 F100\nG61\nG61.1\nM30");
+        let modes: Vec<_> = ops.iter().filter_map(|o| match o {
+            Op::PathMode { blend } => Some(*blend),
+            _ => None,
+        }).collect();
+        assert_eq!(modes, [true, false, false]);
+        // the mode comes before the move on its line
+        assert!(matches!(ops[0], Op::PathMode { blend: true }), "{ops:?}");
     }
 
     #[test]
