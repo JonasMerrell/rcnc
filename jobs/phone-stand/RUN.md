@@ -49,16 +49,16 @@ the table): the probe's tip (stick-out 40) is about 87 above the parallels, 39 a
 55 above it, T1 57, T11 58. Before the first run, jog the probe over the slab at Z top and check there is
 at least 25 mm under it.
 
-## Op 2: the sculpted top (about 95 min)
+## Op 2: the sculpted top (about 82 min)
 
 Flip it: **finished underside down** on the parallels, a finished plinth wall against the fixed jaw.
 
 1. Open `op2-top.nc`, Cycle Start.
 2. T99 + Find stock on the raw top band (rough X/Y).
-3. T24: face to the crest, 3D adaptive rough in 4 mm steps (about 34 min), then a rest rough in 1.5 mm steps
-   that takes the terraces off the slopes (about 16 min) so the ball never takes a deep cut. Both leave
-   0.2 on the groove floor; then a T24 floor finish at Z10 (light, into the corners, about 1 min). This
-   opens the two bores in the groove floor.
+3. T24: face to the crest, 3D adaptive rough in 3.3 mm steps (about 34 min), then two quick parallel
+   semi-rough passes (to 1.7, then to 0.3 over the part, about 3 min) that take the rough's steps off the
+   slopes so the ball never takes a deep cut, then a light floor finish at Z10 into the corners. This opens
+   the two bores in the groove floor.
 4. T99: Find bores runs by itself, sets X/Y from the bores (spacing 36 ± 0.1, turn ≤ 0.2°).
 5. T11: parallel finish front to back, then waterline on the steep faces (about 33 min). Nothing goes below
    Z10 (the groove floor) near the jaws, whose tops are at Z4.7.
@@ -84,6 +84,7 @@ rCAD stock + machine sim clean for both ops; both posted files run to the end in
 
 rCAD's sim now reports any machined surface left more than 0.1 mm proud ('left rough'): op 2 shows 8 mm²
 at the inside corner where the backrest meets the floor at the sides, the 6 mm ball's 3 mm radius. Every
-cut is under the tool-load limit (op 2 heaviest: rough 97%, others 53% or less).
+cut is under the tool-load limit (op 2: rough 72%, semi-rough 86% on short ramps down the steps, the
+rest 50% or less).
 
 `op2-top-sim.html`: the posted op 2 played back in a browser (orbit, scrub, live stock).
