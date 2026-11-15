@@ -49,15 +49,16 @@ the table): the probe's tip (stick-out 40) is about 87 above the parallels, 39 a
 55 above it, T1 57, T11 58. Before the first run, jog the probe over the slab at Z top and check there is
 at least 25 mm under it.
 
-## Op 2: the sculpted top (about 90 min)
+## Op 2: the sculpted top (about 95 min)
 
 Flip it: **finished underside down** on the parallels, a finished plinth wall against the fixed jaw.
 
 1. Open `op2-top.nc`, Cycle Start.
 2. T99 + Find stock on the raw top band (rough X/Y).
 3. T24: face to the crest, 3D adaptive rough in 4 mm steps (about 34 min), then a rest rough in 1.5 mm steps
-   that takes the terraces off the slopes (about 16 min) so the ball never takes a deep cut. This opens the
-   two bores in the groove floor.
+   that takes the terraces off the slopes (about 16 min) so the ball never takes a deep cut. Both leave
+   0.2 on the groove floor; then a T24 floor finish at Z10 (light, into the corners, about 1 min). This
+   opens the two bores in the groove floor.
 4. T99: Find bores runs by itself, sets X/Y from the bores (spacing 36 ± 0.1, turn ≤ 0.2°).
 5. T11: parallel finish front to back, then waterline on the steep faces (about 33 min). Nothing goes below
    Z10 (the groove floor) near the jaws, whose tops are at Z4.7.
@@ -67,3 +68,22 @@ Flip it: **finished underside down** on the parallels, a finished plinth wall ag
 rCAD stock + machine sim clean for both ops; both posted files run to the end in the rcnc simulator
 (18 and 70 min, Find stock and Find bores pass). Lean of a phone in it: 12 mm thick 14.6°, 10 mm 21.5°,
 8 mm 27.4° from vertical.
+
+## Every surface gets a finishing pass
+
+| Op | Surface | Finished by |
+|---|---|---|
+| 1 | Underside (faced saw cut) | Face, its last 1.5 mm pass at Z34 over the whole underside (T24) |
+| 1 | Plinth walls 74 × 74, 14.5 high | One full-height finish pass after the adaptive rough (T24) |
+| 1 | Recess floor and walls | The pocket now finishes it (rest machining off). The first part was cut with the adaptive's 0.2 mm left on the recess walls, floor exact |
+| 1 | Ø8 bores | Helical bore to size (T24) |
+| 1 | Edges | 0.5 chamfers (T1) |
+| 2 | Groove floor Z10 | T24 floor finish into the corners (new) |
+| 2 | Sculpted top, lip, roll-over | T11 parallel (slopes up to 65°) |
+| 2 | Lip face, backrest, steep roll-over | T11 waterline (slopes from 40°) |
+
+rCAD's sim now reports any machined surface left more than 0.1 mm proud ('left rough'): op 2 shows 8 mm²
+at the inside corner where the backrest meets the floor at the sides, the 6 mm ball's 3 mm radius. Every
+cut is under the tool-load limit (op 2 heaviest: rough 97%, others 53% or less).
+
+`op2-top-sim.html`: the posted op 2 played back in a browser (orbit, scrub, live stock).
