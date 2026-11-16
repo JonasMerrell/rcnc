@@ -88,6 +88,8 @@ deep and narrow at high feed rather than wide and shallow.
 - **No vise stops**, and nothing that adds height that gets in the way.
 - **Shims:** a thin shim under the stock is fine when the jaw band is too short. The slider's brass sat on
   a 1 mm shim, with Z taken from the probed top. Make it shorter than the jaws so trimming the ends misses it.
+  Taking Z from a probed top only works for a face that is already machined or that op 1 faces off; a raw
+  face breaks the Z rule below. Otherwise add the shim's thickness to the Vise reference.
 - **Fixtures in rCAD:** put the jaws in `create_cam` as `fixtures` boxes so the simulation checks them.
   Give the vise its `on_table` position.
 
