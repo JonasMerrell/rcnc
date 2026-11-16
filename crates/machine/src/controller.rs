@@ -324,6 +324,11 @@ pub struct Controller {
     last_probe: Option<String>,
     /// The tool in the spindle has been measured on the setter since it was loaded.
     pub(crate) tool_measured: bool,
+    /// Machine Z of the last setter touch of the tool in the spindle.
+    pub(crate) setter_hit: Option<f64>,
+    /// The Z reference that zeroes each work offset (G54…G59), once a program or Find stock named one: every
+    /// tool measured sets Z in all of them, so one program can cut in two vise stations (G54 and G55).
+    pub(crate) cs_references: [Option<String>; 6],
     /// Mode to go back to when a jog ends (a jog during Find stock).
     jog_return: Option<Mode>,
     /// The top of Z's travel, found by homing Z at its top: nothing may be
@@ -400,6 +405,8 @@ impl Controller {
             probe_retry: None,
             last_probe: None,
             tool_measured: false,
+            setter_hit: None,
+            cs_references: Default::default(),
             jog_return: None,
             air_cut: None,
             path_blend: None,
@@ -1074,8 +1081,15 @@ impl Controller {
     /// Set the active work offset so machine position `machine` on `axis` reads `work`.
     pub(crate) fn set_work_axis(&mut self, axis: usize, machine: f64, work: f64) {
         let cs = self.interp.state.coord_system;
+        self.set_work_axis_in(cs, axis, machine, work);
+    }
+
+    /// As `set_work_axis`, for work offset `cs` (0 = G54), active or not.
+    pub(crate) fn set_work_axis_in(&mut self, cs: usize, axis: usize, machine: f64, work: f64) {
         let mut coord = self.interp.params.coord_offset(cs);
-        let others = self.interp.program_offset()[axis] - coord[axis];
+        // G92 and the like ride on top of whichever work offset is active
+        let active = self.interp.params.coord_offset(self.interp.state.coord_system);
+        let others = self.interp.program_offset()[axis] - active[axis];
         coord[axis] = machine - work - others;
         self.interp.params.set_coord_offset(cs, coord);
     }
@@ -1084,7 +1098,32 @@ impl Controller {
     /// tool changes (and saved with the settings). Returns the probe settings.
     pub(crate) fn use_z_reference(&mut self, name: &str) -> crate::probing::ProbeSettings {
         self.config.probing.setter.reference = name.to_string();
+        let cs = self.interp.state.coord_system;
+        if cs < 6 {
+            self.cs_references[cs] = Some(name.to_string());
+        }
         self.config.probing.clone()
+    }
+
+    /// The reference a program named for the active work offset, and its setter top.
+    pub(crate) fn offset_reference(&self) -> Option<(Option<String>, f64)> {
+        let name = self.cs_references.get(self.interp.state.coord_system)?.clone()?;
+        let top = self.config.probing.setter.references.iter().find(|r| r.name == name)?.setter_top;
+        Some((Some(name), top))
+    }
+
+    /// After a setter touch at machine Z `hit`: zero Z in every other work offset that has a reference of its
+    /// own (the active one is set by the touch-off itself). Returns the offsets set, as G-numbers.
+    pub(crate) fn zero_other_offsets(&mut self, hit: f64) -> Vec<u32> {
+        let active = self.interp.state.coord_system;
+        let mut set = vec![];
+        for cs in (0..6).filter(|c| *c != active) {
+            let Some(name) = self.cs_references[cs].clone() else { continue };
+            let Some(top) = self.config.probing.setter.references.iter().find(|r| r.name == name).map(|r| r.setter_top) else { continue };
+            self.set_work_axis_in(cs, 2, hit, top);
+            set.push(54 + cs as u32);
+        }
+        set
     }
 
     /// Fill the tool table from the tool list a CAM post writes at the top of
@@ -1974,7 +2013,14 @@ impl Controller {
                 }
                 let name = self.config.probing.setter.references.iter().find(|r| r.name.eq_ignore_ascii_case(&name)).unwrap().name.clone();
                 self.use_z_reference(&name);
-                self.info(format!("Z zero for the tools measured from now on: the {name} reference"));
+                // a tool already measured is zeroed on it now (a second work offset named after the tool change)
+                if let (true, Some(hit)) = (self.tool_measured, self.setter_hit) {
+                    let top = self.config.probing.setter.top();
+                    self.set_work_axis(2, hit, top);
+                    self.info(format!("Z zero for this work offset and the tools measured from now on: the {name} reference"));
+                } else {
+                    self.info(format!("Z zero for the tools measured from now on: the {name} reference"));
+                }
                 Wait::None
             }
             Op::ProbeZ(request) => {
@@ -4586,6 +4632,48 @@ mod tests {
         tick(&mut c, &clock, 400);
         let k = c.snapshot().calibrate.clone().unwrap();
         assert!(close(k.new.unwrap(), -70.05), "{k:?}");
+    }
+
+    /// Two vise stations in one program: G54 zeroed on the vise, G55 on another reference. One measurement
+    /// per tool sets Z in both, and a reference named for G55 after the tool was measured zeroes G55 at once.
+    #[test]
+    fn each_work_offset_keeps_its_z_reference_through_tool_changes() {
+        let clock = Arc::new(ManualClock::default());
+        let config = crate::sim::dmc2_sim_config();
+        let sim = Simulator::new(clock.clone());
+        let mut c = Controller::new(config.clone(), Box::new(sim), clock.clone());
+        c.handle(Command::Connect);
+        c.handle(Command::Reset);
+        c.handle(Command::Home(None));
+        run_until_idle(&mut c, &clock, 600.0);
+        let top = |c: &Controller, name: &str| c.snapshot().config.probing.setter.references.iter().find(|r| r.name == name).unwrap().setter_top;
+        let (vise, table) = (top(&c, "Vise"), top(&c, "Table"));
+        assert!((vise - table).abs() > 1.0, "the two references differ");
+        let mut zs = vec![];
+        for program in ["G54\n(RCNC Z_REFERENCE Vise)\nT24 M6\nG55\n(RCNC Z_REFERENCE Table)\nG54\nM30", "G54\nT1 M6\nM30"] {
+            c.handle(Command::Load { name: "t".into(), text: program.into() });
+            c.handle(Command::CycleStart);
+            for _ in 0..200_000 {
+                clock.advance(0.005);
+                c.update();
+                let s = c.snapshot();
+                if s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading) && c.routine_waiting {
+                    c.handle(Command::ToolChangeContinue { measure: None });
+                }
+                if matches!(s.mode, Mode::Idle | Mode::Alarm) && s.tool_change.is_none() {
+                    break;
+                }
+            }
+            let s = c.snapshot();
+            assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?} {:?}", s.alarm, s.log);
+            zs.push((s.work_offsets[0][2], s.work_offsets[1][2]));
+        }
+        // after T24: G55 was zeroed on the table as soon as it was named
+        assert!(close(zs[0].0 - zs[0].1, table - vise), "{zs:?}");
+        // after T1 (measured with G54 active): both moved by the new tool's length and kept their references
+        assert!(close(zs[1].0 - zs[1].1, table - vise), "{zs:?}");
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Tool touched off") && l.contains("(also G55)")), "{:?}", s.log);
     }
 
     /// The probe (and a gauge block) measure how far the setter's top is above

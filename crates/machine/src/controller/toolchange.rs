@@ -67,6 +67,7 @@ impl Controller {
         let outputs = self.outputs.clone();
         let spinning = outputs.spindle_on;
         self.tool_measured = false;
+        self.setter_hit = None;
         self.outputs.spindle_on = false;
         self.outputs.flood = false;
         self.outputs.mist = false;
