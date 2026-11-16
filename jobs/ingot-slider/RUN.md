@@ -10,13 +10,13 @@ Op 1 runs in G54, op 2 and the engraving in G55 (rCAD `work_offset`).
 
 | Program | Station | Time | Peak spindle | Sheet |
 |---|---|---|---|---|
-| `base-op1.nc` | left | 5.3 min | 60% | `base-op1.html` |
-| `base-op2.nc` | right | 12.9 min | 40% | `base-op2.html` |
-| `slider-op1.nc` | left (bar on two 1 mm shims) | 12.0 min | 36% | `slider-op1.html` |
-| `slider-op2.nc` | right | 6.7 min | 30% | `slider-op2.html` |
+| `base-op1.nc` | left | 4.0 min | 60% | `base-op1.html` |
+| `base-op2.nc` | right | 9.3 min | 40% | `base-op2.html` |
+| `slider-op1.nc` | left (bar on two 1 mm shims) | 10.8 min | 38% | `slider-op1.html` |
+| `slider-op2.nc` | right | 6.4 min | 31% | `slider-op2.html` |
 | `slider-engrave.nc` | right, straight after `slider-op2` | 2.5 min | – | `slider-engrave.html` |
-| `base-cycle.nc` | both (G54 left + G55 right) | 19.4 min (rcnc sim) | 59% | `base-cycle.html` |
-| `slider-cycle.nc` | both, with the engraving | 24.1 min (rcnc sim) | 37% | `slider-cycle.html` |
+| `base-cycle.nc` | both (G54 left + G55 right) | 17.0 min (rcnc sim) | 60% | `base-cycle.html` |
+| `slider-cycle.nc` | both, with the engraving | 23.2 min (rcnc sim) | 37% | `slider-cycle.html` |
 
 Playbacks: `*-sim.html` (rCAD simulation with the machine and the vise closed on the work). Pictures:
 `*-vise-iso.png`, `*-vise-front.png`.
@@ -152,8 +152,8 @@ fine either way.
 
 | | Separate programs | Cycle | Tool changes |
 |---|---|---|---|
-| Bases | op 1 + op 2 = 7.3 + 14.5 = 21.8 min | **19.4 min** | 6 → **3** |
-| Sliders | op 1 + op 2 + engraving = 14.2 + 9.8 + about 3 = about 27 min | **24.1 min** | 7 → **3** |
+| Bases | op 1 + op 2 = 6.6 + 12.7 = 19.3 min | **17.0 min** | 6 → **3** |
+| Sliders | op 1 + op 2 + engraving = 13.4 + 9.6 + about 3 = about 26 min | **23.2 min** | 7 → **3** |
 
 The times come from the rcnc simulator, including its tool-change and probing moves. At the machine, each saved
 change also saves your swap and the setter touch, about a minute each, so a cycle saves about 3–4 min plus the
