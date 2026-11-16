@@ -273,10 +273,15 @@ pub(crate) fn setter_reading(s: &ProbeSettings, hits: &[f64]) -> Result<f64, Str
 /// Set work Z from a touch on the setter at machine Z `hit`, then retract.
 pub(crate) fn touch_off(c: &mut Controller, s: &ProbeSettings, hit: f64) -> Vec<Step> {
     let t = &s.setter;
-    c.set_work_axis(2, hit, t.top());
+    // the active work offset's own reference if a program named one for it, else the setter's
+    let (name, top) = c.offset_reference().unwrap_or((t.active().map(|r| r.name.clone()), t.top()));
+    c.set_work_axis(2, hit, top);
     c.tool_measured = true;
-    let on = t.active().map(|r| format!(" on the {}", r.name.to_lowercase())).unwrap_or_default();
-    c.report(format!("Tool touched off: Z zero set{on}, setter top at Z{}", fmt(t.top())));
+    c.setter_hit = Some(hit);
+    let others = c.zero_other_offsets(hit);
+    let on = name.map(|n| format!(" on the {}", n.to_lowercase())).unwrap_or_default();
+    let also = if others.is_empty() { String::new() } else { format!(" (also {})", others.iter().map(|g| format!("G{g}")).collect::<Vec<_>>().join(", ")) };
+    c.report(format!("Tool touched off: Z zero set{on}{also}, setter top at Z{}", fmt(top)));
     // Retract, but no higher than the travel height.
     let to = (hit + t.retract).min(t.travel_z.max(hit));
     vec![Step::MoveTo { axis: 2, to, feed: s.travel_feed, guarded: false }]
