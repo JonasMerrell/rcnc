@@ -144,7 +144,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rcnc-store-{}", std::process::id()));
         let path = dir.join("state.json");
         let mut s = SavedState::default();
-        s.tools.insert(3, Tool { length: 41.5, diameter: 6.0, description: "6 mm flat".into() });
+        s.tools.insert(3, Tool { length: 41.5, diameter: 6.0, description: "6 mm flat".into(), ..Default::default() });
         s.params.insert(5221, -120.25);
         save(&path, &s).unwrap();
         assert_eq!(load::<SavedState>(&path).unwrap(), Some(s));

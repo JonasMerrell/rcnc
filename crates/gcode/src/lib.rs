@@ -6,7 +6,7 @@ pub mod params;
 pub mod parse;
 
 pub use interp::{
-    Axes, Error, Interpreter, ModalState, MotionMode, Op, Plane, Spindle, Step, Tool, Units,
+    Axes, Error, Interpreter, ModalState, MotionMode, Op, Plane, BoresRequest, Spindle, Step, StockRequest, Tool, ToolKind, Units, ZRequest,
     AXIS_LETTERS,
 };
 pub use params::Params;

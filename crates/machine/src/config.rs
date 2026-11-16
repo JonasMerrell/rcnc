@@ -69,6 +69,11 @@ pub struct MachineConfig {
     pub home_order: Vec<usize>,
     /// Distance moved off the switch after it releases, in mm.
     pub home_clearance: f64,
+    /// After the fast seek finds the switch, back off this far (mm) and
+    /// come back slowly to find it again precisely.
+    pub home_pulloff: f64,
+    /// Speed of that slow second approach, as a fraction of the seek speed.
+    pub home_latch_speed: f64,
     pub soft_limits: bool,
     /// Constant velocity: blend corners. Off means exact stop at each G-code move (Mach3 "CV off").
     pub constant_velocity: bool,
@@ -93,12 +98,21 @@ pub struct MachineConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ToolChangeSettings {
-    /// Stop the spindle, move to the change position, wait for the new tool,
+    /// Stop the spindle, raise Z, move the bed back, wait for the new tool,
     /// measure it and go back. Off: just pause at M6, like Mach3.
     pub guided: bool,
-    /// Machine X/Y to change tools at.
+    /// Machine X to change tools at, used only with `move_x`.
     pub x: f64,
-    pub y: f64,
+    /// Machine Y to change tools at, so the spindle is easy to reach. None:
+    /// the tool setter's Y (see `change_y`).
+    pub y: Option<f64>,
+    /// Also move X to `x`. Off: X stays where it is and only the bed moves.
+    pub move_x: bool,
+    /// Move X to the middle of its travel (`x_travel` from its home end);
+    /// takes the place of `x` and `move_x`.
+    pub centre_x: bool,
+    /// How far X travels from its home switch, mm.
+    pub x_travel: f64,
     /// Lowest machine Z to travel and change tools at; Z is raised to it, never lowered.
     pub z: f64,
     /// Go back to where the tool change started, with the spindle and coolant as they were.
@@ -107,9 +121,21 @@ pub struct ToolChangeSettings {
 
 impl Default for ToolChangeSettings {
     fn default() -> Self {
-        // Next to the tool setter, at the top of Z.
+        // Top of Z, the bed at the tool setter's Y.
         let setter = crate::probing::ToolSetter::default();
-        ToolChangeSettings { guided: true, x: setter.x, y: setter.y, z: 0.0, return_to_start: true }
+        // X travel 343 mm: the DMC2's from the CAD (spindle x -123.7 to 219.3). Its
+        // configured soft limits (Mach3's) don't contain the X home position, so
+        // they can't give the middle.
+        ToolChangeSettings {
+            guided: true,
+            x: setter.x,
+            y: None,
+            move_x: false,
+            centre_x: true,
+            x_travel: 343.0,
+            z: 0.0,
+            return_to_start: true,
+        }
     }
 }
 
@@ -168,6 +194,8 @@ impl MachineConfig {
             estop: Some(Input::new(10, true)),
             home_order: vec![2, 1, 0],
             home_clearance: 1.0,
+            home_pulloff: 2.0,
+            home_latch_speed: 0.1,
             soft_limits: false,
             constant_velocity: false,
             junction_deviation: 0.01,
@@ -181,6 +209,36 @@ impl MachineConfig {
             tool_change_touch_off: true,
             tool_change: Default::default(),
         }
+    }
+
+    /// Machine X the tool change moves to, if it moves X: by default the
+    /// middle of X's travel, so the spindle is easy to reach.
+    pub fn change_x(&self) -> Option<f64> {
+        let t = &self.tool_change;
+        let x = &self.axes[0];
+        let want = if t.centre_x {
+            let half = t.x_travel.abs() / 2.0;
+            if x.home_positive { x.home_position - half } else { x.home_position + half }
+        } else if t.move_x {
+            t.x
+        } else {
+            return None;
+        };
+        // Never past the configured soft limits, nor beyond the home switch: a
+        // wrong travel or sign must not drive X into its end.
+        let (mut lo, mut hi) = (x.soft_min.min(x.soft_max), x.soft_max.max(x.soft_min));
+        if x.home_positive {
+            hi = hi.min(x.home_position);
+        } else {
+            lo = lo.max(x.home_position);
+        }
+        Some(if lo <= hi { want.clamp(lo, hi) } else { x.home_position })
+    }
+
+    /// Machine Y the tool change moves the bed to: by default the tool
+    /// setter's Y (Jonas: that puts the bed where the spindle is easy to reach).
+    pub fn change_y(&self) -> f64 {
+        self.tool_change.y.unwrap_or(self.probing.setter.y)
     }
 
     pub fn to_steps(&self, pos: &Axes) -> [i64; 6] {
@@ -218,6 +276,10 @@ impl MachineConfig {
             }
         }
         positive("arc tolerance", self.arc_tolerance)?;
+        positive("home pull-off", self.home_pulloff)?;
+        if !(self.home_latch_speed > 0.0 && self.home_latch_speed <= 1.0) {
+            return Err("slow homing speed must be between 0 and 100% of the seek speed".into());
+        }
         positive("max spindle speed", self.spindle_max_rpm)?;
         if !(self.junction_deviation >= 0.0) {
             return Err("corner tolerance can't be negative".into());
@@ -229,7 +291,12 @@ impl MachineConfig {
             return Err("jog speed must be between 0 and 100%".into());
         }
         let p = &self.probing;
-        for (name, v) in [("probe search feed", p.fast_feed), ("probe latch feed", p.slow_feed), ("probe travel feed", p.travel_feed)] {
+        for (name, v) in [
+            ("probe search feed", p.fast_feed),
+            ("probe latch feed", p.slow_feed),
+            ("probe travel feed", p.travel_feed),
+            ("tool setter repeat tolerance", p.setter.repeat_tolerance),
+        ] {
             positive(name, v)?;
         }
         if self.soft_limits {
@@ -245,7 +312,9 @@ impl MachineConfig {
             let t = &self.tool_change;
             if t.guided {
                 let z = t.z.max(self.axes[2].soft_min);
-                inside("tool change position", [t.x, t.y, z])?;
+                // Without move_x, X stays wherever it is.
+                let x = self.change_x().unwrap_or(self.axes[0].soft_min);
+                inside("tool change position", [x, self.change_y(), z])?;
             }
             let st = &p.setter;
             inside("tool setter", [st.x, st.y, st.travel_z.min(self.axes[2].soft_max)])?;

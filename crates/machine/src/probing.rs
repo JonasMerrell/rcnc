@@ -38,11 +38,50 @@ pub struct ProbeSettings {
     /// Feed for positioning moves.
     pub travel_feed: f64,
     pub setter: ToolSetter,
+    /// Tool number of the touch probe. The spindle won't start with it loaded.
+    pub probe_tool: u32,
+    pub find_stock: FindStockSettings,
+}
+
+/// The tool-table entry a new table gets for the touch probe.
+pub fn probe_tool_entry(s: &ProbeSettings) -> gcode::Tool {
+    gcode::Tool {
+        diameter: s.stylus_diameter,
+        description: "Touch probe".into(),
+        kind: gcode::ToolKind::Probe,
+        ..Default::default()
+    }
+}
+
+/// How the Find stock wizard probes a block from roughly above its middle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FindStockSettings {
+    /// How far off the rough position (and the stock's size) may be: each side
+    /// is approached from this far outside where it should be, and searched
+    /// for up to twice this far.
+    pub clearance: f64,
+    /// Longest search down for the top.
+    pub z_search: f64,
+    /// Height above the top to move sideways at.
+    pub z_clearance: f64,
+    /// Below the top to touch the sides, unless the job says otherwise.
+    pub depth: f64,
+    /// Largest difference between the probed and expected X/Y size, unless
+    /// the job says otherwise.
+    pub tolerance: f64,
+}
+
+impl Default for FindStockSettings {
+    fn default() -> Self {
+        FindStockSettings { clearance: 8.0, z_search: 25.0, z_clearance: 5.0, depth: 3.0, tolerance: 1.0 }
+    }
 }
 
 /// A fixed tool setter. Touching a tool off on it sets the work Z zero so
-/// the tool tip reads `offset` on the setter, which is how Jonas's Mach3
-/// script works: the setter's top is `offset` above the calibrated Z zero.
+/// the tool tip reads the setter top's height on the setter, which is how
+/// Jonas's Mach3 "Z- Probing Script" buttons work: Z zero is that far below
+/// the setter's top, on the table or on the vise.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ToolSetter {
@@ -52,10 +91,35 @@ pub struct ToolSetter {
     /// Machine Z to travel at on the way there.
     pub travel_z: f64,
     pub max_distance: f64,
-    /// Work Z of the setter's top.
+    /// Work Z of the setter's top when `reference` isn't one of `references`.
     pub offset: f64,
+    /// Named Z zeros (table, vise) and the setter top's height above each.
+    pub references: Vec<ZReference>,
+    /// The reference Z zero is set to, by name; tool changes keep it.
+    pub reference: String,
     /// Height to retract above the touch.
     pub retract: f64,
+    /// Every tool is measured twice; the two readings may differ by at most this.
+    pub repeat_tolerance: f64,
+}
+
+/// A surface Z zero can be set on with the tool setter, and the setter top's
+/// height above it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ZReference {
+    pub name: String,
+    pub setter_top: f64,
+}
+
+impl ToolSetter {
+    /// Work Z of the setter's top: from the reference in use, or `offset`.
+    pub fn top(&self) -> f64 {
+        self.active().map_or(self.offset, |r| r.setter_top)
+    }
+
+    pub fn active(&self) -> Option<&ZReference> {
+        self.references.iter().find(|r| r.name == self.reference)
+    }
 }
 
 impl Default for ProbeSettings {
@@ -73,28 +137,45 @@ impl Default for ProbeSettings {
             auto_zero: true,
             travel_feed: 3000.0,
             setter: ToolSetter::default(),
+            probe_tool: 99,
+            find_stock: FindStockSettings::default(),
         }
     }
 }
 
 impl Default for ToolSetter {
     fn default() -> Self {
-        // From HiddenScript.m1s: G53 X-5 Y289, CalibratedOffset 13.860 - 0.55, retract 10.
+        // From Jonas's Mach3 screen set (PA Interface_v05.set, "Z- Probing
+        // Script"): G53 X-5 Y289, search 100, retract 10. Its two buttons set
+        // Z zero on the table, CalibratedOffset 18.96 + 49.99 - 5.145 = 63.805
+        // below the setter top, or on the vise, 23.195 higher (40.610). A third
+        // script, macros/DMC2/HiddenScript.m1s, makes the same move with
+        // CalibratedOffset 0.0 + 13.860 - 0.55 = 13.31: kept as "Other".
         ToolSetter {
             x: -5.0,
             y: 289.0,
             travel_z: 0.0,
             max_distance: 100.0,
-            offset: 13.31,
+            offset: 18.96 + 49.99 - 5.145,
+            references: vec![
+                ZReference { name: "Table".into(), setter_top: 18.96 + 49.99 - 5.145 },
+                ZReference { name: "Vise".into(), setter_top: 18.96 + 49.99 - 5.145 - 23.195 },
+                ZReference { name: "Other (13.31)".into(), setter_top: 13.860 - 0.55 },
+            ],
+            reference: "Table".into(),
             retract: 10.0,
+            repeat_tolerance: 0.02,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProbeJob {
-    /// Touch the current tool off on the tool setter.
+    /// Touch the current tool off on the tool setter, keeping the Z reference in use.
     ToolTouchOff,
+    /// Touch the current tool off on the tool setter and set Z zero on the
+    /// setter's reference with this index (table, vise).
+    SetZ(usize),
     /// Probe down to the surface (or touch plate) below.
     ZSurface,
     /// Probe an edge by moving along `axis` (0 = X, 1 = Y) in the given direction.
@@ -113,6 +194,7 @@ impl ProbeJob {
         let dir = |p: bool| if p { "+" } else { "-" };
         match self {
             ProbeJob::ToolTouchOff => "Tool touch-off".into(),
+            ProbeJob::SetZ(i) => format!("Set Z on reference {}", i + 1),
             ProbeJob::ZSurface => "Z surface".into(),
             ProbeJob::Edge { axis, positive } => format!("{}{} edge", ["X", "Y"][*axis], dir(*positive)),
             ProbeJob::Corner { x_positive, y_positive } => {
@@ -150,7 +232,7 @@ pub(crate) struct Routine {
 
 /// Two-pass probe as in the verser macros' ProbeAxis: search, back off,
 /// latch slowly, back off. Records one touch.
-fn touch(s: &ProbeSettings, axis: usize, positive: bool, distance: f64) -> Vec<Step> {
+pub(crate) fn touch(s: &ProbeSettings, axis: usize, positive: bool, distance: f64) -> Vec<Step> {
     let dir = if positive { 1.0 } else { -1.0 };
     vec![
         Step::Probe { axis, by: dir * distance, feed: s.fast_feed, record: false },
@@ -160,11 +242,51 @@ fn touch(s: &ProbeSettings, axis: usize, positive: bool, distance: f64) -> Vec<S
     ]
 }
 
+/// Go to the tool setter and measure the tool twice: a fast search, then
+/// two slow touches with a back-off between them. Records two touches.
+pub(crate) fn setter_steps(s: &ProbeSettings) -> Vec<Step> {
+    let t = &s.setter;
+    let mut steps = vec![guarded_to(s, 2, t.travel_z), guarded_to(s, 0, t.x), guarded_to(s, 1, t.y)];
+    steps.extend(touch(s, 2, false, t.max_distance));
+    steps.push(Step::Probe { axis: 2, by: -2.0 * s.latch, feed: s.slow_feed, record: true });
+    steps.push(Step::MoveBy { axis: 2, by: s.latch, feed: s.fast_feed, guarded: false });
+    steps
+}
+
+/// The tool's touch on the setter from the last two readings, or why they can't be trusted.
+pub(crate) fn setter_reading(s: &ProbeSettings, hits: &[f64]) -> Result<f64, String> {
+    let [a, b] = hits[hits.len().saturating_sub(2)..] else {
+        return Err("the tool setter wasn't touched twice".into());
+    };
+    let limit = s.setter.repeat_tolerance;
+    if (a - b).abs() > limit + 1e-9 {
+        return Err(format!(
+            "Tool length readings differ by {} mm (limit {} mm). Check that the setter is clean, \
+             the tool is tight in the collet and nothing is loose.",
+            fmt((a - b).abs()),
+            fmt(limit)
+        ));
+    }
+    Ok((a + b) / 2.0)
+}
+
+/// Set work Z from a touch on the setter at machine Z `hit`, then retract.
+pub(crate) fn touch_off(c: &mut Controller, s: &ProbeSettings, hit: f64) -> Vec<Step> {
+    let t = &s.setter;
+    c.set_work_axis(2, hit, t.top());
+    c.tool_measured = true;
+    let on = t.active().map(|r| format!(" on the {}", r.name.to_lowercase())).unwrap_or_default();
+    c.report(format!("Tool touched off: Z zero set{on}, setter top at Z{}", fmt(t.top())));
+    // Retract, but no higher than the travel height.
+    let to = (hit + t.retract).min(t.travel_z.max(hit));
+    vec![Step::MoveTo { axis: 2, to, feed: s.travel_feed, guarded: false }]
+}
+
 fn guarded_by(s: &ProbeSettings, axis: usize, by: f64) -> Step {
     Step::MoveBy { axis, by, feed: s.travel_feed, guarded: true }
 }
 
-fn guarded_to(s: &ProbeSettings, axis: usize, to: f64) -> Step {
+pub(crate) fn guarded_to(s: &ProbeSettings, axis: usize, to: f64) -> Step {
     Step::MoveTo { axis, to, feed: s.travel_feed, guarded: true }
 }
 
@@ -172,7 +294,7 @@ fn then(f: impl FnOnce(&mut Controller, &[f64]) -> Result<Vec<Step>, String> + S
     Step::Then(Box::new(f))
 }
 
-fn fmt(v: f64) -> String {
+pub(crate) fn fmt(v: f64) -> String {
     format!("{v:.3}")
 }
 
@@ -187,24 +309,28 @@ fn edge_steps(s: &ProbeSettings, axis: usize, positive: bool) -> Vec<Step> {
 }
 
 pub(crate) fn build(job: ProbeJob, s: &ProbeSettings, start: [f64; 6]) -> Routine {
+    let mut name = job.name();
     let mut steps: Vec<Step> = Vec::new();
     let r = s.stylus_diameter / 2.0;
     let auto = s.auto_zero;
     match job {
         ProbeJob::ToolTouchOff => {
-            let t = s.setter.clone();
-            steps.push(guarded_to(s, 2, t.travel_z));
-            steps.push(guarded_to(s, 0, t.x));
-            steps.push(guarded_to(s, 1, t.y));
-            steps.extend(touch(s, 2, false, t.max_distance));
-            let feed = s.travel_feed;
+            steps.extend(setter_steps(s));
+            let s2 = s.clone();
+            steps.push(then(move |c, hits| Ok(touch_off(c, &s2, setter_reading(&s2, hits)?))));
+        }
+        ProbeJob::SetZ(i) => {
+            if let Some(r) = s.setter.references.get(i) {
+                name = format!("Set Z: {}", r.name.to_lowercase());
+            }
+            steps.extend(setter_steps(s));
+            let s2 = s.clone();
             steps.push(then(move |c, hits| {
-                let hit = hits[0];
-                c.set_work_axis(2, hit, t.offset);
-                c.report(format!("Tool touched off: Z zero set, setter top at Z{}", fmt(t.offset)));
-                // Retract, but no higher than the travel height.
-                let to = (hit + t.retract).min(t.travel_z.max(hit));
-                Ok(vec![Step::MoveTo { axis: 2, to, feed, guarded: false }])
+                let hit = setter_reading(&s2, hits)?;
+                let r = s2.setter.references.get(i).ok_or("that Z reference no longer exists")?;
+                // Tool changes from now on keep Z zero on this surface.
+                let s = c.use_z_reference(&r.name);
+                Ok(touch_off(c, &s, hit))
             }));
         }
         ProbeJob::ZSurface => {
@@ -325,5 +451,5 @@ pub(crate) fn build(job: ProbeJob, s: &ProbeSettings, start: [f64; 6]) -> Routin
             }));
         }
     }
-    Routine { name: job.name(), steps: steps.into(), hits: Vec::new() }
+    Routine { name, steps: steps.into(), hits: Vec::new() }
 }
