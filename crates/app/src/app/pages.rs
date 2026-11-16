@@ -376,6 +376,7 @@ impl App {
                     depth: None,
                     keep_z: false,
                     jaw: None,
+                    jaw_at: None,
                 }));
             }
             if !probe_in {
