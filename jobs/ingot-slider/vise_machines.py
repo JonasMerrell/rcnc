@@ -62,6 +62,9 @@ for mat, h1, h2, w2, col in (("base", 12.7, 12.2, 25.0, GREY), ("slider", 10.5, 
     right_blank = (f"right station: the flipped {mat} blank for op 2 (before facing)", (25.5, Y0 + 1, LEDGE), (25.5 + w2, Y1 - 1, LEDGE + h2), col)
     make(f"DMC2-cycle-{mat}-L", left_face=-33.2, right_face=25.5 + w2, others=[right_blank])
     make(f"DMC2-cycle-{mat}-R", left_face=-33.2, right_face=25.5 + w2, others=[left_blank])
+# for rCAD jobs (both stations in one setup's program): both jaws closed, rCAD places the other station's work
+for mat, w2 in (("base", 25.0), ("slider", 19.6)):
+    make(f"DMC2-twostation-{mat}", left_face=-33.2, right_face=25.5 + w2)
 make("DMC2-slider-op1", left_face=-7.8 - 25.4)
 make("DMC2-slider-op2-base", right_face=25.5 + 25.0)
 make("DMC2-slider-op2-slider", right_face=25.5 + 19.6)

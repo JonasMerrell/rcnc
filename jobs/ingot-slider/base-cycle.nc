@@ -1,15 +1,24 @@
-(Two-station cycle - made by make_cycle.py from base-op1.nc, base-op2.nc)
-(LEFT station, G54: op 1 on a raw blank. RIGHT station, G55: op 2 on the blank flipped from the last cycle)
-(retracts use G53 G0 Z0 - home the machine first; needs rcnc with per-work-offset Z references [PR 14])
+(Base op1 bottom - made by rCAD)
+(work zero: stock bottom, centre [on the vise])
+(2 stations, each in its own work offset)
+(station 1: G54 Base op1 bottom - work zero: stock bottom, centre [on the vise])
+(  clamp the part with its bottom side up)
+(  fixture moving jaw [-X]: X-25.4 to -12.7, Y-47.75 to 47.75, Z0 to 4.7 [work])
+(  fixture fixed jaw [centre block] [+X]: X12.7 to 25.4, Y-47.75 to 47.75, Z0 to 4.7 [work])
+(station 2: G55 Base op2 top - work zero: part bottom, stock centre [on the vise])
+(  carries on from Base op1 bottom: clamp the part it left with its top side up)
+(  fixture fixed jaw [centre block] [-X]: X-25.2 to -12.5, Y-47.75 to 47.75, Z0 to 4.7 [work])
+(  fixture moving jaw [+X]: X12.5 to 25.2, Y-47.75 to 47.75, Z0 to 4.7 [work])
+(retracts use G53 G0 Z0 - home the machine first)
 (T99 YIDOFENG 3D touch probe - touch probe, D2 stylus ball, flute length 12, stickout 40)
 (T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)
 (T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill, flute length 18, stickout 22)
+(estimated time 18:41)
 G21 G17 G40 G49 G80 G90 G91.1 G94 G64
-
-(=== G54 LEFT station: base-op1.nc ===)
-(Probe stock top - Probe)
 G54
 (RCNC Z_REFERENCE Vise)
+
+(Probe stock top - Probe)
 G53 G0 Z0
 T99 M6
 (rcnc Find stock: jog the probe over the middle of the stock, a few mm above it, and press Continue)
@@ -17,12 +26,12 @@ T99 M6
 
 (Probe stock centre - Probe)
 
-
-(=== G55 RIGHT station: base-op2.nc ===)
-(Probe stock top - Probe)
+(station 2: Base op2 top)
 G53 G0 Z0
 G55
 (RCNC Z_REFERENCE Vise)
+
+(Probe stock top - Probe)
 (rcnc Find stock: jog the probe over the middle of the stock, a few mm above it, and press Continue)
 (RCNC FIND_STOCK SIZE=25.4,98,12.7 AT=0,0,12.2 TOL=1 DEPTH=4 KEEPZ=1)
 
@@ -39,14 +48,16 @@ M0
 
 (Probe carrier bore B - Probe)
 
-
-(=== G54 LEFT station: base-op1.nc ===)
-(Face the bar top [the bases' bottoms] 0.5 - Face)
+(station 1: Base op1 bottom)
+G53 G0 Z0
 G54
+
+(Face the bar top [the bases' bottoms] 0.5 - Face)
 G53 G0 Z0
 T24 M6
 S22500 M3
 M8
+G0 X-16.875 Y-50
 G0 Z17.7
 X-16.875 Y-50
 Z14.7
@@ -3183,13 +3194,12 @@ Y52.175
 G0 Z5
 Z17.7
 
-
-(=== G55 RIGHT station: base-op2.nc ===)
-(Face to 9 [3.2] - Face)
+(station 2: Base op2 top)
 G53 G0 Z0
 G55
-S22500 M3
-M8
+
+(Face to 9 [3.2] - Face)
+G0 X-16.875 Y-50
 G0 Z17.2
 X-16.875 Y-50
 Z14.2
@@ -10806,16 +10816,18 @@ Y-25
 G3 X-17.675 Y-23 Z5.52 I-2 J0
 G0 Z17.2
 
-
-(=== G54 LEFT station: base-op1.nc ===)
-(Edge break 0.3 the bottom outline [op 2 sits it on the 1.9 ledges] - Chamfer)
+(station 1: Base op1 bottom)
+G53 G0 Z0
 G54
+
+(Edge break 0.3 the bottom outline [op 2 sits it on the 1.9 ledges] - Chamfer)
 G53 G0 Z0
 M5
 M9
 T1 M6
 S22500 M3
 M8
+G0 X-13.492 Y-6.276
 G0 Z17.7
 X-13.492 Y-6.276
 Z14.2
@@ -10843,13 +10855,12 @@ G1 X-10
 G2 X-10.996 Y3.145 I0.005 J3.522
 G0 Z17.7
 
-
-(=== G55 RIGHT station: base-op2.nc ===)
-(Chamfer 1.5 the rail tops outside - Deburr)
+(station 2: Base op2 top)
 G53 G0 Z0
 G55
-S22500 M3
-M8
+
+(Chamfer 1.5 the rail tops outside - Deburr)
+G0 X-8.325 Y-25.807
 G0 Z17.2
 X-8.325 Y-25.807
 X-15 Y-46.5
@@ -11073,7 +11084,6 @@ X9.403 Z7.535
 X9.701 Z7.656
 X10 Z7.7
 G0 Z17.2
-
 
 G53 G0 Z0
 M5

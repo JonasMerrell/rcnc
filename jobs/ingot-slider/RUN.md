@@ -15,8 +15,8 @@ Op 1 runs in G54, op 2 and the engraving in G55 (rCAD `work_offset`).
 | `slider-op1.nc` | left (bar on two 1 mm shims) | 12.2 min | 36% | `slider-op1.html` |
 | `slider-op2.nc` | right | 6.7 min | 30% | `slider-op2.html` |
 | `slider-engrave.nc` | right, straight after `slider-op2` | 2.5 min | – | `slider-engrave.html` |
-| `base-cycle.nc` | both (G54 left + G55 right) | 19.9 min (rcnc sim) | 60% | the two station sheets |
-| `slider-cycle.nc` | both, with the engraving | 24.3 min (rcnc sim) | 36% | the three sheets |
+| `base-cycle.nc` | both (G54 left + G55 right) | 19.9 min (rcnc sim) | 59% | `base-cycle.html` |
+| `slider-cycle.nc` | both, with the engraving | 24.3 min (rcnc sim) | 37% | `slider-cycle.html` |
 
 Playbacks: `*-sim.html` (rCAD simulation with the machine and the vise closed on the work). Pictures:
 `*-vise-iso.png`, `*-vise-front.png`.
@@ -138,44 +138,48 @@ Each cycle runs one blank's op 1 in the **left station (G54)** and the previous 
 | T24 | all of op 1 | all of op 2 |
 | T1 | op 1 edge breaks | op 2 chamfers, then (sliders) the crosshatch engraving |
 
-**Needs rcnc with PR #14** (on `mill/ingot-slider`). Each work offset keeps its own Z reference, so one setter
-measurement per tool zeroes G54 and G55; the log shows `Tool touched off: ... (also G55)`. On older rcnc the
-right station would cut with the previous tool's Z: **don't run the cycle programs on it.** The single programs
-still work on it.
+**The programs come straight from rCAD** (branch `multi-station`). In `slider-cam.json` the op 1 setup leads a
+*job*: `with: ["Base op2 top"]` for the bases, or the op 2 and engraving setups for the sliders. Each setup keeps
+its own station (`on_table`), work offset, stock and fixtures. `export_gcode` on the op 1 setup posts the whole
+job, and `stations: ["Base op1 bottom"]` posts op 1 alone.
+
+**Needs rcnc PR #14 (on `mill/ingot-slider`).** With it, each work offset keeps its own Z reference, so one setter
+measurement per tool zeroes G54 and G55; the log shows `Tool touched off: ... (also G55)`. On older rcnc the right
+station would cut with the previous tool's Z, so **don't run the cycle programs on it**. The single programs are
+fine either way.
 
 | | Separate programs | Cycle | Tool changes |
 |---|---|---|---|
 | Bases | op 1 + op 2 = 7.3 + 14.9 = 22.2 min | **19.9 min** | 6 → **3** |
 | Sliders | op 1 + op 2 + engraving = 14.4 + 9.8 + about 3 = about 27 min | **24.3 min** | 7 → **3** |
 
-These times come from the rcnc simulator, including its tool-change and probing moves. At the machine each
-saved tool change also saves your swap and the setter touch, about a minute each, so a cycle saves about 3–4 min
-plus the wait at each change. The spindle peaks are the same as in the single programs (base 60%, slider 36%).
+The times come from the rcnc simulator, including its tool-change and probing moves. At the machine, each saved
+change also saves your swap and the setter touch, about a minute each, so a cycle saves about 3–4 min plus the
+wait at each change. Spindle peaks are as in the single programs (base 59%, slider 37%).
 
 ### Running batches
 
 1. **First cycle** (right station empty): clamp a raw blank in the left station and run `base-op1.nc` /
-   `slider-op1.nc` alone. It's G54 only.
+   `slider-op1.nc`. Each is posted from the job with only op 1 and is G54 only.
 2. **Every cycle after that:**
-   - Take the finished parts out of the right station.
-   - Flip the left station's blank into the right station, onto its finished bottom.
-   - Clamp a new raw blank in the left station. Brass: on the two shim strips.
-   - Run `base-cycle.nc` / `slider-cycle.nc`. Find stock asks you to jog over each station in turn: the left
-     first, then the right.
-3. **Last cycle** (left station empty): run `base-op2.nc` / `slider-op2.nc` and then `slider-engrave.nc`. They're
-   G55 only.
+   - take the finished parts out of the right station;
+   - flip the left station's blank into the right station, onto its finished bottom;
+   - clamp a new raw blank in the left station (brass: on the two shim strips);
+   - run `base-cycle.nc` / `slider-cycle.nc`.
 
-Between stations within a tool, the program goes up to `G53 G0 Z0`, switches the work offset, and comes down over
-the other station.
+   Find stock asks you to jog over each station in turn: the left first, then the right.
+3. **Last cycle** (left station empty): run `base-op2.nc` / `slider-op2.nc` and then `slider-engrave.nc` (G55 only).
+
+Within a tool, the program goes up to `G53 G0 Z0` between stations, switches the work offset, travels over at the
+top and comes down over the other station.
 
 **Checked:**
-- In rCAD, each station's setup was simulated on a machine model with both stations' jaws closed on their work and
-  the other station's blank standing in the vise at its raw height. That checks the head, holder and tool against
-  the other station's work and jaws. No problems in any setup; `DMC2-cycle-*` models are built by
-  `vise_machines.py`.
-- In the rcnc simulator, both cycle programs run to the end with all probing and the three tool changes.
-- Each station has its own HTML playback (`*-sim.html`), which shows the other station loaded. rCAD can't play both
-  stations in one page.
+- **One rCAD simulation per job** (`base-cycle-sim.html`, `slider-cycle-sim.html`) runs both stations together on
+  the machine model with both vise stations closed on their work (`DMC2-twostation-*`, from `vise_machines.py`).
+  It covers the head, holder and tool against the other station's stock, part and jaws, the moves between
+  stations, and travel. No problems. Pictures: `*-cycle-vise-iso.png`, `-front.png`, `-top.png`.
+- **The setup sheet** for each job is `base-cycle.html` / `slider-cycle.html`.
+- **rcnc simulator:** both cycle programs run to the end with all probing and three tool changes.
 
 ## Magnets
 

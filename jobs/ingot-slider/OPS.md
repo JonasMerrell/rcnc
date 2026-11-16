@@ -31,21 +31,21 @@ Load = worst share of the tool's limits at the op's heaviest cut; spindle % of t
 | 2 | Probe stock centre | T99 |  |  | 19 s | – |
 | 3 | Probe carrier bore A | T99 |  |  | 5 s | – |
 | 4 | Probe carrier bore B | T99 |  |  | 5 s | – |
-| 5 | Face to 9 (3.2) | T24 | 22500 | 2350 | 80 s | 0.33 / 33% (366 W, 3.22 wide × 1.60 deep) |
-| 6 | Rough the channel and outside to Z6 (parts still joined below) | T24 | 22500 | 2350 | 393 s | 0.40 / 40% (441 W, 2.13 wide × 2.80 deep) |
-| 7 | Finish the channel floor (Z6) | T24 | 22500 | 2350 | 57 s | 0.22 / 5% (57 W, 4.08 wide × 0.20 deep) |
+| 5 | Face to 9 (3.2) | T24 | 22500 | 2350 | 80 s | 0.34 / 34% (369 W, 3.26 wide × 1.60 deep) |
+| 6 | Rough the channel and outside to Z6 (parts still joined below) | T24 | 22500 | 2350 | 393 s | 0.40 / 40% (442 W, 2.13 wide × 2.80 deep) |
+| 7 | Finish the channel floor (Z6) | T24 | 22500 | 2350 | 57 s | 0.22 / 5% (58 W, 4.15 wide × 0.20 deep) |
 | 8 | Finish the rails, both sides, Z9 to Z6 | T24 | 22500 | 2350 | 47 s | 0.11 / 10% (112 W, 0.42 wide × 3.00 deep) |
-| 9 | Magnet pockets 8.05 x 3.15 (helical, finish floor) | T24 | 22500 | 2350 | 23 s | 0.22 / 2% (24 W, 6.35 wide × 0.05 deep) |
-| 10 | Rest rough below Z6: separates the two bases (light) | T24 | 22500 | 2350 | 45 s | 0.22 / 6% (66 W, 3.09 wide × 0.30 deep) |
-| 11 | Finish the outline 9 to 5, one full-height pass | T24 | 22500 | 2350 | 57 s | 0.13 / 1% (16 W, 0.62 wide × 0.30 deep) |
+| 9 | Magnet pockets 8.05 x 3.15 (helical, finish floor) | T24 | 22500 | 2350 | 23 s | 0.22 / 2% (23 W, 6.35 wide × 0.05 deep) |
+| 10 | Rest rough below Z6: separates the two bases (light) | T24 | 22500 | 2350 | 45 s | 0.22 / 6% (67 W, 3.13 wide × 0.30 deep) |
+| 11 | Finish the outline 9 to 5, one full-height pass | T24 | 22500 | 2350 | 57 s | 0.13 / 1% (16 W, 0.64 wide × 0.30 deep) |
 | 12 | Chamfer 1.5 the rail tops outside | T1 | 22500 | 1850 | 16 s | – |
 | 13 | Edge break 0.3: channel edges, floor ends, pocket rims | T1 | 22500 | 1850 | 39 s | – |
 
 - Simulation: no problems
-- Peak spindle: 40% in "Rough the channel and outside to Z6 (parts still joined below)" at X7.7 Y-0.3 Z6.2 (2.13 wide × 2.80 deep, F2350)
-- Air cutting: most in "Finish the outline 9 to 5, one full-height pass", 81% of its feed time
+- Peak spindle: 59% in "Rough round both bases and the gap to Z6.5 (0.6 mm stepover)" at X-11.5 Y-0.1 Z6.5 (3.19 wide × 2.85 deep, F2350)
+- Air cutting: most in "Base op1 bottom: Rough the sawn ends off to Z2.5", 88% of its feed time
 - Chatter: ok (all margins under 0.7)
-- Chips: ok (fill under 0.5 everywhere)
+- Chips: Two locating bores 7.5 through the carrier between the bases (op 2 finds them): caution (fill 0.6407)
 - Unfinished faces: none
 
 ## Slider op1 bottom: 12.2 min
@@ -97,8 +97,9 @@ Load = worst share of the tool's limits at the op's heaviest cut; spindle % of t
 | 1 | Engrave the crosshatch 0.4 deep (chamfer mill tip) | T1 | 18000 | 1000 | 143 s | – |
 
 - Simulation: no problems
-- Air cutting: most in "Engrave the crosshatch 0.4 deep (chamfer mill tip)", 9% of its feed time
-- Chatter: ok (all margins under 0.7)
+- Peak spindle: 37% in "Rough round both sliders and the gap to Z4 (0.5 mm stepover)" at X-7.8 Y-0.1 Z6.3 (2.93 wide × 2.95 deep, F1350)
+- Air cutting: most in "Slider op1 bottom: Rough the sawn ends off to Z1", 87% of its feed time
+- Chatter: Rough round both sliders and the gap to Z4 (0.5 mm stepover): caution (margin 0.9762)
 - Chips: ok (fill under 0.5 everywhere)
 - Unfinished faces: none
 

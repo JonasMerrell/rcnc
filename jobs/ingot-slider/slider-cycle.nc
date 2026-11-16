@@ -1,14 +1,29 @@
-(Two-station cycle - made by make_cycle.py from slider-op1.nc, slider-op2.nc, slider-engrave.nc)
-(LEFT station, G54: op 1 on a raw blank. RIGHT station, G55: op 2 on the blank flipped from the last cycle)
-(retracts use G53 G0 Z0 - home the machine first; needs rcnc with per-work-offset Z references [PR 14])
+(Slider op1 bottom - made by rCAD)
+(work zero: stock bottom, centre [on the vise])
+(3 stations, each in its own work offset)
+(station 1: G54 Slider op1 bottom - work zero: stock bottom, centre [on the vise])
+(  clamp the part with its bottom side up)
+(  fixture moving jaw [-X]: X-25.4 to -12.7, Y-47.75 to 47.75, Z-1 to 3.7 [work])
+(  fixture fixed jaw [centre block] [+X]: X12.7 to 25.4, Y-47.75 to 47.75, Z-1 to 3.7 [work])
+(  fixture 1 mm shim strip [25 x 39] under the -Y slider, op 1 only: X-12.5 to 12.5, Y-45 to -6, Z-1 to 0 [work])
+(  fixture 1 mm shim strip [25 x 39] under the +Y slider, op 1 only: X-12.5 to 12.5, Y6 to 45, Z-1 to 0 [work])
+(station 2: G55 Slider op2 top - work zero: part bottom, stock centre [on the vise])
+(  carries on from Slider op1 bottom: clamp the part it left with its top side up)
+(  fixture fixed jaw [centre block] [-X]: X-22.5 to -9.8, Y-47.75 to 47.75, Z0 to 4.7 [work])
+(  fixture moving jaw [+X]: X9.8 to 22.5, Y-47.75 to 47.75, Z0 to 4.7 [work])
+(station 3: G55 Slider op2 engrave - work zero: part bottom, stock centre [on the vise])
+(  carries on from Slider op2 top: clamp the part it left with its top side up)
+(  fixture fixed jaw [centre block] [-X]: X-22.5 to -9.8, Y-47.75 to 47.75, Z0 to 4.7 [work])
+(  fixture moving jaw [+X]: X9.8 to 22.5, Y-47.75 to 47.75, Z0 to 4.7 [work])
+(retracts use G53 G0 Z0 - home the machine first)
 (T99 YIDOFENG 3D touch probe - touch probe, D2 stylus ball, flute length 12, stickout 40)
 (T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)
 (T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill, flute length 18, stickout 22)
+(estimated time 21:21)
 G21 G17 G40 G49 G80 G90 G91.1 G94 G64
-
-(=== G54 LEFT station: slider-op1.nc ===)
-(Probe stock top - Probe)
 G54
+
+(Probe stock top - Probe)
 G53 G0 Z0
 T99 M6
 (rcnc Find stock: jog the probe over the middle of the stock, a few mm above it, and press Continue)
@@ -16,12 +31,12 @@ T99 M6
 
 (Probe stock centre - Probe)
 
-
-(=== G55 RIGHT station: slider-op2.nc ===)
-(Probe stock top - Probe)
+(station 2: Slider op2 top)
 G53 G0 Z0
 G55
 (RCNC Z_REFERENCE Vise)
+
+(Probe stock top - Probe)
 (rcnc Find stock: jog the probe over the middle of the stock, a few mm above it, and press Continue)
 (RCNC FIND_STOCK SIZE=25.4,98,9.5 AT=0,0,9.3 TOL=1 DEPTH=3 KEEPZ=1)
 
@@ -38,14 +53,16 @@ M0
 
 (Probe carrier bore B - Probe)
 
-
-(=== G54 LEFT station: slider-op1.nc ===)
-(Face the bar top [the sliders' bottoms] 0.2 - Face)
+(station 1: Slider op1 bottom)
+G53 G0 Z0
 G54
+
+(Face the bar top [the sliders' bottoms] 0.2 - Face)
 G53 G0 Z0
 T24 M6
 S18000 M3
 M8
+G0 X-16.875 Y-50
 G0 Z14.5
 X-16.875 Y-50
 Z11.5
@@ -10528,13 +10545,12 @@ Y52.175
 G0 Z4
 Z14.5
 
-
-(=== G55 RIGHT station: slider-op2.nc ===)
-(Face to 8 [1.3] - Face)
+(station 2: Slider op2 top)
 G53 G0 Z0
 G55
-S18000 M3
-M8
+
+(Face to 8 [1.3] - Face)
+G0 X-16.875 Y-50
 G0 Z14.3
 X-16.875 Y-50
 Z11.3
@@ -14950,16 +14966,18 @@ Y-28
 G3 X14.975 Y-30 Z5.52 I2 J0
 G0 Z14.3
 
-
-(=== G54 LEFT station: slider-op1.nc ===)
-(Edge break 0.3: bottom outline and pocket rims - Chamfer)
+(station 1: Slider op1 bottom)
+G53 G0 Z0
 G54
+
+(Edge break 0.3: bottom outline and pocket rims - Chamfer)
 G53 G0 Z0
 M5
 M9
 T1 M6
 S18000 M3
 M8
+G0 X-10.791 Y-6.738
 G0 Z14.5
 X-10.791 Y-6.738
 Z11.3
@@ -15022,13 +15040,12 @@ G3 X-0.226 Y38.484 I0 J3.024 F1000
 G1 X0 Y38.476
 G0 Z14.5
 
-
-(=== G55 RIGHT station: slider-op2.nc ===)
-(Ingot chamfer 2 x 45 round the top - Chamfer)
+(station 2: Slider op2 top)
 G53 G0 Z0
 G55
-S18000 M3
-M8
+
+(Ingot chamfer 2 x 45 round the top - Chamfer)
+G0 X-10.741 Y-6.74
 G0 Z14.3
 X-10.741 Y-6.74
 Z10
@@ -15056,13 +15073,13 @@ G1 X-6.8
 G2 X-7.93 Y3.216 I0.005 J3.972
 G0 Z14.3
 
-
-(=== G55 RIGHT station: slider-engrave.nc ===)
-(Engrave the crosshatch 0.4 deep [chamfer mill tip] - Trace)
+(station 3: Slider op2 engrave)
 G53 G0 Z0
 G55
-S18000 M3
-M8
+(RCNC Z_REFERENCE Vise)
+
+(Engrave the crosshatch 0.4 deep [chamfer mill tip] - Trace)
+G0 X1.622 Y7.2
 G0 Z14.3
 X1.622 Y7.2
 Z11.3
@@ -15388,7 +15405,6 @@ Z11.3
 G1 Z7.6 F200
 X1.622 Y-7.2 F1000
 G0 Z14.3
-
 
 G53 G0 Z0
 M5
