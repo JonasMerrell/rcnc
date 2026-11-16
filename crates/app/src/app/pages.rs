@@ -357,6 +357,46 @@ impl App {
                 .color(MUTED),
             );
             ui.add_space(8.0);
+            section_title(ui, "Find stock");
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Size X/Y/Z").color(MUTED));
+                for v in self.fs_size.iter_mut() {
+                    num(ui, v, 0.1, " mm");
+                }
+            });
+            let probe_in = s.loaded_tool == p.probe_tool && s.tool_measured;
+            if ui
+                .add_enabled(can && probe_in, Button::new("Find stock (zero on the top centre)").min_size(Vec2::new(260.0, 32.0)))
+                .clicked()
+            {
+                self.machine.send(Command::FindStock(gcode::StockRequest {
+                    size: self.fs_size,
+                    top_centre: [0.0; 3],
+                    tolerance: None,
+                    depth: None,
+                    keep_z: false,
+                    jaw: None,
+                }));
+            }
+            if !probe_in {
+                ui.label(RichText::new(format!("Load and measure the probe (T{} M6) first", p.probe_tool)).size(12.0).color(MUTED));
+            }
+            egui::Grid::new("find-stock-settings").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                let f = &mut p.find_stock;
+                changed |= labelled(ui, "Rough position ±", &mut f.clearance, 0.5, " mm");
+                changed |= labelled(ui, "Search down", &mut f.z_search, 0.5, " mm");
+                changed |= labelled(ui, "Above the top", &mut f.z_clearance, 0.5, " mm");
+                changed |= labelled(ui, "Sides below the top", &mut f.depth, 0.1, " mm");
+                changed |= labelled(ui, "Size tolerance", &mut f.tolerance, 0.05, " mm");
+                ui.label("Probe tool");
+                let mut t = p.probe_tool as f64;
+                if num(ui, &mut t, 1.0, "") {
+                    p.probe_tool = t.max(0.0).round() as u32;
+                    changed = true;
+                }
+                ui.end_row();
+            });
+            ui.add_space(8.0);
             changed |= ui.checkbox(&mut p.auto_zero, "Set work zero at the result").changed();
             egui::Grid::new("probe-settings").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
                 changed |= labelled(ui, "Search feed", &mut p.fast_feed, 1.0, " mm/min");
@@ -383,13 +423,28 @@ impl App {
             });
             ui.add_space(4.0);
             ui.label(RichText::new("Z zero references: the setter top's height above each surface").color(MUTED));
-            egui::Grid::new("z-references").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                for r in &mut t.references {
+            let idle = s.mode == Mode::Idle;
+            let mut calibrate = None;
+            egui::Grid::new("z-references").num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
+                for (i, r) in t.references.iter_mut().enumerate() {
                     changed |= ui.add(egui::TextEdit::singleline(&mut r.name).desired_width(90.0)).changed();
                     changed |= num(ui, &mut r.setter_top, 0.001, " mm");
+                    if ui.add_enabled(idle, Button::new("Calibrate (probe)")).on_hover_text("Touch the surface with the measured touch probe").clicked() {
+                        calibrate = Some((i, None));
+                    }
+                    if ui.add_enabled(idle, Button::new("Calibrate (gauge)")).on_hover_text("Jog a measured tool onto a gauge block standing on the surface").clicked() {
+                        calibrate = Some((i, Some(self.cal_gauge)));
+                    }
                     ui.end_row();
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Gauge block").color(MUTED));
+                num(ui, &mut self.cal_gauge, 0.01, " mm");
+            });
+            if let Some((reference, gauge)) = calibrate {
+                self.machine.send(Command::CalibrateZ { reference, gauge });
+            }
             if ui.button("Setter is under the spindle now").clicked() {
                 t.x = s.machine[0];
                 t.y = s.machine[1];

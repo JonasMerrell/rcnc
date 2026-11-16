@@ -84,11 +84,20 @@ pub enum ToolKind {
     Bull,
     Chamfer,
     Drill,
+    /// A touch probe: `diameter` is the stylus ball.
+    Probe,
 }
 
 impl ToolKind {
-    pub const ALL: [ToolKind; 6] =
-        [ToolKind::Auto, ToolKind::Flat, ToolKind::Ball, ToolKind::Bull, ToolKind::Chamfer, ToolKind::Drill];
+    pub const ALL: [ToolKind; 7] = [
+        ToolKind::Auto,
+        ToolKind::Flat,
+        ToolKind::Ball,
+        ToolKind::Bull,
+        ToolKind::Chamfer,
+        ToolKind::Drill,
+        ToolKind::Probe,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -98,6 +107,7 @@ impl ToolKind {
             ToolKind::Bull => "Bull nose",
             ToolKind::Chamfer => "Chamfer / V-bit",
             ToolKind::Drill => "Drill",
+            ToolKind::Probe => "Touch probe",
         }
     }
 }
@@ -110,7 +120,9 @@ impl Tool {
         }
         let d = self.description.to_lowercase();
         let has = |words: &[&str]| words.iter().any(|w| d.contains(w));
-        if has(&["ball"]) {
+        if has(&["probe"]) {
+            ToolKind::Probe
+        } else if has(&["ball"]) {
             ToolKind::Ball
         } else if has(&["bull", "corner rad", "radius"]) {
             ToolKind::Bull
@@ -175,7 +187,209 @@ pub enum Op {
         q: Option<f64>,
     },
     Message(String),
+    /// Find the stock with the touch probe before carrying on (an `(RCNC FIND_STOCK ...)` comment).
+    FindStock(StockRequest),
+    /// Touch a surface at a point and set work Z from it (an `(RCNC PROBE_Z ...)` comment).
+    ProbeZ(ZRequest),
+    /// Find two bores and set work X/Y from them (an `(RCNC FIND_BORES ...)` comment).
+    FindBores(BoresRequest),
+    /// Zero every tool measured from now on on this setter reference (an
+    /// `(RCNC Z_REFERENCE Vise)` comment): the job's Z0 is that surface.
+    ZReference(String),
     ProgramEnd,
+}
+
+/// What a job asks the Find stock wizard to look for, from a comment like
+/// `(RCNC FIND_STOCK SIZE=39,20,77 AT=0,0,0 TOL=1 DEPTH=3)`: the stock's X, Y
+/// and Z size, the work coordinates its top centre should read, how far the
+/// probed size may differ from the expected one, and how far below the top
+/// to touch the sides. Always millimetres.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StockRequest {
+    pub size: [f64; 3],
+    pub top_centre: [f64; 3],
+    pub tolerance: Option<f64>,
+    pub depth: Option<f64>,
+    /// `KEEPZ=1`: set only X/Y; Z comes from the tool measurements (a Z
+    /// reference), and the top is only checked against `top_centre`.
+    pub keep_z: bool,
+    /// `JAWX=-1` (or 1): X comes from the fixed vise jaw on that side of the
+    /// stock, touched beside the stock at work Z `JAWZ` (between the parallels
+    /// and the jaw's top): the stock's face against it is X `AT - SIZE/2`.
+    pub jaw: Option<(f64, f64)>,
+}
+
+/// The reference named in an `(RCNC Z_REFERENCE <name>)` comment.
+fn z_reference(comment: &str) -> Option<Result<String, String>> {
+    const KEYWORD: &str = "RCNC Z_REFERENCE";
+    let rest = comment.trim();
+    if rest.len() < KEYWORD.len() || !rest[..KEYWORD.len()].eq_ignore_ascii_case(KEYWORD) {
+        return None;
+    }
+    let name = rest[KEYWORD.len()..].trim();
+    Some(if name.is_empty() { Err("Z_REFERENCE needs a reference name, e.g. Vise".into()) } else { Ok(name.to_string()) })
+}
+
+/// `(RCNC PROBE_Z AT=x,y Z=z SEARCH=mm)`: with the touch probe loaded, go
+/// over work X/Y `AT`, probe down (up to `SEARCH` past where `Z` should be)
+/// and set work Z so that surface reads `Z`, e.g. a parallel the part sits
+/// on, for an exact thickness. Millimetres, work coordinates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ZRequest {
+    pub at: [f64; 2],
+    pub z: f64,
+    pub search: Option<f64>,
+}
+
+/// `(RCNC FIND_BORES A=x,y B=x,y D=8 TOP=z DEPTH=3 TOL=0.1 ROT=0.2)`: with the
+/// touch probe loaded, find the middles of two bores of diameter `D` that
+/// should be at work X/Y `A` and `B` (their top at work Z `TOP`, touched `DEPTH`
+/// below it), check their spacing (within `TOL` mm) and the part's turn (within
+/// `ROT` degrees), and set work X/Y so the pair's middle is where it should be.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoresRequest {
+    pub a: [f64; 2],
+    pub b: [f64; 2],
+    pub diameter: f64,
+    pub top: f64,
+    pub depth: f64,
+    pub tolerance: f64,
+    pub rotation: f64,
+}
+
+/// `KEY=VALUE` words after a directive's keyword, or None if the comment isn't it.
+fn directive<'a>(comment: &'a str, keyword: &str) -> Option<Result<Vec<(String, Vec<f64>)>, String>> {
+    let rest = comment.trim();
+    if rest.len() < keyword.len() || !rest[..keyword.len()].eq_ignore_ascii_case(keyword) {
+        return None;
+    }
+    let tail = &rest[keyword.len()..];
+    if !tail.is_empty() && !tail.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut out = vec![];
+    for word in tail.split_whitespace() {
+        let Some((k, v)) = word.split_once('=') else {
+            return Some(Err(format!("{keyword}: expected KEY=VALUE, got '{word}'")));
+        };
+        let nums: Result<Vec<f64>, String> =
+            v.split(',').map(|n| n.trim().parse::<f64>().map_err(|_| format!("{keyword}: bad number '{n}'"))).collect();
+        match nums {
+            Ok(n) => out.push((k.to_ascii_uppercase(), n)),
+            Err(e) => return Some(Err(e)),
+        }
+    }
+    Some(Ok(out))
+}
+
+fn take(words: &[(String, Vec<f64>)], key: &str, n: usize, what: &str) -> Result<Option<Vec<f64>>, String> {
+    match words.iter().find(|(k, _)| k == key) {
+        Some((_, v)) if v.len() == n => Ok(Some(v.clone())),
+        Some(_) => Err(format!("{what}: {key} takes {n} number{}", if n == 1 { "" } else { "s" })),
+        None => Ok(None),
+    }
+}
+
+impl ZRequest {
+    pub const KEYWORD: &'static str = "RCNC PROBE_Z";
+
+    pub fn parse(comment: &str) -> Option<Result<ZRequest, String>> {
+        let words = match directive(comment, Self::KEYWORD)? {
+            Ok(w) => w,
+            Err(e) => return Some(Err(e)),
+        };
+        let what = "PROBE_Z";
+        Some((|| {
+            let at = take(&words, "AT", 2, what)?.ok_or("PROBE_Z needs AT=x,y")?;
+            let z = take(&words, "Z", 1, what)?.ok_or("PROBE_Z needs Z=")?[0];
+            let search = take(&words, "SEARCH", 1, what)?.map(|v| v[0]);
+            Ok(ZRequest { at: [at[0], at[1]], z, search })
+        })())
+    }
+}
+
+impl BoresRequest {
+    pub const KEYWORD: &'static str = "RCNC FIND_BORES";
+
+    pub fn parse(comment: &str) -> Option<Result<BoresRequest, String>> {
+        let words = match directive(comment, Self::KEYWORD)? {
+            Ok(w) => w,
+            Err(e) => return Some(Err(e)),
+        };
+        let what = "FIND_BORES";
+        Some((|| {
+            let a = take(&words, "A", 2, what)?.ok_or("FIND_BORES needs A=x,y")?;
+            let b = take(&words, "B", 2, what)?.ok_or("FIND_BORES needs B=x,y")?;
+            let one = |k: &str, d: Option<f64>| -> Result<f64, String> {
+                take(&words, k, 1, what)?.map(|v| v[0]).or(d).ok_or(format!("FIND_BORES needs {k}="))
+            };
+            let r = BoresRequest {
+                a: [a[0], a[1]],
+                b: [b[0], b[1]],
+                diameter: one("D", None)?,
+                top: one("TOP", None)?,
+                depth: one("DEPTH", Some(3.0))?,
+                tolerance: one("TOL", Some(0.1))?,
+                rotation: one("ROT", Some(0.2))?,
+            };
+            if !(r.diameter > 0.0) || (r.a[0] - r.b[0]).hypot(r.a[1] - r.b[1]) < 1.0 {
+                return Err("FIND_BORES needs D above zero and A and B apart".into());
+            }
+            Ok(r)
+        })())
+    }
+}
+
+impl StockRequest {
+    pub const KEYWORD: &'static str = "RCNC FIND_STOCK";
+
+    /// The request in a comment, `None` if the comment isn't one.
+    pub fn parse(comment: &str) -> Option<Result<StockRequest, String>> {
+        let rest = comment.trim();
+        if rest.len() < Self::KEYWORD.len() || !rest[..Self::KEYWORD.len()].eq_ignore_ascii_case(Self::KEYWORD) {
+            return None;
+        }
+        let mut r = StockRequest { size: [0.0; 3], top_centre: [0.0; 3], tolerance: None, depth: None, keep_z: false, jaw: None };
+        let (mut jaw_side, mut jaw_z) = (None, None);
+        let mut sized = false;
+        let nums = |v: &str| -> Result<Vec<f64>, String> {
+            v.split(',').map(|n| n.trim().parse::<f64>().map_err(|_| format!("FIND_STOCK: bad number '{n}'"))).collect()
+        };
+        let three = |v: &str| -> Result<[f64; 3], String> {
+            let n = nums(v)?;
+            n.try_into().map_err(|_| "FIND_STOCK: SIZE and AT take three numbers, X,Y,Z".to_string())
+        };
+        for word in rest[Self::KEYWORD.len()..].split_whitespace() {
+            let Some((k, v)) = word.split_once('=') else {
+                return Some(Err(format!("FIND_STOCK: expected KEY=VALUE, got '{word}'")));
+            };
+            let res = match k.to_ascii_uppercase().as_str() {
+                "SIZE" => three(v).map(|s| {
+                    r.size = s;
+                    sized = true;
+                }),
+                "AT" => three(v).map(|a| r.top_centre = a),
+                "TOL" => nums(v).map(|n| r.tolerance = n.first().copied()),
+                "DEPTH" => nums(v).map(|n| r.depth = n.first().copied()),
+                "KEEPZ" => nums(v).map(|n| r.keep_z = n.first().is_some_and(|v| *v != 0.0)),
+                "JAWX" => nums(v).map(|n| jaw_side = n.first().map(|v| v.signum())),
+                "JAWZ" => nums(v).map(|n| jaw_z = n.first().copied()),
+                _ => Err(format!("FIND_STOCK: unknown setting {k}")),
+            };
+            if let Err(e) = res {
+                return Some(Err(e));
+            }
+        }
+        if !sized || r.size.iter().any(|v| !(*v > 0.0)) {
+            return Some(Err("FIND_STOCK needs SIZE=x,y,z with sizes above zero".into()));
+        }
+        r.jaw = match (jaw_side, jaw_z) {
+            (Some(side), Some(z)) if side != 0.0 => Some((side, z)),
+            (None, None) => None,
+            _ => return Some(Err("FIND_STOCK: JAWX=-1 or 1 needs JAWZ= (the height to touch the jaw at)".into())),
+        };
+        Some(Ok(r))
+    }
 }
 
 /// Ops produced by one source line.
@@ -588,6 +802,14 @@ impl Interpreter {
         for c in &b.comments {
             if let Some(msg) = c.strip_prefix("MSG,").or_else(|| c.strip_prefix("msg,")) {
                 ops.push(Op::Message(msg.trim().to_string()));
+            } else if let Some(req) = StockRequest::parse(c) {
+                ops.push(Op::FindStock(req?));
+            } else if let Some(req) = ZRequest::parse(c) {
+                ops.push(Op::ProbeZ(req?));
+            } else if let Some(req) = BoresRequest::parse(c) {
+                ops.push(Op::FindBores(req?));
+            } else if let Some(name) = z_reference(c) {
+                ops.push(Op::ZReference(name?));
             }
         }
 
@@ -1843,5 +2065,31 @@ mod tests {
         let (i, ops) = run("%\nG0 X1\n%\nG0 X99\n");
         assert!(close(i.position[0], 1.0));
         assert!(!ops.iter().any(|op| matches!(op, Op::Rapid { to } if to[0] == 99.0)));
+    }
+
+    #[test]
+    fn find_stock_comment() {
+        let (_, ops) = run("(RCNC FIND_STOCK SIZE=39,20,77 AT=0,0,-1.5 TOL=0.8)\nM30");
+        assert_eq!(
+            ops[0],
+            Op::FindStock(StockRequest { size: [39.0, 20.0, 77.0], top_centre: [0.0, 0.0, -1.5], tolerance: Some(0.8), depth: None, keep_z: false, jaw: None })
+        );
+        assert!(StockRequest::parse("rcnc find_stock size=1,2,3 depth=2").unwrap().is_ok());
+        assert!(StockRequest::parse("RCNC FIND_STOCK AT=0,0,0").unwrap().is_err());
+        assert!(StockRequest::parse("RCNC FIND_STOCK SIZE=1,2").unwrap().is_err());
+        assert!(StockRequest::parse("just a comment").is_none());
+        let mut i = Interpreter::new("(RCNC FIND_STOCK SIZE=a,b,c)");
+        assert!(i.next_step().is_err());
+    }
+
+    #[test]
+    fn probe_z_and_find_bores_comments() {
+        let (_, ops) = run("(RCNC PROBE_Z AT=-14,-44 Z=-19 SEARCH=30)\n(RCNC FIND_BORES A=-10,28 B=11,-22 D=8 TOP=-3 DEPTH=3 TOL=0.1 ROT=0.2)\nM30");
+        assert_eq!(ops[0], Op::ProbeZ(ZRequest { at: [-14.0, -44.0], z: -19.0, search: Some(30.0) }));
+        let Op::FindBores(b) = &ops[1] else { panic!("{ops:?}") };
+        assert_eq!((b.a, b.b, b.diameter, b.top, b.depth, b.tolerance, b.rotation), ([-10.0, 28.0], [11.0, -22.0], 8.0, -3.0, 3.0, 0.1, 0.2));
+        assert!(ZRequest::parse("RCNC PROBE_Z Z=1").unwrap().is_err());
+        assert!(BoresRequest::parse("RCNC FIND_BORES A=0,0 B=0,0 D=8 TOP=0").unwrap().is_err());
+        assert!(ZRequest::parse("RCNC PROBE_ZED AT=0,0 Z=0").is_none());
     }
 }

@@ -64,6 +64,7 @@ impl Controller {
         let start = self.machine_position();
         let outputs = self.outputs.clone();
         let spinning = outputs.spindle_on;
+        self.tool_measured = false;
         self.outputs.spindle_on = false;
         self.outputs.flood = false;
         self.outputs.mist = false;
@@ -152,14 +153,20 @@ impl Controller {
         self.info(format!("Tool {} loaded", view.to));
         // The program carries on expecting the spindle and coolant as they
         // were, whether or not the tool goes back to where it started.
+        // Never start the spindle with the touch probe in it.
+        let probe = view.to != 0 && view.to == self.config.probing.probe_tool;
+        if probe && outputs.spindle_on {
+            self.info("The touch probe is loaded: the spindle stays off");
+        }
+        let spin = outputs.spindle_on && !probe;
         let restore = Step::Then(Box::new(move |c, _| {
-            c.outputs.spindle_on = outputs.spindle_on;
+            c.outputs.spindle_on = spin;
             c.outputs.spindle_ccw = outputs.spindle_ccw;
             c.outputs.spindle_duty = outputs.spindle_duty;
             c.outputs.spindle_rpm = outputs.spindle_rpm;
             c.outputs.flood = outputs.flood;
             c.outputs.mist = outputs.mist;
-            Ok(if outputs.spindle_on { vec![Step::Wait(c.config.spindle_spin_up)] } else { vec![] })
+            Ok(if spin { vec![Step::Wait(c.config.spindle_spin_up)] } else { vec![] })
         }));
         if !view.return_to_start {
             return Ok(vec![restore]);

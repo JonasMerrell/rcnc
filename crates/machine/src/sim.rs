@@ -72,6 +72,10 @@ pub struct SimWorld {
     /// A block on the table the probe can touch from the side or above:
     /// X and Y ranges and top Z, physical steps.
     pub block: Option<([i64; 2], [i64; 2], i64)>,
+    /// Round holes through the block: X/Y middle and radius, physical steps (X/Y share steps per mm).
+    pub bores: Vec<([i64; 2], i64)>,
+    /// More solid boxes the probe touches (vise jaws): X and Y ranges and top Z, physical steps.
+    pub blocks: Vec<([i64; 2], [i64; 2], i64)>,
     /// Steps added to `probe_z` after each move that stops on the probe, in
     /// order: a setter that doesn't read the same twice.
     pub touch_shifts: VecDeque<i64>,
@@ -94,14 +98,63 @@ pub struct Simulator {
     /// Force the probe input active (for manual probe tests from the UI).
     pub probe_override: bool,
     pub estop_pressed: bool,
+    /// Ignore the stop pin of single-axis moves (a board or pin setting that doesn't stop probes).
+    pub ignore_stop_pin: bool,
+}
+
+/// The DMC2 with the tool setter and change position where the simulator's
+/// table is once it is homed: the setter is the table (the probe plane).
+pub fn dmc2_sim_config() -> MachineConfig {
+    let mut c = MachineConfig::dmc2();
+    let world = Simulator::new(Arc::new(ManualClock::default())).world;
+    let at = |c: &MachineConfig, axis: usize, mm: f64| homed_position(c, &world, axis, mm);
+    let table = world.probe_z as f64 / c.axes[2].steps_per_unit;
+    c.probing.setter.x = at(&c, 0, 50.0);
+    c.probing.setter.y = at(&c, 1, 50.0);
+    c.probing.setter.travel_z = at(&c, 2, table + 90.0);
+    c.tool_change.x = at(&c, 0, 10.0);
+    c.tool_change.z = at(&c, 2, table + 110.0);
+    // The simulator's probe is a point.
+    c.probing.stylus_diameter = 0.0;
+    // Its stock stands on the table, the setter's height: the vise reference (the part's bottom) is there.
+    for r in &mut c.probing.setter.references {
+        if r.name == "Vise" {
+            r.setter_top = 0.0;
+        }
+    }
+    c
+}
+
+/// Machine coordinate of physical position `mm` (from the low end of travel)
+/// once the axis is homed (to within the home switch's release distance).
+pub fn homed_position(c: &MachineConfig, world: &SimWorld, axis: usize, mm: f64) -> f64 {
+    let a = &c.axes[axis];
+    let length = world.travel[axis] as f64 / a.steps_per_unit;
+    if a.home_positive {
+        a.home_position - length + mm
+    } else {
+        a.home_position + mm
+    }
 }
 
 impl Simulator {
+    /// Put an `x` by `y` mm block, `h` mm tall, on the table in the middle of the X/Y travel.
+    pub fn add_stock(&mut self, c: &MachineConfig, x: f64, y: f64, h: f64) {
+        let w = &self.world;
+        let span = |axis: usize, size: f64| {
+            let half = (size / 2.0 * c.axes[axis].steps_per_unit) as i64;
+            [w.travel[axis] / 2 - half, w.travel[axis] / 2 + half]
+        };
+        self.world.block = Some((span(0, x), span(1, y), w.probe_z + (h * c.axes[2].steps_per_unit) as i64));
+    }
+
     pub fn new(clock: Arc<dyn Clock>) -> Self {
         let world = SimWorld {
             travel: [72_000, 52_000, 33_000, 0, 0, 0],
             probe_z: 6_000,
             block: None,
+            bores: Vec::new(),
+            blocks: Vec::new(),
             touch_shifts: VecDeque::new(),
         };
         let physical = [36_000, 26_000, 30_000, 0, 0, 0];
@@ -120,6 +173,7 @@ impl Simulator {
             outputs: Outputs::default(),
             probe_override: false,
             estop_pressed: false,
+            ignore_stop_pin: false,
         }
     }
 
@@ -131,9 +185,12 @@ impl Simulator {
         let Some(c) = &self.config else { return false };
         if Some(*input) == c.probe {
             let p = &self.physical;
-            let in_block = self.world.block.is_some_and(|(x, y, top)| {
-                (x[0]..=x[1]).contains(&p[0]) && (y[0]..=y[1]).contains(&p[1]) && p[2] <= top
+            let in_bore = self.world.bores.iter().any(|(c, r)| {
+                let (dx, dy) = ((p[0] - c[0]) as f64, (p[1] - c[1]) as f64);
+                dx.hypot(dy) < *r as f64
             });
+            let inside = |(x, y, top): ([i64; 2], [i64; 2], i64)| (x[0]..=x[1]).contains(&p[0]) && (y[0]..=y[1]).contains(&p[1]) && p[2] <= top;
+            let in_block = (!in_bore && self.world.block.is_some_and(inside)) || self.world.blocks.iter().any(|b| inside(*b));
             return self.probe_override || p[2] <= self.world.probe_z || in_block;
         }
         if Some(*input) == c.estop {
@@ -218,7 +275,7 @@ impl Simulator {
         for _ in 0..n {
             self.step_axis(a.m.axis, dir);
             a.done += 1;
-            if let Some((input, want)) = a.m.stop_on {
+            if let Some((input, want)) = a.m.stop_on.filter(|_| !self.ignore_stop_pin) {
                 if self.input_active(&input) == want {
                     if Some(input) == self.config.as_ref().and_then(|c| c.probe) {
                         self.world.probe_z += self.world.touch_shifts.pop_front().unwrap_or(0);

@@ -254,13 +254,14 @@ fn draw_tool(p: &egui::Painter, rect: Rect, tool: Option<&Tool>) {
     };
     let kind = tool.shape();
     let d = if tool.diameter > 0.0 { tool.diameter } else { 6.0 };
-    let shank = if d < 3.0 { 3.175 } else { d };
+    let shank = if kind == ToolKind::Probe { 6.0 } else if d < 3.0 { 3.175 } else { d };
     let flutes = if tool.flute_length > 0.0 {
         tool.flute_length
     } else {
         match kind {
             ToolKind::Drill => 6.0 * d,
             ToolKind::Chamfer => d / 2.0,
+            ToolKind::Probe => 20.0,
             _ => 3.0 * d,
         }
     };
@@ -305,7 +306,7 @@ fn draw_tool(p: &egui::Painter, rect: Rect, tool: Option<&Tool>) {
     p.add(Shape::convex_polygon(outline.clone(), STEEL, Stroke::new(1.5_f32, STEEL_DARK)));
     // Helix lines across the straight part of the flutes.
     let straight_end = tip - mm(tip_height(kind, d));
-    if straight_end > flute_top {
+    if straight_end > flute_top && kind != ToolKind::Probe {
         let clip = p.with_clip_rect(Rect::from_min_max(pos2(cx - r, flute_top), pos2(cx + r, straight_end)).intersect(rect));
         let pitch = (2.0 * r).max(6.0) * 0.7;
         let mut y = flute_top - 2.0 * r;
@@ -330,7 +331,7 @@ fn draw_tool(p: &egui::Painter, rect: Rect, tool: Option<&Tool>) {
 /// Height of the tip's own shape below the straight flutes, mm.
 fn tip_height(kind: ToolKind, d: f64) -> f64 {
     match kind {
-        ToolKind::Ball => d / 2.0,
+        ToolKind::Ball | ToolKind::Probe => d / 2.0,
         ToolKind::Bull => d / 6.0,
         ToolKind::Chamfer => d / 2.0,
         // 118° point.
@@ -353,7 +354,7 @@ fn cutter_outline(kind: ToolKind, cx: f32, top: f32, tip: f32, r: f32) -> Vec<Po
     use std::f32::consts::PI;
     let mut pts = vec![pos2(cx - r, top), pos2(cx + r, top)];
     match kind {
-        ToolKind::Ball => pts.extend(arc(pos2(cx, tip - r), r, 0.0, PI)),
+        ToolKind::Ball | ToolKind::Probe => pts.extend(arc(pos2(cx, tip - r), r, 0.0, PI)),
         ToolKind::Bull => {
             let cr = r / 3.0;
             pts.extend(arc(pos2(cx + r - cr, tip - cr), cr, 0.0, PI / 2.0));

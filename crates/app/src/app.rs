@@ -12,6 +12,7 @@ use std::sync::Arc;
 use crate::preview::{self, Camera, Toolpath};
 use crate::sheet::{self, Sheets, SheetView};
 
+mod findstock;
 mod pages;
 mod toolchange;
 use pages::{SettingsDraft, Tab};
@@ -74,6 +75,14 @@ pub struct App {
     file_checked: f64,
     /// The tool change window's "measure" checkbox.
     tc_measure: Option<bool>,
+    /// Jog step in the Find stock window, mm.
+    fs_step: f64,
+    /// Stock size for Find stock started from the Probe page.
+    fs_size: [f64; 3],
+    /// Air cut height to switch on, mm.
+    air_lift: f64,
+    /// Gauge block thickness for calibrating a Z reference without the probe, mm.
+    cal_gauge: f64,
     /// The tool change window's photo: tool, its image setting, the file found.
     tc_photo: Option<(u32, String, Option<std::path::PathBuf>)>,
     view: View,
@@ -125,6 +134,10 @@ impl App {
             program_file: None,
             file_checked: 0.0,
             tc_measure: None,
+            fs_step: 1.0,
+            fs_size: [39.0, 20.0, 77.0],
+            air_lift: 25.0,
+            cal_gauge: 10.0,
             tc_photo: None,
             view: View::Toolpath,
             sheets,
@@ -337,6 +350,7 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        fit_to_window(ctx);
         self.snap = self.machine.snapshot();
         if self.snap.time != self.alive.0 {
             self.alive = (self.snap.time, std::time::Instant::now());
@@ -408,6 +422,8 @@ impl eframe::App for App {
                 View::Sheet => self.sheet_page(ui),
             });
         self.tool_change_window(ctx);
+        self.find_stock_window(ctx);
+        self.calibrate_window(ctx);
 
         // The sheet is a native window over the centre area, drawn above
         // anything egui puts there: keep it out of the way of the tool change
@@ -562,6 +578,10 @@ impl App {
                 Mode::Alarm => ("ALARM", RED),
             };
             badge(ui, label, color);
+            if let Some(l) = s.air_cut {
+                ui.add_space(4.0);
+                badge(ui, &format!("AIR CUT +{l} mm"), AMBER);
+            }
             ui.add_space(8.0);
 
             // One button that is E-stop or Reset, and a separate Connect: one
@@ -1022,6 +1042,21 @@ impl App {
             }
             ui.add_space(16.0);
 
+            // Air cut: the whole program runs this much higher, to check it over the vise first.
+            ui.vertical(|ui| {
+                let idle = s.mode == Mode::Idle;
+                let mut on = s.air_cut.is_some();
+                if ui
+                    .add_enabled(idle, egui::Checkbox::new(&mut on, RichText::new("Air cut").strong()))
+                    .on_hover_text("Run programs higher than written, cutting nothing: tool changes, tool measuring and Find stock still happen for real")
+                    .changed()
+                {
+                    self.machine.send(Command::SetAirCut(on.then_some(self.air_lift)));
+                }
+                ui.add_enabled(idle && !on, egui::DragValue::new(&mut self.air_lift).range(5.0..=100.0).speed(0.5).prefix("+").suffix(" mm"));
+            });
+            ui.add_space(16.0);
+
             ui.vertical(|ui| {
                 override_slider(ui, "Feed", s.feed_override, 0.0..=2.0, |v| {
                     self.machine.send(Command::SetFeedOverride(v))
@@ -1105,6 +1140,21 @@ impl App {
                     });
             });
         });
+    }
+}
+
+/// The size the layout needs at full scale, in points.
+const LAYOUT_SIZE: Vec2 = Vec2::new(1200.0, 800.0);
+
+/// Shrink everything to fit a small window (a 1280 × 720 screen, or one Windows
+/// scales up), so no button ends up off its edge; full size when there is room.
+fn fit_to_window(ctx: &egui::Context) {
+    let zoom = ctx.zoom_factor();
+    // the window at zoom 1
+    let size = ctx.content_rect().size() * zoom;
+    let want = (size.x / LAYOUT_SIZE.x).min(size.y / LAYOUT_SIZE.y).clamp(0.6, 1.0);
+    if (want - zoom).abs() > 0.02 {
+        ctx.set_zoom_factor(want);
     }
 }
 
