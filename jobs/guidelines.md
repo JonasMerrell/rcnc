@@ -152,6 +152,26 @@ deep and narrow at high feed rather than wide and shallow.
 - It isn't calibrated to the mill yet, so use it to compare toolpaths. The advice it gives (best rpm,
   shorter stick-out) is worth following.
 
+## More rules from the real runs
+
+- **At most 3 cutters per operation** **(Jonas)**: every change is by hand.
+- **Chamfer tip offset:** about 1 mm below the chamfer's lower edge. The first part's chamfer, cut near the
+  tip, had a poor finish. Check the clearance to floors and fixtures.
+- **Z never comes from a raw stock face** **(Jonas)**. The first part came out 16.13 thick against 16 that way.
+- **Nothing on the vise may stand above the jaw top** **(Jonas)**: it gets in the way of the tool and holder.
+- **Batches use both stations of the vise** **(Jonas)**.
+- **Flips:** say on the setup sheet which way the part is flipped, and mirror the probed feature
+  coordinates to match (the phone stand's bores were at Y+19.25 in op 1 and Y−19.25 in op 2).
+- **Program start:** `G21 G17 G40 G49 G80 G90 G91.1 G94 G64`, then `G54`. All retracts are `G53 G0 Z0`, so
+  the machine must be homed; rcnc refuses Cycle Start otherwise. Spindle and coolant off before `T99 M6`.
+- **Restart programs:** G54 survives Stop, Open and a restart. A restart program starts at the step that
+  failed and must not probe partly cut stock again (see `jobs/phone-stand/op2-finish.nc`).
+- **When Jonas is waiting at the machine:** make the quick `.nc` edit and push it first, and tell him the
+  moment the file is on the mill PC. Re-post and re-simulate properly afterwards.
+- **Say what was only simulated and what was really cut.** Unproven so far: the PR 146 contour seam and
+  the finer ball stepover.
+- **Keep this file current:** when a cut bogs, chatters, packs chips or leaves a mark, add the lesson here.
+
 ## Checks before handing over
 
 1. `simulate_cam` for every setup reports no problems. Read the following for each op, and quote them in
