@@ -32,6 +32,8 @@ Fit: 0.2 mm side clearance in the channel; the slider stands 5 mm above the rail
   vertical chamfer mill. The 1.5 chamfers go round the base's top and bottom outlines.
 - Magnet pitch kept at 15 (3.5 mm wall from the end pockets to the part ends).
 - Blanks: two parts end to end 8 mm apart, 98.0 overall: the parts' outer ends are the faced blank ends.
+- Op 2 locating (guidelines): op 1 bores two Ø7.5 holes through the carrier in the gap (X ±5); op 2 finds them
+  (rcnc Find bores) before roughing. X can't come from the fixed jaw: the 98 blank is longer than the 95.5 jaws.
 
 ## Stock and the jaws (checked)
 
@@ -46,7 +48,7 @@ cut the walls only down to Z5 (absolute), and op 2 grips those walls after the f
 - **Brass, 9.5 bar: needs the 1 mm shim (confirmed).** Without it, op 1 faces 0.2 (top 9.3) and can cut walls
   only to Z5 → op 2's band is 9.3 − 5.0 = 4.3, under the 4.7 jaw height, and the raw 25.4 band above it would
   hit the jaws first: 0.4 mm short to grip at all, 0.7 short of the 0.3 overlap. With the blank on a 1 mm shim
-  (25 × 90, shorter than the jaws so the end trims miss it) the jaw limit is 4.0 above the blank's bottom: band
+  (two 25 × 39 strips, 12 mm apart so the carrier bores break through between them; inside the jaws' length so the end trims miss them) the jaw limit is 4.0 above the blank's bottom: band
   9.3 − 4.0 = 5.3, grip 4.7, overlap 0.3. Op 1 then grips only 3.7 mm of the bar: fine for its light cuts.
   Alternatives considered: shim in op 2 instead (works, but then op 2's Z0 is the shim, and the thickness
   depends on it); 9.5 bar with an 8 mm slider leaves no other room.
