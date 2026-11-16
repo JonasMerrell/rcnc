@@ -104,6 +104,37 @@ impl App {
                             )
                             .changed();
                     });
+                    // What the tool change window draws, or the photo it shows instead.
+                    ui.horizontal(|ui| {
+                        ui.add_space(tw + ui.spacing().item_spacing.x);
+                        egui::ComboBox::from_id_salt(("kind", *n))
+                            .selected_text(t.kind.name())
+                            .width(130.0)
+                            .show_ui(ui, |ui| {
+                                for k in gcode::ToolKind::ALL {
+                                    changed |= ui.selectable_value(&mut t.kind, k, k.name()).changed();
+                                }
+                            });
+                        ui.label(RichText::new("Flutes").color(MUTED));
+                        changed |= ui.add(DragValue::new(&mut t.flute_length).speed(0.1).range(0.0..=500.0).suffix(" mm")).changed();
+                        ui.label(RichText::new("Stick out").color(MUTED));
+                        changed |= ui.add(DragValue::new(&mut t.stickout).speed(0.1).range(0.0..=500.0).suffix(" mm")).changed();
+                    });
+                    ui.horizontal(|ui| {
+                        ui.add_space(tw + ui.spacing().item_spacing.x);
+                        let photo = if t.image.is_empty() { format!("Photo: tools/T{n}.png if there is one") } else { format!("Photo: {}", t.image) };
+                        ui.label(RichText::new(photo).size(12.0).color(MUTED));
+                        if ui.small_button("Pick…").clicked() {
+                            if let Some(path) = rfd::FileDialog::new().add_filter("Image", &["png", "jpg", "jpeg"]).pick_file() {
+                                t.image = path.display().to_string();
+                                changed = true;
+                            }
+                        }
+                        if !t.image.is_empty() && ui.small_button("Clear").clicked() {
+                            t.image.clear();
+                            changed = true;
+                        }
+                    });
                     ui.add_space(4.0);
                     if remove {
                         self.machine.send(Command::SetTool(*n, None));
@@ -123,6 +154,11 @@ impl App {
                     }
                 });
             });
+            ui.add_space(12.0);
+            section_title(ui, "Z zero");
+            if let Some(job) = z_reference_buttons(ui, &s) {
+                self.machine.send(Command::Probe(job));
+            }
             ui.add_space(12.0);
             self.tool_change_settings(ui);
         });
@@ -150,29 +186,61 @@ impl App {
         ui.add_space(4.0);
         let mut c = s.config.clone();
         let mut changed = false;
+        let mut y = c.change_y();
         let t = &mut c.tool_change;
         changed |= ui
-            .checkbox(&mut t.guided, "Guided: go to the change position, measure, come back")
+            .checkbox(&mut t.guided, "Guided: raise Z, move the bed back, measure, come back")
             .changed();
         ui.add_enabled_ui(t.guided, |ui| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             egui::Grid::new("tool-change").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                changed |= labelled(ui, "Change X", &mut t.x, 0.5, " mm");
-                changed |= labelled(ui, "Change Y", &mut t.y, 0.5, " mm");
+                if labelled(ui, "Change Y (bed back)", &mut y, 0.5, " mm") {
+                    t.y = Some(y);
+                    changed = true;
+                }
                 changed |= labelled(ui, "Safe Z", &mut t.z, 0.5, " mm");
+                ui.label("X to the middle");
+                changed |= ui.checkbox(&mut t.centre_x, "").changed();
+                ui.end_row();
+                if t.centre_x {
+                    changed |= labelled(ui, "X travel", &mut t.x_travel, 1.0, " mm");
+                } else {
+                    ui.label("Move X too");
+                    changed |= ui.checkbox(&mut t.move_x, "").changed();
+                    ui.end_row();
+                    if t.move_x {
+                        changed |= labelled(ui, "Change X", &mut t.x, 0.5, " mm");
+                    }
+                }
             });
-            if ui
-                .button("Use the current X/Y")
-                .on_hover_text("Jog to where changing tools is easiest, then press this")
-                .clicked()
-            {
-                t.x = s.machine[0];
-                t.y = s.machine[1];
-                changed = true;
-            }
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Use the current position")
+                    .on_hover_text("Jog to where the spindle is easiest to reach, then press this")
+                    .clicked()
+                {
+                    t.x = s.machine[0];
+                    t.y = Some(s.machine[1]);
+                    changed = true;
+                }
+                if ui
+                    .add_enabled(t.y.is_some(), Button::new("Bed all the way back"))
+                    .on_hover_text("Y just short of its home switch, the back end of travel")
+                    .clicked()
+                {
+                    t.y = None;
+                    changed = true;
+                }
+            });
             changed |= ui.checkbox(&mut t.return_to_start, "Go back to where the change started").changed();
         });
         changed |= ui.checkbox(&mut c.tool_change_touch_off, "Measure the new tool on the tool setter").changed();
+        ui.horizontal(|ui| {
+            ui.label("It's measured twice; the readings may differ by");
+            changed |= ui
+                .add(DragValue::new(&mut c.probing.setter.repeat_tolerance).speed(0.001).range(0.001..=1.0).max_decimals(3).suffix(" mm"))
+                .changed();
+        });
         ui.label(
             RichText::new("Positions are machine coordinates. The spindle stops during the change and restarts on the way back.")
                 .size(12.0)
@@ -247,6 +315,9 @@ impl App {
         // One scroll area for the page so the setter settings are reachable on small screens.
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             section_title(ui, "Tool");
+            if let Some(job) = z_reference_buttons(ui, &s) {
+                self.machine.send(Command::Probe(job));
+            }
             run(ui, "Touch off tool on setter", ProbeJob::ToolTouchOff, Vec2::new(220.0, 36.0));
             ui.add_space(8.0);
             section_title(ui, "Work");
@@ -286,6 +357,46 @@ impl App {
                 .color(MUTED),
             );
             ui.add_space(8.0);
+            section_title(ui, "Find stock");
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Size X/Y/Z").color(MUTED));
+                for v in self.fs_size.iter_mut() {
+                    num(ui, v, 0.1, " mm");
+                }
+            });
+            let probe_in = s.loaded_tool == p.probe_tool && s.tool_measured;
+            if ui
+                .add_enabled(can && probe_in, Button::new("Find stock (zero on the top centre)").min_size(Vec2::new(260.0, 32.0)))
+                .clicked()
+            {
+                self.machine.send(Command::FindStock(gcode::StockRequest {
+                    size: self.fs_size,
+                    top_centre: [0.0; 3],
+                    tolerance: None,
+                    depth: None,
+                    keep_z: false,
+                    jaw: None,
+                }));
+            }
+            if !probe_in {
+                ui.label(RichText::new(format!("Load and measure the probe (T{} M6) first", p.probe_tool)).size(12.0).color(MUTED));
+            }
+            egui::Grid::new("find-stock-settings").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                let f = &mut p.find_stock;
+                changed |= labelled(ui, "Rough position ±", &mut f.clearance, 0.5, " mm");
+                changed |= labelled(ui, "Search down", &mut f.z_search, 0.5, " mm");
+                changed |= labelled(ui, "Above the top", &mut f.z_clearance, 0.5, " mm");
+                changed |= labelled(ui, "Sides below the top", &mut f.depth, 0.1, " mm");
+                changed |= labelled(ui, "Size tolerance", &mut f.tolerance, 0.05, " mm");
+                ui.label("Probe tool");
+                let mut t = p.probe_tool as f64;
+                if num(ui, &mut t, 1.0, "") {
+                    p.probe_tool = t.max(0.0).round() as u32;
+                    changed = true;
+                }
+                ui.end_row();
+            });
+            ui.add_space(8.0);
             changed |= ui.checkbox(&mut p.auto_zero, "Set work zero at the result").changed();
             egui::Grid::new("probe-settings").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
                 changed |= labelled(ui, "Search feed", &mut p.fast_feed, 1.0, " mm/min");
@@ -306,8 +417,34 @@ impl App {
                 changed |= labelled(ui, "Y", &mut t.y, 0.1, " mm");
                 changed |= labelled(ui, "Travel height Z", &mut t.travel_z, 0.1, " mm");
                 changed |= labelled(ui, "Search distance", &mut t.max_distance, 0.5, " mm");
-                changed |= labelled(ui, "Setter top (work Z)", &mut t.offset, 0.001, " mm");
+                if t.active().is_none() {
+                    changed |= labelled(ui, "Setter top (work Z)", &mut t.offset, 0.001, " mm");
+                }
             });
+            ui.add_space(4.0);
+            ui.label(RichText::new("Z zero references: the setter top's height above each surface").color(MUTED));
+            let idle = s.mode == Mode::Idle;
+            let mut calibrate = None;
+            egui::Grid::new("z-references").num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
+                for (i, r) in t.references.iter_mut().enumerate() {
+                    changed |= ui.add(egui::TextEdit::singleline(&mut r.name).desired_width(90.0)).changed();
+                    changed |= num(ui, &mut r.setter_top, 0.001, " mm");
+                    if ui.add_enabled(idle, Button::new("Calibrate (probe)")).on_hover_text("Touch the surface with the measured touch probe").clicked() {
+                        calibrate = Some((i, None));
+                    }
+                    if ui.add_enabled(idle, Button::new("Calibrate (gauge)")).on_hover_text("Jog a measured tool onto a gauge block standing on the surface").clicked() {
+                        calibrate = Some((i, Some(self.cal_gauge)));
+                    }
+                    ui.end_row();
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Gauge block").color(MUTED));
+                num(ui, &mut self.cal_gauge, 0.01, " mm");
+            });
+            if let Some((reference, gauge)) = calibrate {
+                self.machine.send(Command::CalibrateZ { reference, gauge });
+            }
             if ui.button("Setter is under the spindle now").clicked() {
                 t.x = s.machine[0];
                 t.y = s.machine[1];
@@ -484,6 +621,40 @@ fn merge_edits(base: &MachineConfig, edited: &MachineConfig, current: &MachineCo
     };
     merge(&b, &e, &mut c);
     serde_json::from_value(c).unwrap_or_else(|_| edited.clone())
+}
+
+/// The Z zero references (table, vise): which one is in use, and a big
+/// button for each that touches the tool off on the setter and sets Z zero
+/// there. Returns the job to run.
+fn z_reference_buttons(ui: &mut egui::Ui, s: &machine::Snapshot) -> Option<ProbeJob> {
+    let setter = &s.config.probing.setter;
+    let in_use = match setter.active() {
+        Some(r) => format!("Z zero: {} (setter top at Z{:.3})", r.name, r.setter_top),
+        None => format!("Z zero: custom (setter top at Z{:.3})", setter.offset),
+    };
+    ui.label(RichText::new(in_use).size(16.0).color(GREEN).strong());
+    let ready = matches!(s.mode, Mode::Idle) || (s.mode == Mode::Running && s.paused.is_some());
+    let mut job = None;
+    ui.horizontal_wrapped(|ui| {
+        for (i, r) in setter.references.iter().enumerate() {
+            // Table and vise get the big buttons; any others are smaller.
+            let (size, min) = if i < 2 { (20.0, Vec2::new(170.0, 56.0)) } else { (15.0, Vec2::new(0.0, 36.0)) };
+            let button = Button::new(RichText::new(format!("Set Z: {}", r.name.to_lowercase())).size(size).strong())
+                .min_size(min);
+            if ui
+                .add_enabled(ready, button)
+                .on_hover_text(format!(
+                    "Measure the tool on the setter and set Z zero on the {} ({:.3} below the setter top). Tool changes keep it.",
+                    r.name.to_lowercase(),
+                    r.setter_top
+                ))
+                .clicked()
+            {
+                job = Some(ProbeJob::SetZ(i));
+            }
+        }
+    });
+    job
 }
 
 #[cfg(test)]

@@ -98,12 +98,21 @@ pub struct MachineConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ToolChangeSettings {
-    /// Stop the spindle, move to the change position, wait for the new tool,
+    /// Stop the spindle, raise Z, move the bed back, wait for the new tool,
     /// measure it and go back. Off: just pause at M6, like Mach3.
     pub guided: bool,
-    /// Machine X/Y to change tools at.
+    /// Machine X to change tools at, used only with `move_x`.
     pub x: f64,
-    pub y: f64,
+    /// Machine Y to change tools at, so the spindle is easy to reach. None:
+    /// the tool setter's Y (see `change_y`).
+    pub y: Option<f64>,
+    /// Also move X to `x`. Off: X stays where it is and only the bed moves.
+    pub move_x: bool,
+    /// Move X to the middle of its travel (`x_travel` from its home end);
+    /// takes the place of `x` and `move_x`.
+    pub centre_x: bool,
+    /// How far X travels from its home switch, mm.
+    pub x_travel: f64,
     /// Lowest machine Z to travel and change tools at; Z is raised to it, never lowered.
     pub z: f64,
     /// Go back to where the tool change started, with the spindle and coolant as they were.
@@ -112,9 +121,21 @@ pub struct ToolChangeSettings {
 
 impl Default for ToolChangeSettings {
     fn default() -> Self {
-        // Next to the tool setter, at the top of Z.
+        // Top of Z, the bed at the tool setter's Y.
         let setter = crate::probing::ToolSetter::default();
-        ToolChangeSettings { guided: true, x: setter.x, y: setter.y, z: 0.0, return_to_start: true }
+        // X travel 343 mm: the DMC2's from the CAD (spindle x -123.7 to 219.3). Its
+        // configured soft limits (Mach3's) don't contain the X home position, so
+        // they can't give the middle.
+        ToolChangeSettings {
+            guided: true,
+            x: setter.x,
+            y: None,
+            move_x: false,
+            centre_x: true,
+            x_travel: 343.0,
+            z: 0.0,
+            return_to_start: true,
+        }
     }
 }
 
@@ -190,6 +211,36 @@ impl MachineConfig {
         }
     }
 
+    /// Machine X the tool change moves to, if it moves X: by default the
+    /// middle of X's travel, so the spindle is easy to reach.
+    pub fn change_x(&self) -> Option<f64> {
+        let t = &self.tool_change;
+        let x = &self.axes[0];
+        let want = if t.centre_x {
+            let half = t.x_travel.abs() / 2.0;
+            if x.home_positive { x.home_position - half } else { x.home_position + half }
+        } else if t.move_x {
+            t.x
+        } else {
+            return None;
+        };
+        // Never past the configured soft limits, nor beyond the home switch: a
+        // wrong travel or sign must not drive X into its end.
+        let (mut lo, mut hi) = (x.soft_min.min(x.soft_max), x.soft_max.max(x.soft_min));
+        if x.home_positive {
+            hi = hi.min(x.home_position);
+        } else {
+            lo = lo.max(x.home_position);
+        }
+        Some(if lo <= hi { want.clamp(lo, hi) } else { x.home_position })
+    }
+
+    /// Machine Y the tool change moves the bed to: by default the tool
+    /// setter's Y (Jonas: that puts the bed where the spindle is easy to reach).
+    pub fn change_y(&self) -> f64 {
+        self.tool_change.y.unwrap_or(self.probing.setter.y)
+    }
+
     pub fn to_steps(&self, pos: &Axes) -> [i64; 6] {
         std::array::from_fn(|i| (pos[i] * self.axes[i].steps_per_unit).round() as i64)
     }
@@ -240,7 +291,12 @@ impl MachineConfig {
             return Err("jog speed must be between 0 and 100%".into());
         }
         let p = &self.probing;
-        for (name, v) in [("probe search feed", p.fast_feed), ("probe latch feed", p.slow_feed), ("probe travel feed", p.travel_feed)] {
+        for (name, v) in [
+            ("probe search feed", p.fast_feed),
+            ("probe latch feed", p.slow_feed),
+            ("probe travel feed", p.travel_feed),
+            ("tool setter repeat tolerance", p.setter.repeat_tolerance),
+        ] {
             positive(name, v)?;
         }
         if self.soft_limits {
@@ -256,7 +312,9 @@ impl MachineConfig {
             let t = &self.tool_change;
             if t.guided {
                 let z = t.z.max(self.axes[2].soft_min);
-                inside("tool change position", [t.x, t.y, z])?;
+                // Without move_x, X stays wherever it is.
+                let x = self.change_x().unwrap_or(self.axes[0].soft_min);
+                inside("tool change position", [x, self.change_y(), z])?;
             }
             let st = &p.setter;
             inside("tool setter", [st.x, st.y, st.travel_z.min(self.axes[2].soft_max)])?;
