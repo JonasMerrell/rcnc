@@ -23,7 +23,7 @@ Load = worst share of the tool's limits at the op's heaviest cut; spindle % of t
 - Chips: Two locating bores 7.5 through the carrier between the bases (op 2 finds them): caution (fill 0.6404)
 - Unfinished faces: none
 
-## Base op2 top: 13.4 min
+## Base op2 top: 12.9 min
 
 | # | Operation | Tool | rpm | Feed | Time | Peak load / spindle |
 |---|---|---|---|---|---|---|
@@ -33,8 +33,8 @@ Load = worst share of the tool's limits at the op's heaviest cut; spindle % of t
 | 4 | Probe carrier bore B | T99 |  |  | 5 s | – |
 | 5 | Face to 9 (3.2) | T24 | 22500 | 2350 | 80 s | 0.34 / 34% (369 W, 3.26 wide × 1.60 deep) |
 | 6 | Rough the channel and outside to Z6 (parts still joined below) | T24 | 22500 | 2350 | 393 s | 0.40 / 40% (442 W, 2.13 wide × 2.80 deep) |
-| 7 | Finish the channel floor (Z6) | T24 | 22500 | 2350 | 57 s | 0.22 / 5% (58 W, 4.15 wide × 0.20 deep) |
-| 8 | Finish the rails, both sides, Z9 to Z6 | T24 | 22500 | 2350 | 47 s | 0.11 / 10% (112 W, 0.42 wide × 3.00 deep) |
+| 7 | Finish the channel floor (Z6), passes along the slide (Y) | T24 | 22500 | 2350 | 17 s | 0.22 / 8% (90 W, 6.35 wide × 0.20 deep) |
+| 8 | Finish the rails, both sides, Z9 to Z6 | T24 | 22500 | 2350 | 54 s | 0.18 / 2% (21 W, 1.35 wide × 0.20 deep) |
 | 9 | Magnet pockets 8.05 x 3.15 (helical, finish floor) | T24 | 22500 | 2350 | 23 s | 0.22 / 2% (23 W, 6.35 wide × 0.05 deep) |
 | 10 | Rest rough below Z6: separates the two bases (light) | T24 | 22500 | 2350 | 45 s | 0.22 / 6% (67 W, 3.13 wide × 0.30 deep) |
 | 11 | Finish the outline 9 to 5, one full-height pass | T24 | 22500 | 2350 | 57 s | 0.13 / 1% (16 W, 0.64 wide × 0.30 deep) |
@@ -48,13 +48,13 @@ Load = worst share of the tool's limits at the op's heaviest cut; spindle % of t
 - Chips: Two locating bores 7.5 through the carrier between the bases (op 2 finds them): caution (fill 0.6407)
 - Unfinished faces: none
 
-## Slider op1 bottom: 12.2 min
+## Slider op1 bottom: 12.0 min
 
 | # | Operation | Tool | rpm | Feed | Time | Peak load / spindle |
 |---|---|---|---|---|---|---|
 | 1 | Probe stock top | T99 |  |  | 2 s | – |
 | 2 | Probe stock centre | T99 |  |  | 19 s | – |
-| 3 | Face the bar top (the sliders' bottoms) 0.2 | T24 | 18000 | 1350 | 67 s | 0.16 / 3% (24 W, 3.19 wide × 0.20 deep) |
+| 3 | Face the bar top (the sliders' bottoms) 0.2, passes along the slide (Y) | T24 | 18000 | 1350 | 55 s | 0.16 / 3% (24 W, 3.19 wide × 0.20 deep) |
 | 4 | Rough round both sliders and the gap to Z4 (0.5 mm stepover) | T24 | 18000 | 1350 | 447 s | 0.36 / 36% (319 W, 2.91 wide × 2.95 deep) |
 | 5 | Finish the walls, one full-height pass (op 2 grips these) | T24 | 18000 | 1350 | 66 s | 0.13 / 13% (111 W, 0.86 wide × 3.15 deep) |
 | 6 | Magnet pockets 8.05 x 3.15 (helical, finish floor) | T24 | 18000 | 1350 | 24 s | 0.16 / 1% (8 W, 4.00 wide × 0.05 deep) |

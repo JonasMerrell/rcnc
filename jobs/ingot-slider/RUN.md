@@ -11,12 +11,12 @@ Op 1 runs in G54, op 2 and the engraving in G55 (rCAD `work_offset`).
 | Program | Station | Time | Peak spindle | Sheet |
 |---|---|---|---|---|
 | `base-op1.nc` | left | 5.3 min | 60% | `base-op1.html` |
-| `base-op2.nc` | right | 13.4 min | 40% | `base-op2.html` |
-| `slider-op1.nc` | left (bar on two 1 mm shims) | 12.2 min | 36% | `slider-op1.html` |
+| `base-op2.nc` | right | 12.9 min | 40% | `base-op2.html` |
+| `slider-op1.nc` | left (bar on two 1 mm shims) | 12.0 min | 36% | `slider-op1.html` |
 | `slider-op2.nc` | right | 6.7 min | 30% | `slider-op2.html` |
 | `slider-engrave.nc` | right, straight after `slider-op2` | 2.5 min | – | `slider-engrave.html` |
-| `base-cycle.nc` | both (G54 left + G55 right) | 19.9 min (rcnc sim) | 59% | `base-cycle.html` |
-| `slider-cycle.nc` | both, with the engraving | 24.3 min (rcnc sim) | 37% | `slider-cycle.html` |
+| `base-cycle.nc` | both (G54 left + G55 right) | 19.4 min (rcnc sim) | 59% | `base-cycle.html` |
+| `slider-cycle.nc` | both, with the engraving | 24.1 min (rcnc sim) | 37% | `slider-cycle.html` |
 
 Playbacks: `*-sim.html` (rCAD simulation with the machine and the vise closed on the work). Pictures:
 `*-vise-iso.png`, `*-vise-front.png`.
@@ -79,7 +79,8 @@ shim strips go under it.**
    - **Brass:** Z comes from the bar's probed top, so Z0 is the bar's bottom on the shims. The guidelines allow
      a probed Z here because op 1 faces that top off.
 3. T24 cuts, in this order:
-   - Faces the top: 0.5 mm off the aluminium, 0.2 mm off the brass.
+   - Faces the top: 0.5 mm off the aluminium, 0.2 mm off the brass. On the brass this is the slider's sliding face,
+     so the passes run along the slide (Y).
    - Roughs round both parts and the 8 mm gap between them.
    - One full-height finish pass on the walls: down to Z6.5 on the aluminium and Z4 on the brass, never lower
      than 0.3 over the jaw tops.
@@ -108,7 +109,8 @@ walls is wider (25.4): make sure the jaws close on the finished walls, not on it
 5. Base:
    - Face to 9.
    - Rough the channel and outside to Z6 (walls leave 0.3, floor 0.2). The two bases stay joined by the gap web.
-   - Finish the channel floor and the rails.
+   - Finish the channel floor, with passes along the slide (Y) so the tool marks run the way the slider moves, and
+     the rails.
    - The magnet pockets.
    - The rest rough below Z6. This **separates the two bases**; it's light, 0.3 deep.
    - The outline's full-height finish pass, 9 to 5.
@@ -150,8 +152,8 @@ fine either way.
 
 | | Separate programs | Cycle | Tool changes |
 |---|---|---|---|
-| Bases | op 1 + op 2 = 7.3 + 14.9 = 22.2 min | **19.9 min** | 6 → **3** |
-| Sliders | op 1 + op 2 + engraving = 14.4 + 9.8 + about 3 = about 27 min | **24.3 min** | 7 → **3** |
+| Bases | op 1 + op 2 = 7.3 + 14.5 = 21.8 min | **19.4 min** | 6 → **3** |
+| Sliders | op 1 + op 2 + engraving = 14.2 + 9.8 + about 3 = about 27 min | **24.1 min** | 7 → **3** |
 
 The times come from the rcnc simulator, including its tool-change and probing moves. At the machine, each saved
 change also saves your swap and the setter touch, about a minute each, so a cycle saves about 3–4 min plus the

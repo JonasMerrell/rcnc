@@ -123,7 +123,7 @@ S += [setup("Base op2 top", 3, "6061-T6", follows="Base op1 bottom", z=LEDGE_Z -
 S += tools(1, ALU) + probe(1, 4, 1.0, find_size=[W, 98]) + find_bores(1, 2.0) + [
     op(1, "face", "Face to 9 (3.2)", tool=24, stepdown=1.6),
     op(1, "adaptive", "Rough the channel and outside to Z6 (parts still joined below)", tool=24, bottom=6.0, stepdown=3.0, stepover=0.095, leave=0.3, leave_floor=0.2),
-    op(1, "clear", "Finish the channel floor (Z6)", tool=24, top=6.1, bottom=6.0, stepdown=0.1, stepover=0.4, leave=0.0, leave_floor=0.0, rest=False),
+    op(1, "parallel", "Finish the channel floor (Z6), passes along the slide (Y)", tool=24, angle=90, stepover=0.4, slope_max=2, bottom=6.0, leave=0.0, rest=True),
     op(1, "contour", "Finish the rails, both sides, Z9 to Z6", tool=24, side="outside", top=9.0, bottom=6.0, stepdown=10, lead=2, ramp_angle=90),
     op(1, "bore", "Magnet pockets 8.05 x 3.15 (helical, finish floor)", tool=24),
     op(1, "adaptive", "Rest rough below Z6: separates the two bases (light)", tool=24, bottom=5.02, stepdown=1.0, stepover=0.095, leave=0.3, leave_floor=0.2, rest=True),
@@ -141,7 +141,7 @@ shims = [{"name": f"1 mm shim strip (25 x 39) under the {e} slider, op 1 only", 
 S += [setup("Slider op1 bottom", 4, "Brass C360", stock={"size": [W, 100, 9.5], "bottom": 1.3, "material": "Brass C360"}, orient="bottom", origin="stock_bottom_center",
             station_x=FIXED_L - W / 2, fixtures=jaws(W, +1, z0=-1.0, extra=shims), zref="", model="DMC2-twostation-slider", with_=["Slider op2 top", "Slider op2 engrave"], max_feed=BRASS_LINK)]
 S += tools(2, BRASS) + probe(2, 3, 1.5) + [
-    op(2, "face", "Face the bar top (the sliders' bottoms) 0.2", tool=24, stepdown=0.2),
+    op(2, "face", "Face the bar top (the sliders' bottoms) 0.2, passes along the slide (Y)", tool=24, stepdown=0.2, angle=90),
     op(2, "adaptive", "Rough round both sliders and the gap to Z4 (0.5 mm stepover)", tool=24, bottom=4.0, stepdown=5.3, stepover=0.08, leave=0.3, leave_floor=0.2),
     op(2, "contour", "Finish the walls, one full-height pass (op 2 grips these)", tool=24, side="outside", bottom=4.0, stepdown=10, lead=2, ramp_angle=90),
     op(2, "bore", "Magnet pockets 8.05 x 3.15 (helical, finish floor)", tool=24),

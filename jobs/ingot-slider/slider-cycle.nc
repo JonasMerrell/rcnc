@@ -19,7 +19,7 @@
 (T99 YIDOFENG 3D touch probe - touch probe, D2 stylus ball, flute length 12, stickout 40)
 (T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)
 (T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill, flute length 18, stickout 22)
-(estimated time 21:21)
+(estimated time 21:09)
 G21 G17 G40 G49 G80 G90 G91.1 G94 G64
 G54
 
@@ -57,97 +57,37 @@ M0
 G53 G0 Z0
 G54
 
-(Face the bar top [the sliders' bottoms] 0.2 - Face)
+(Face the bar top [the sliders' bottoms] 0.2, passes along the slide [Y] - Face)
 G53 G0 Z0
 T24 M6
 S18000 M3
 M8
-G0 X-16.875 Y-50
+G0 X-12.7 Y-54.175
 G0 Z14.5
-X-16.875 Y-50
+X-12.7 Y-54.175
 Z11.5
 G1 Z9.3 F250
-X16.875 F1350
-Y-47.5
-X-16.875
-Y-45
-X16.875
-Y-42.5
-X-16.875
-Y-40
-X16.875
-Y-37.5
-X-16.875
-Y-35
-X16.875
-Y-32.5
-X-16.875
-Y-30
-X16.875
-Y-27.5
-X-16.875
-Y-25
-X16.875
-Y-22.5
-X-16.875
-Y-20
-X16.875
-Y-17.5
-X-16.875
-Y-15
-X16.875
-Y-12.5
-X-16.875
-Y-10
-X16.875
-Y-7.5
-X-16.875
-Y-5
-X16.875
-Y-2.5
-X-16.875
-Y0
-X16.875
-Y2.5
-X-16.875
-Y5
-X16.875
-Y7.5
-X-16.875
-Y10
-X16.875
-Y12.5
-X-16.875
-Y15
-X16.875
-Y17.5
-X-16.875
-Y20
-X16.875
-Y22.5
-X-16.875
-Y25
-X16.875
-Y27.5
-X-16.875
-Y30
-X16.875
-Y32.5
-X-16.875
-Y35
-X16.875
-Y37.5
-X-16.875
-Y40
-X16.875
-Y42.5
-X-16.875
-Y45
-X16.875
-Y47.5
-X-16.875
-Y50
-X16.875
+Y54.175 F1350
+X-10.16
+Y-54.175
+X-7.62
+Y54.175
+X-5.08
+Y-54.175
+X-2.54
+Y54.175
+X0
+Y-54.175
+X2.54
+Y54.175
+X5.08
+Y-54.175
+X7.62
+Y54.175
+X10.16
+Y-54.175
+X12.7
+Y54.175
 G0 Z14.5
 
 (Rough round both sliders and the gap to Z4 [0.5 mm stepover] - Adaptive)
