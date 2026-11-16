@@ -209,6 +209,17 @@ deep and narrow at high feed rather than wide and shallow.
   library, `create_cam` per setup, `cam_tool`s, `cam_op`s, `simulate_cam`, `render_cam`, `export_gcode`,
   `export_setup_sheet`.
 - A later setup inherits the earlier setups' stock automatically, so op 2 sees what op 1 cut.
+- **Several setups in one program (two vise stations):** the op 1 setup leads an rCAD *job*.
+  - `create_cam` takes `with: ["<op 2 setup>"]`. Each setup keeps its own `on_table`, stock, fixtures and
+    `work_offset` (1 = G54, 2 = G55, …).
+  - `export_gcode`, `simulate_cam`, `export_setup_sheet` and `export_cam_simulation` on the lead do the whole job
+    in one file: tools grouped across stations, and one simulation with both stations on the machine.
+    `stations: [...]` keeps only some (first and last cycles).
+  - It needs rcnc with per-work-offset Z references (PR 14).
+  - Use a machine model with both vise stations' jaws closed (see `jobs/ingot-slider/vise_machines.py`).
+  - Set each setup's `on_table` z so that its stock box bottom (which for op 2 includes op 1's facing) is where it
+    sits on the vise.
+  - Example: `jobs/ingot-slider/cam.py`.
 - Run it with `~/src/cad-rust-app/target/release/rcad run cam.json > out 2> err`. Every tool call prints a
   JSON line; summarise them with a small script (see `jobs/phone-stand/adaptive-handoff/variants/rep.py`).
 - Try settings as variants of the same JSON, one simulation at a time. Keep the ones that win and say why.
