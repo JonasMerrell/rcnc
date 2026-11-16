@@ -85,12 +85,13 @@ shim strips go under it.**
      cuts them away.
    - Squares both ends to 98.0, full height. These are the parts' outer ends.
 4. T1 cuts:
-   - Aluminium: the 1.5 chamfer on the bases' bottom outline.
-   - Brass: a 0.3 edge break on the sliders' bottom outline and the pocket rims.
+   - Both: a 0.3 edge break on the bottom outline (brass: and the pocket rims). It's kept at 0.3 because op 2
+     stands the parts on the 1.9 mm ledges: that leaves **1.6 mm of land on each ledge**, and 4.4 of the
+     4.7 mm grip.
 
 ## Op 2 (top side up), right station
 
-Turn the blank over, either way: the carrier bores are symmetric about the middle. The finished bottom goes down
+Turn the blank over, either way (the parts sit on 1.6 mm of land on each 1.9 ledge; wipe the ledges clean first): the carrier bores are symmetric about the middle. The finished bottom goes down
 on the ledges, with op 1's finished walls in the jaws. Those walls reach 5.7 mm (aluminium) / 5.3 mm (brass)
 above the ledge, and the jaws grip 4.7. Push the bar against the fixed jaw and clamp. The raw band above the
 walls is wider (25.4): make sure the jaws close on the finished walls, not on it.

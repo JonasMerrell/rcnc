@@ -12,7 +12,7 @@ Magnetic fidget slider: a C360 brass "ingot" slides in a 6061 channel base and c
 | Outline corners | R2.5 (ends on the channel wall) | R3 |
 | Feature | channel 20.0 wide × 3.0 deep, full length (2.5 mm rails) | ingot chamfer 2.0 × 45° round the top (top field 15.6 × 41, R1) |
 | Magnet pockets | 3 × Ø8.05 × 3.15 in the channel floor, y −15 / 0 / +15 | 3 × Ø8.05 × 3.15 in the bottom, same places |
-| Edges | 1.5 chamfer bottom outline and rail tops outside; 0.3 channel edges, floor ends, pocket rims | 0.3 bottom outline and pocket rims |
+| Edges | 1.5 chamfer on the rail tops outside; 0.3 on the bottom outline, channel edges, floor ends, pocket rims | 0.3 bottom outline and pocket rims |
 | Finish | every face machined | every face machined; crosshatch engraved 0.4 deep on the top field (swappable) |
 | Mass (approx.) | 18 g | 53 g |
 
@@ -29,11 +29,27 @@ Fit: 0.2 mm side clearance in the channel; the slider stands 5 mm above the rail
 - **Base outline corners R2.5** (= the rail width), so the corner arc ends on the channel wall instead of
   leaving a sliver of rail end.
 - **Outer vertical edges are radiused (R2.5 / R3), not chamfered**: a vertical edge can't be chamfered with a
-  vertical chamfer mill. The 1.5 chamfers go round the base's top and bottom outlines.
+  vertical chamfer mill. The 1.5 chamfers go round the base's top outline only.
+- **Base bottom outline: 0.3 edge break, not a 1.5 chamfer** (Jonas): op 2 stands the base on the vise's 1.9 mm
+  ledges; a 1.5 chamfer would leave 0.4 mm of land on each and take 1.5 off the gripped walls.
 - Magnet pitch kept at 15 (3.5 mm wall from the end pockets to the part ends).
 - Blanks: two parts end to end 8 mm apart, 98.0 overall: the parts' outer ends are the faced blank ends.
 - Op 2 locating (guidelines): op 1 bores two Ø7.5 holes through the carrier in the gap (X ±5); op 2 finds them
   (rcnc Find bores) before roughing. X can't come from the fixed jaw: the 98 blank is longer than the 95.5 jaws.
+
+## Seating in op 2 (checked)
+
+The flipped parts stand on the vise's built-in ledges, 1.9 mm wide along each jaw, and the jaws close on the walls
+op 1 finished.
+
+| | Width in the jaws | Bottom edge break | Land on each ledge | Gripped wall |
+|---|---|---|---|---|
+| Base | 25.0 | 0.3 | 1.6 mm, along 43.75 of each part's 45 mm (the outer 1.25 overhangs the jaw ends) | 4.4 of 4.7 |
+| Slider | 19.6 | 0.3 | 1.6 mm, as for the base | 4.4 of 4.7 |
+
+Nothing else takes support away. The slider's magnet pockets reach x ±4.0 and the ledges start at ±7.9, so they
+are well clear. The base has no bottom pockets. The carrier bores and the 8 mm gap are in the carrier, between the
+parts, so the parts' own seats aren't touched.
 
 ## Stock and the jaws (checked)
 

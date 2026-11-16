@@ -14,7 +14,7 @@ Load = worst share of the tool's limits at the op's heaviest cut; spindle % of t
 | 6 | Two locating bores 7.5 through the carrier between the bases (op 2 finds them) | T24 | 22500 | 2350 | 14 s | 0.22 / 2% (24 W, 6.35 wide × 0.05 deep) |
 | 7 | Rough the sawn ends off to Z2.5 | T24 | 22500 | 2350 | 16 s | 0.27 / 27% (291 W, 0.89 wide × 4.00 deep) |
 | 8 | Finish the ends 98 apart, full height (op 2 finds Y on them) | T24 | 22500 | 2350 | 12 s | 0.11 / 6% (68 W, 0.07 wide × 9.70 deep) |
-| 9 | Chamfer 1.5 the bottom outline | T1 | 22500 | 1850 | 13 s | – |
+| 9 | Edge break 0.3 the bottom outline (op 2 sits it on the 1.9 ledges) | T1 | 22500 | 1850 | 12 s | – |
 
 - Simulation: no problems
 - Peak spindle: 60% in "Rough round both bases and the gap to Z6.5 (0.6 mm stepover)" at X-9.3 Y0.1 Z9.3 (3.25 wide × 2.85 deep, F2350)

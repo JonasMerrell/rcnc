@@ -7,7 +7,7 @@
 (T99 YIDOFENG 3D touch probe - touch probe, D2 stylus ball, flute length 12, stickout 40)
 (T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)
 (T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill, flute length 18, stickout 22)
-(estimated time 5:17)
+(estimated time 5:16)
 G21 G17 G40 G49 G80 G90 G91.1 G94 G64
 G54
 (RCNC Z_REFERENCE Vise)
@@ -3161,7 +3161,7 @@ Y52.175
 G0 Z5
 Z17.7
 
-(Chamfer 1.5 the bottom outline - Chamfer)
+(Edge break 0.3 the bottom outline [op 2 sits it on the 1.9 ledges] - Chamfer)
 G53 G0 Z0
 M5
 M9
@@ -3171,7 +3171,7 @@ M8
 G0 Z17.7
 X-13.492 Y-6.276
 Z14.2
-G1 Z9.7 F200
+G1 Z10.9 F200
 G2 X-10 Y-3 I3.493 J-0.224 F1850
 G1 X10
 G2 X13.5 Y-6.5 I-0.001 J-3.501
@@ -3183,7 +3183,7 @@ G1 X-13.492 Y-6.276
 G0 Z17.7
 X-10.996 Y3.145
 Z14.2
-G1 Z9.7 F200
+G1 Z10.9 F200
 G2 X-13.5 Y6.5 I0.997 J3.356 F1850
 G1 X-13.492 Y46.724
 G2 X-10 Y50 I3.493 J-0.224
