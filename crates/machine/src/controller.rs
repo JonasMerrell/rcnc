@@ -4146,10 +4146,9 @@ mod tests {
         assert!(c.snapshot().machine[2] <= top + 0.01, "{:?}", c.snapshot().machine);
     }
 
-    /// X from the fixed jaw on the left: the raw stock's -X face sits 0.5 mm off
-    /// it (not square), so the jaw, not the stock, gives the X it is clamped at.
-    #[test]
-    fn find_stock_takes_x_from_the_fixed_jaw() {
+    /// Runs `program` on a 39 x 77 x 20 block whose -X face sits 0.5 mm off a
+    /// fixed jaw on its left; returns the snapshot at the end.
+    fn find_stock_beside_a_jaw(program: &str) -> Snapshot {
         let clock = Arc::new(ManualClock::default());
         let config = crate::sim::dmc2_sim_config();
         let mut sim = Simulator::new(clock.clone());
@@ -4169,7 +4168,7 @@ mod tests {
         run_until_idle(&mut c, &clock, 600.0);
         c.handle(Command::Load {
             name: "t".into(),
-            text: "(RCNC Z_REFERENCE Vise)\nT99 M6\n(RCNC FIND_STOCK SIZE=39,77,20 AT=0,0,20 KEEPZ=1 JAWX=-1 JAWZ=2.5)\nM30".into(),
+            text: program.into(),
         });
         c.handle(Command::CycleStart);
         let spu2 = |a: usize| config.axes[a].steps_per_unit;
@@ -4201,6 +4200,14 @@ mod tests {
         }
         let s = c.snapshot();
         assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?} {:?}", s.alarm, s.log);
+        s
+    }
+
+    /// X from the fixed jaw on the left: the raw stock's -X face sits 0.5 mm off
+    /// it (not square), so the jaw, not the stock, gives the X it is clamped at.
+    #[test]
+    fn find_stock_takes_x_from_the_fixed_jaw() {
+        let s = find_stock_beside_a_jaw("(RCNC Z_REFERENCE Vise)\nT99 M6\n(RCNC FIND_STOCK SIZE=39,77,20 AT=0,0,20 KEEPZ=1 JAWX=-1 JAWZ=2.5)\nM30");
         let jaw = s.log.iter().find(|l| l.starts_with("Fixed jaw")).unwrap();
         assert!(jaw.contains("the stock's own face was 0.500 mm from it"), "{jaw}");
         // the jaw's face reads X-19.5: the stock's middle is 0.5 mm further right than its own faces say
@@ -4210,5 +4217,17 @@ mod tests {
         let stock = s.log.iter().find(|l| l.starts_with("Stock found")).unwrap();
         let centre: f64 = stock[stock.find("centre machine X").unwrap() + 16..].split(' ').next().unwrap().parse().unwrap();
         assert!(close(centre - 19.5 - jaw_machine, 0.5), "{stock} / {jaw}");
+    }
+
+    /// JAWAT: the face against the jaw is a wall machined inside the wider block
+    /// the sides are touched on (a part flipped onto its finished walls): work X
+    /// comes from the jaw and that face's place, not from the block's width.
+    #[test]
+    fn find_stock_jaw_at_a_machined_wall() {
+        let s = find_stock_beside_a_jaw("(RCNC Z_REFERENCE Vise)\nT99 M6\n(RCNC FIND_STOCK SIZE=39,77,20 AT=0,0,20 KEEPZ=1 JAWX=-1 JAWZ=2.5 JAWAT=-16.6)\nM30");
+        let jaw = s.log.iter().find(|l| l.starts_with("Fixed jaw")).unwrap();
+        assert!(jaw.contains("the stock's face against it is X-16.6"), "{jaw}");
+        let jaw_machine: f64 = jaw["Fixed jaw at machine X".len()..].split(':').next().unwrap().parse().unwrap();
+        assert!(close(jaw_machine - s.work_offsets[0][0], -16.6), "jaw at work X{}", jaw_machine - s.work_offsets[0][0]);
     }
 }
