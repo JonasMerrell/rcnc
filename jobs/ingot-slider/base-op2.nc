@@ -9,7 +9,7 @@
 (T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill, flute length 18, stickout 22)
 (estimated time 13:25)
 G21 G17 G40 G49 G80 G90 G91.1 G94 G64
-G54
+G55
 (RCNC Z_REFERENCE Vise)
 
 (Probe stock top - Probe)
