@@ -30,6 +30,9 @@ pub struct Frame {
     pub chatter: Option<(f64, f64)>,
     /// Level of the window, dB re full scale.
     pub loud_db: f64,
+    /// Level of the teeth's beat (the tooth-passing frequency at the heard speed), dB on the spectrum's scale:
+    /// in a cut it rises with the load, so it's a cleaner load measure than the whole window's level.
+    pub tooth_db: Option<f64>,
 }
 
 pub struct Analyzer {
@@ -129,6 +132,11 @@ impl Analyzer {
         }
         // chatter: the strongest peak between 300 Hz and the top that isn't a rotation harmonic (at the heard speed)
         let heard_rot = f.rpm.unwrap_or(ctx.rpm) / 60.0;
+        let tooth = heard_rot * teeth;
+        let ti = (tooth / bin).round() as usize;
+        if ti >= 1 && ti + 1 < db.len() {
+            f.tooth_db = Some(db[ti - 1].max(db[ti]).max(db[ti + 1]));
+        }
         let (lo, hi) = ((300.0 / bin) as usize, ((self.rate as f64 / 2.0 * 0.9) / bin) as usize);
         if hi > lo + 8 {
             let mut band: Vec<f64> = db[lo..hi].to_vec();
@@ -244,6 +252,17 @@ pub(crate) mod tests {
         let ctx = Context { rpm: 24_000.0, teeth: 2, cutting: true, ..Default::default() };
         let f = &a.push(&cut(24_000.0 * 0.97, 3, None, 0.5, 48_000), &ctx)[0];
         assert!((f.droop.unwrap() - 0.03).abs() < 0.004 && f.chatter.is_none(), "{f:?}");
+    }
+
+    #[test]
+    fn the_teeth_beat_louder_in_a_heavier_cut() {
+        let a = Analyzer::new(48_000);
+        let ctx = Context { rpm: 24_000.0, teeth: 3, cutting: true, ..Default::default() };
+        let light: Vec<f32> = cut(24_000.0, 3, None, 0.5, 48_000).iter().map(|s| s * 0.3).collect();
+        let heavy = cut(24_000.0, 3, None, 0.5, 48_000);
+        let (l, h) = (a.analyse(&light[..a.n], &ctx).tooth_db.unwrap(), a.analyse(&heavy[..a.n], &ctx).tooth_db.unwrap());
+        // 0.3 of the amplitude: about 10.5 dB lower
+        assert!((h - l - 10.46).abs() < 1.0, "{l} {h}");
     }
 
     #[test]

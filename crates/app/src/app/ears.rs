@@ -30,6 +30,8 @@ pub struct Ears {
     problem: Option<String>,
     /// What the running program sounds like, and where it goes when the program ends.
     log: Option<(std::path::PathBuf, CutLog)>,
+    /// A program with `(RCNC RECORD_AUDIO)` in it: the whole run's sound, written as a WAV beside it.
+    recording: Option<(std::path::PathBuf, Vec<f32>)>,
     pub last: Option<Frame>,
     /// Recent chatter verdicts, to steady the indicator.
     chatter_recent: std::collections::VecDeque<bool>,
@@ -56,6 +58,7 @@ impl Ears {
             analyzer: None,
             problem: None,
             log: None,
+            recording: None,
             last: None,
             chatter_recent: Default::default(),
             tap: Tap::Idle,
@@ -114,7 +117,10 @@ impl Ears {
         let running = matches!(s.mode, Mode::Running) && s.program_name.is_some();
         if running && self.log.is_none() {
             if let Some(p) = program {
-                self.log = Some((CutLog::path_for(p), CutLog::new(&p.display().to_string(), &src.name())));
+                // an air cut's log goes beside the real one, not over it
+                let air = s.air_cut.is_some();
+                self.log = Some((CutLog::path_for_run(p, air), CutLog::new(&p.display().to_string(), &src.name())));
+                self.recording = records_audio(&s.program).then(|| (CutLog::wav_for_run(p, air), Vec::new()));
             }
         }
         if let Some((_, log)) = &mut self.log {
@@ -122,10 +128,21 @@ impl Ears {
                 log.add(f);
             }
         }
+        if let Some((_, rec)) = &mut self.recording {
+            // at most an hour (about 330 MB at 48 kHz)
+            if rec.len() < src.rate() as usize * 3600 {
+                rec.extend_from_slice(&samples);
+            }
+        }
         if !running && !matches!(s.mode, Mode::Probing) && s.paused.is_none() {
             if let Some((path, log)) = self.log.take() {
                 if !log.lines.is_empty() {
                     let _ = log.save(&path);
+                }
+            }
+            if let Some((path, rec)) = self.recording.take() {
+                if !rec.is_empty() {
+                    let _ = listen::write_wav(&path, &rec, src.rate());
                 }
             }
         }
@@ -170,6 +187,10 @@ impl Ears {
         }
     }
 
+    pub fn recording(&self) -> bool {
+        self.recording.is_some()
+    }
+
     pub fn listening(&self) -> bool {
         self.source.is_some()
     }
@@ -190,6 +211,9 @@ impl Ears {
             _ => ("mic: on".to_string(), MUTED),
         };
         ui.label(RichText::new(text).size(13.0).color(color).strong()).on_hover_text("From the microphone: the spindle's speed under load (droop) and chatter. Logged per line next to the program as .cutlog.json.");
+        if self.recording.is_some() {
+            ui.label(RichText::new("● REC").size(13.0).color(RED).strong()).on_hover_text("The program asked for (RCNC RECORD_AUDIO): its sound is saved as a .wav beside it when it ends");
+        }
     }
 
     /// The Settings page's part.
@@ -278,5 +302,20 @@ impl Ears {
                 }
             }
         }
+    }
+}
+
+/// A program asks for its run to be recorded with an `(RCNC RECORD_AUDIO)` comment (a calibration program).
+pub fn records_audio(program: &str) -> bool {
+    program.lines().any(|l| l.trim().to_ascii_uppercase().starts_with("(RCNC RECORD_AUDIO"))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_program_asks_to_be_recorded() {
+        assert!(super::records_audio("G21\n(rcnc record_audio)\nM30"));
+        assert!(super::records_audio("(RCNC RECORD_AUDIO: calibration passes)"));
+        assert!(!super::records_audio("G21\n(RECORD_AUDIO)\nM30"));
     }
 }

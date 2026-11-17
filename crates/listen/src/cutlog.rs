@@ -30,6 +30,13 @@ pub struct Line {
     pub chatter_hz: f64,
     pub loud_mean_db: f64,
     pub loud_max_db: f64,
+    /// The teeth's beat (tooth-passing frequency), dB: mean and highest over the windows it was found in.
+    #[serde(default)]
+    pub tooth_mean_db: f64,
+    #[serde(default)]
+    pub tooth_max_db: f64,
+    #[serde(default)]
+    pub tooth_frames: u32,
 }
 
 impl CutLog {
@@ -57,6 +64,11 @@ impl CutLog {
         l.rpm = l.rpm.max(f.ctx.rpm);
         l.loud_mean_db += (f.loud_db - l.loud_mean_db) / l.frames as f64;
         l.loud_max_db = l.loud_max_db.max(f.loud_db);
+        if let Some(t) = f.tooth_db {
+            l.tooth_frames += 1;
+            l.tooth_mean_db += (t - l.tooth_mean_db) / l.tooth_frames as f64;
+            l.tooth_max_db = if l.tooth_frames == 1 { t } else { l.tooth_max_db.max(t) };
+        }
         if let Some(d) = f.droop {
             l.heard += 1;
             l.droop_mean += (d - l.droop_mean) / l.heard as f64;
@@ -71,8 +83,23 @@ impl CutLog {
 
     /// `<program>.cutlog.json` beside the program.
     pub fn path_for(program: &std::path::Path) -> std::path::PathBuf {
+        Self::beside(program, ".cutlog.json")
+    }
+
+    /// Where a run's log goes: `<program>.air.cutlog.json` for an air cut (so it doesn't replace the real
+    /// run's), else `<program>.cutlog.json`.
+    pub fn path_for_run(program: &std::path::Path, air: bool) -> std::path::PathBuf {
+        Self::beside(program, if air { ".air.cutlog.json" } else { ".cutlog.json" })
+    }
+
+    /// The recording of a run (`(RCNC RECORD_AUDIO)` in the program): `<program>.wav` / `<program>.air.wav`.
+    pub fn wav_for_run(program: &std::path::Path, air: bool) -> std::path::PathBuf {
+        Self::beside(program, if air { ".air.wav" } else { ".wav" })
+    }
+
+    fn beside(program: &std::path::Path, ext: &str) -> std::path::PathBuf {
         let mut p = program.as_os_str().to_owned();
-        p.push(".cutlog.json");
+        p.push(ext);
         p.into()
     }
 
@@ -110,6 +137,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let p = CutLog::path_for(&dir.join("op2-top.nc"));
         assert!(p.to_string_lossy().ends_with("op2-top.nc.cutlog.json"));
+        assert_eq!(CutLog::path_for_run(&dir.join("op2-top.nc"), false), p);
+        assert!(CutLog::path_for_run(&dir.join("op2-top.nc"), true).to_string_lossy().ends_with("op2-top.nc.air.cutlog.json"));
+        assert!(CutLog::wav_for_run(&dir.join("op2-top.nc"), true).to_string_lossy().ends_with("op2-top.nc.air.wav"));
+        assert!(log.lines[&40].tooth_frames > 0 && log.lines[&40].tooth_mean_db > log.lines[&40].loud_mean_db - 200.0);
         log.save(&p).unwrap();
         // (serde_json doesn't read back every float to the last bit)
         assert_eq!(serde_json::to_string(&CutLog::load(&p).unwrap()).unwrap().len(), serde_json::to_string(&log).unwrap().len());
