@@ -70,12 +70,12 @@ S += out(0, "op1a-calibrate")
 
 # ---- op 1: the gauge's top side (studio 3: gauge 3 up on the carrier, end lugs with bores), no probing ----
 S += [setup("Op 1 top", 3, follows="Op 1a calibration")]
-S += [tool(1, 1), tool(1, 24), tool(1, 11)]
+S += [tool(1, 11)]   # the tool table is the document's: T1 and T24 are there from op 1a
 S += [
     op(1, "face", "Face the top to Z19 (what the calibration left of the band)", tool=24, stepdown=1.0),
+    op(1, "trace", "Cut the top slots and their end reliefs to size (inside the outline, 1 mm levels, F1000: the first lap is a full-width cut)", tool=24, sketches=[3], side="inside", top=19.0, depth=6.0, stepdown=1.0, leave=0.0, feed=1000, plunge_feed=250),
+    op(1, "adaptive", "Rough everything above Z8: the end lugs, the band beside the gauge, the dish", tool=24, bottom=8.0, stepdown=5.5, stepover=0.1, leave=0.3, leave_floor=0.0, rest=True),
     op(1, "contour", "Rough the walls to Z5 and the lugs to Z8 (extra passes at 25% of Ø outside the wall)", tool=24, side="outside", bottom=5.0, stepdown=7.0, leave=0.3, finish_lap=0, seam=[-20, 0]),
-    op(1, "clear", "Cut the top slots 6.8 wide to size (1.5 mm levels, slow: a full-width cut)", tool=24, stepdown=1.5, leave=0.0, leave_floor=0.0, rest=True, feed=1000, plunge_feed=250),
-    op(1, "adaptive", "Rough the thumb dish", tool=24, bottom=15.0, stepdown=3.5, stepover=0.1, leave=0.2, leave_floor=0.2, rest=True),
     op(1, "contour", "Finish the walls and end faces Z19 to Z8, one full-height pass (seam mid -X side)", tool=24, side="outside", bottom=8.0, stepdown=12, seam=[-20, 0]),
     op(1, "contour", "Finish the walls Z8 to Z5 (lugs' outsides too)", tool=24, side="outside", top=8.0, bottom=5.0, stepdown=3.5, seam=[-20, 0]),
     op(1, "bore", "Two Ø8 bores through the lugs (op 2 finds them)", tool=24, points=[[0, 52], [0, -52]], thread_diameter=8.0, bottom=-0.5),

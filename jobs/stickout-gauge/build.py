@@ -13,10 +13,10 @@ import json, math
 
 W, L, H = 23.0, 88.0, 16.0         # gauge (23 wide: 3 mm outer slot walls, stiff in op 2's jaws)
 SW, SD = 6.8, 6.0                  # slot width (6.35 / 6 tools slide in), depth
-SX = 5.1                           # slot centres at x +-5.1: 3.0 outer walls, 3.4 web
+SX = 0.0                           # one slot per end per face, centred (the relief needs the width)
 # (face, end, x, stick-out): end +1 = +Y
-SLOTS = [("top", 1, 5, 24), ("top", 1, -5, 22), ("top", -1, 5, 21), ("top", -1, -5, 26),
-         ("bottom", 1, 5, 19), ("bottom", 1, -5, 18), ("bottom", -1, 5, 20), ("bottom", -1, -5, 23)]
+SLOTS = [("top", 1, 0, 24), ("top", -1, 0, 21), ("bottom", 1, 0, 22), ("bottom", -1, 0, 26)]
+RW, RL = 13.0, 7.0                 # cross relief at each slot's end: its far wall (flat across 6.65 > a tool's 6.35) is the stop
 DISH_D, DISH_H = 16.0, 3.5         # thumb dish, spherical, top face middle
 CH, EB = 0.5, 0.3                  # outer edge chamfer, edge break elsewhere
 TXT_H, TXT_D = 4.0, 0.3            # engraved numbers
@@ -59,9 +59,16 @@ def rect(x0, y0, x1, y1):
 
 
 def slot_rect(end, x, s, over=2.0):
-    """The slot's plan: from `over` past the end face to s in from it."""
+    """The slot and its end relief as one closed outline: 6.8 wide from `over` past the end face to s in from it,
+    where a 13 x 7 relief ends it. The relief's far wall is the stop the tool's tip lands on: an end mill can't cut
+    a flat slot end, but moving sideways along the relief it cuts a flat wall wider than the tool."""
     e = end * L / 2
-    return rect(x - SW / 2, e - end * s, x + SW / 2, e + end * over)
+    yo, yf = e + end * over, e - end * s
+    yr = yf + end * RL
+    P = lambda px, py: [round(px, 4), round(py, 4)]
+    hw, rw = SW / 2, RW / 2
+    pts = [P(x - hw, yo), P(x + hw, yo), P(x + hw, yr), P(x + rw, yr), P(x + rw, yf), P(x - rw, yf), P(x - rw, yr), P(x - hw, yr)]
+    return {"type": "polyline", "points": pts, "closed": True}
 
 
 def gauge(d, z0=0.0, sharp=False):
@@ -86,10 +93,10 @@ def gauge(d, z0=0.0, sharp=False):
         for f, e, x, s in SLOTS:
             if f != fc:
                 continue
-            y = e * (L / 2 - s - 3.2)
-            # read from the open end: on the bottom face the text is mirrored in X so it reads right side up there
-            tx = x if up else -x
-            items.append({"type": "text", "at": [tx - 3.2, y - TXT_H / 2], "text": str(s), "height": TXT_H})
+            # anchor is the text's lower left: past the relief toward the open end
+            y = e * (L / 2 - s + RL + 1.5) - (TXT_H if e < 0 else 0.0)
+            # beside the slot (x 4.2 .. about 9.5): on the bottom face mirrored so it reads right way round there
+            items.append({"type": "text", "at": [4.2 if up else -9.6, y], "text": str(s), "height": TXT_H})
         # left as sketches: the CAM engraves them (a text extrude leaves stray mesh points that spoil renders)
         d.sketch(items, face(z, 0, 14, up))
 
@@ -127,10 +134,10 @@ d.studio("In use")
 gauge(d)
 d.S.append({"tool": "set_part", "args": {"body": [2, 0], "name": "Gauge", "color": "#c9ced6", "finish": "metal"}})
 z_ax = H - SD + 6.35 / 2
-sk = d.sketch([{"type": "circle", "center": [5, z_ax], "radius": 6.35 / 2}], {"kind": "origin_plane", "plane": "Front"})
+sk = d.sketch([{"type": "circle", "center": [0, z_ax], "radius": 6.35 / 2}], {"kind": "origin_plane", "plane": "Front"})
 tool = d.feat("extrude", {"profiles": [{"sketch": sk}], "depth": 21 + 40, "op": "new", "end": "blind"}, "1/4 tool")
 d.feat("transform", {"bodies": [{"kind": "body", "body": [tool, 0]}], "mode": "translate", "direction": {"kind": "axis", "axis": 1}, "distance": "-23"}, "Tool tip on the 21 slot's end wall (21 out of the nut)")
-sk = d.sketch([{"type": "polygon", "center": [5, z_ax], "radius": 14, "sides": 8}], {"kind": "origin_plane", "plane": "Front"})
+sk = d.sketch([{"type": "polygon", "center": [0, z_ax], "radius": 14, "sides": 8}], {"kind": "origin_plane", "plane": "Front"})
 nut = d.feat("extrude", {"profiles": [{"sketch": sk}], "depth": 17.5, "op": "new"}, "ER16 nut (28 across)")
 d.feat("transform", {"bodies": [{"kind": "body", "body": [nut, 0]}], "mode": "translate", "direction": {"kind": "axis", "axis": 1}, "distance": "-44"}, "Nut face on the gauge's end face")
 d.S.append({"tool": "describe", "args": {}})
