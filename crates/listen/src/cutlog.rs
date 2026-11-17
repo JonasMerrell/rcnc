@@ -10,6 +10,31 @@ pub struct CutLog {
     /// The input it was heard on.
     pub input: String,
     pub lines: BTreeMap<usize, Line>,
+    /// Every window in order, with where the tool was: passes can be told apart by position and time even
+    /// when the line is wrong (a board that doesn't report it), and a run that ends early keeps its last seconds.
+    #[serde(default)]
+    pub timeline: Vec<Moment>,
+}
+
+/// One analysed window (about 0.09 s apart).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Moment {
+    /// Seconds since the log started.
+    pub t: f64,
+    pub line: usize,
+    pub op: String,
+    pub cutting: bool,
+    /// Work X, Y, Z and the real speed along the path, mm/min.
+    pub pos: [f64; 3],
+    pub velocity: f64,
+    /// Programmed and heard spindle speed, droop (share).
+    pub rpm: f64,
+    pub heard_rpm: Option<f64>,
+    pub droop: Option<f64>,
+    pub loud_db: f64,
+    pub tooth_db: Option<f64>,
+    /// Chatter heard: frequency, dB over the background.
+    pub chatter: Option<(f64, f64)>,
 }
 
 /// One program line: what it asked for and what was heard while it ran.
@@ -41,7 +66,26 @@ pub struct Line {
 
 impl CutLog {
     pub fn new(program: &str, input: &str) -> CutLog {
-        CutLog { program: program.into(), input: input.into(), lines: BTreeMap::new() }
+        CutLog { program: program.into(), input: input.into(), lines: BTreeMap::new(), timeline: vec![] }
+    }
+
+    /// Add a window heard `t` seconds into the run.
+    pub fn add_at(&mut self, t: f64, f: &Frame) {
+        self.timeline.push(Moment {
+            t,
+            line: f.ctx.line,
+            op: f.ctx.op.clone(),
+            cutting: f.ctx.cutting,
+            pos: f.ctx.pos,
+            velocity: f.ctx.velocity,
+            rpm: f.ctx.rpm,
+            heard_rpm: f.rpm,
+            droop: f.droop,
+            loud_db: f.loud_db,
+            tooth_db: f.tooth_db,
+            chatter: f.chatter,
+        });
+        self.add(f);
     }
 
     pub fn add(&mut self, f: &Frame) {
@@ -60,7 +104,8 @@ impl CutLog {
         l.frames += 1;
         // the line's own feed and speed once it is running (the first window can catch it starting)
         l.cutting |= f.ctx.cutting;
-        l.feed = l.feed.max(f.ctx.feed);
+        // the real speed: the programmed F the interpreter last read can be the next line's (it reads ahead)
+        l.feed = l.feed.max(if f.ctx.velocity > 0.0 { f.ctx.velocity } else { f.ctx.feed });
         l.rpm = l.rpm.max(f.ctx.rpm);
         l.loud_mean_db += (f.loud_db - l.loud_mean_db) / l.frames as f64;
         l.loud_max_db = l.loud_max_db.max(f.loud_db);
@@ -123,7 +168,7 @@ mod tests {
     fn logs_by_line_and_reads_back() {
         let mut a = Analyzer::new(48_000);
         let mut log = CutLog::new("op2-top.nc", "test");
-        let ctx = |line| Context { line, op: "3D rough".into(), tool: 24, teeth: 3, rpm: 24_000.0, feed: 2400.0, cutting: true };
+        let ctx = |line| Context { line, op: "3D rough".into(), tool: 24, teeth: 3, rpm: 24_000.0, feed: 2400.0, cutting: true, ..Default::default() };
         for f in a.push(&crate::analysis::tests::cut(24_000.0 * 0.98, 3, None, 0.6, 48_000), &ctx(40)) {
             log.add(&f);
         }

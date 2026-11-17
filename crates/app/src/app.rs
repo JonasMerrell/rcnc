@@ -341,8 +341,22 @@ impl App {
             }
         }
         if input.modifiers.alt && input.key_pressed(Key::R) {
-            self.machine.send(Command::CycleStart);
+            self.cycle_start();
         }
+    }
+
+    /// Cycle Start, unless the program asks for the listening feed hold (`(RCNC REQUIRE_GUARD)`) and it can't
+    /// work: listening off, the hold switched off, or the input silent. Then it says why and doesn't start.
+    fn cycle_start(&mut self) {
+        if ears::requires_guard(&self.snap.program) && matches!(self.snap.mode, machine::Mode::Idle) {
+            if let Err(why) = self.ears.guard_ready() {
+                self.machine.send(Command::Note(format!(
+                    "Cycle Start refused: this program needs the listening feed hold (it asks with (RCNC REQUIRE_GUARD)), but {why}. Settings -> Listening"
+                )));
+                return;
+            }
+        }
+        self.machine.send(Command::CycleStart);
     }
 
     fn start_jog(&mut self, axis: usize, positive: bool) {
@@ -385,7 +399,7 @@ impl eframe::App for App {
         }
         self.watch_file(ctx.input(|i| i.time));
         let program = self.program_file.as_ref().map(|p| p.0.clone());
-        self.ears.poll(&self.snap, program.as_deref());
+        self.ears.poll(&self.snap, program.as_deref(), &self.machine);
         if self.ears.listening() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -1067,7 +1081,7 @@ impl App {
                 )
                 .clicked()
             {
-                self.machine.send(Command::CycleStart);
+                self.cycle_start();
             }
             if ui
                 .add_enabled(
