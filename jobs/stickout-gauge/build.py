@@ -176,6 +176,19 @@ for pid, what, w, d_, f, rpm, xw, zf in plan.passes:
     xc = xw + 6.35 / 2 if plus else (xw + w) - 6.35 / 2
     sid = d.sketch([{"type": "line", "from": [round(xc, 4), -67.0], "to": [round(xc, 4), 67.0]}])
     CAL.append((sid, pid, what, w, d_, f, rpm, xc, round(BAR - zf, 4), -1000.0 if plus else 1000.0))
+# op 2's lug passes: lines across X (tool centre), from each lug's free end in toward the gauge, 1.5 apart, the
+# last one 0.3 off the end face (for the finish); +Y lug lines run -X, -Y lug lines +X (both climb)
+LUG = []   # (sketch id, end, y)
+for e in (1, -1):
+    y = BAR_L / 2 + 6.35 / 2 - 1.5
+    ys = []
+    while y > L / 2 + 0.3 + 6.35 / 2 + 1e-6:
+        ys.append(y)
+        y -= 1.5
+    ys.append(L / 2 + 0.3 + 6.35 / 2)
+    for y in ys:
+        sid = d.sketch([{"type": "line", "from": [-20.0, round(e * y, 4)], "to": [20.0, round(e * y, 4)]}])
+        LUG.append((sid, e, round(e * y, 4)))
 d.S.append({"tool": "set_part", "args": {"body": [2, 0], "name": "Op 1 CAM body", "color": "#c9ced6", "material": "Aluminium 6061"}})
 # 4: the gauge alone in op 1's frame, for op 2 (it follows op 1's stock)
 d.studio("Op 2 CAM body")
@@ -183,6 +196,7 @@ gauge(d)
 d.feat("transform", {"bodies": [{"kind": "body", "body": [2, 0]}], "mode": "translate", "direction": {"kind": "axis", "axis": 2}, "distance": str(CARRIER)}, "Gauge 3 up")
 d.S.append({"tool": "set_part", "args": {"body": [2, 0], "name": "Stick-out gauge", "color": "#c9ced6", "material": "Aluminium 6061"}})
 json.dump(CAL, open("/home/jonas/dmc2/gauge/cal_passes.json", "w"), indent=1)
+json.dump(LUG, open("/home/jonas/dmc2/gauge/lug_passes.json", "w"), indent=1)
 d.S.append({"tool": "save_document", "args": {"path": "/home/jonas/dmc2/gauge/gauge.json"}})
 R = lambda view, path, w=1400, h=1000: {"tool": "render", "args": {"view": view, "path": path, "width": w, "height": h, "sketches": "unused"}}
 SW_ = lambda i: {"tool": "switch_part_studio", "args": {"index": i}}

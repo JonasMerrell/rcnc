@@ -172,6 +172,7 @@ deep and narrow at high feed rather than wide and shallow.
   moment the file is on the mill PC. Re-post and re-simulate properly afterwards.
 - **Say what was only simulated and what was really cut.** Unproven so far: the PR 146 contour seam and
   the finer ball stepover.
+- **Vertical edges:** give outside vertical corners (and slot mouths at an end face) a small radius or chamfer in the CAD so the wall contour breaks them; a chamfer mill can't reach a vertical edge (stick-out gauge, 2026-11-17).
 - **Keep this file current:** when a cut bogs, chatters, packs chips or leaves a mark, add the lesson here.
 
 ## Checks before handing over

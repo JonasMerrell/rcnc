@@ -108,41 +108,54 @@ sim's grid at a sharp corner, not stock left.
 - the 3 mm carrier under the gauge;
 - the end lugs (8 thick) with the two Ø8 bores.
 
-## Op 2: the gauge's bottom side (`op2-bottom.nc`, about 8:30 plus the stop before probing)
+## Op 2: the gauge's bottom side (`op2-bottom.nc`, about 6:30 plus two stops)
 
-1. **Unclamp, flip about Y** (end over end is fine too: the lug bores are symmetric) and put op 1's finished
-   top down on the ledges.
-   - Close the jaws on the **23 mm finished walls**, gripping 4.7 mm as usual.
+1. **Unclamp and flip** the part: op 1's finished top goes down on the ledges.
+   - Turn it over either way (about X or about Y). The bores and the part are symmetric about the middle, so
+     both land the same.
+   - Close the jaws on the **23 mm finished walls**, gripping 4.7 mm.
    - The lugs stand up past the jaw ends.
-   - **Blow out both lug bores and deburr their upper ends** (where they broke through in op 1) with a
-     deburring tool. The program stops there first and reminds you.
-2. Cycle Start. `(RCNC Z_REFERENCE Vise)`, then T99 **Find bores**: `A=0,-52 B=0,52 D=8 TOP=19 DEPTH=4
-   TOL=0.1 ROT=0.2`. This sets X/Y from the bores **before any cutting**.
-   - `TOP=19` is the lugs' top here (the bar's bottom), so the ball touches 5 mm down, in the middle of the
-     8 mm lug.
+2. Cycle Start. **The program stops first**: blow the chips out of both lug bores and deburr their upper ends
+   (where they broke through in op 1).
+3. `(RCNC Z_REFERENCE Vise)`, then T99 **Find bores**: `A=0,-52 B=0,52 D=8 TOP=19 DEPTH=4 TOL=0.1 ROT=0.2`.
+   This sets X/Y from the bores **before any cutting**.
+   - `TOP=19` is the lugs' top here (the bar's bottom): the ball touches 5 mm down, in the middle of the 8 mm
+     lug.
    - If a check fails, rcnc holds the program with Probe again.
-3. T24, with a Tap test, then T1:
+4. T24, with a Tap test, then T1:
 
 | # | Tool | Operation | Time | Spindle | Chatter | Chip |
 |---|---|---|---|---|---|---|
 | 1 | T24 | Face the 3 mm carrier off (Z19 → Z16): **finishes the gauge's bottom** | 2:20 | 20% | 0.23 | 0 |
 | 2 | T24 | Rough the bottom slots and reliefs (1 mm levels, F1000, 0.2 left) | 0:43 | 21% | 0.75 | 0.91 |
-| 3 | T24 | Rough the lugs and the side strips off down to Z5 | 4:01 | **43%** | 0.44 | 0.10 |
-| 4 | T24 | Finish the slot walls and the relief stop walls, one full-depth pass | 0:08 | 45% | 0.38 | 0.16 |
-| 5 | T24 | Finish the walls and end faces Z16 → Z10.5, one full-height pass (meets op 1's finish; seam mid −X) | 0:25 | 16% | 0.18 | 0.04 |
-| 6 | T1 | Engrave the bottom numbers (22, 26) 0.3 deep | 0:13 | | | |
-| 7 | T1 | Edge break 0.3 on every edge of the bottom face: outline, slots, reliefs | 0:12 | | | |
+| — | | **CHIP PAUSE**: blow the chips out of the slots and reliefs, then Cycle Start | | | | |
+| 3 | T24 | **Lugs off: 22 straight passes across X**, 1.5 mm strips, 5.5 deep, from each lug's free end in toward the gauge (11 per lug, each its own operation so the order is fixed; each climbs). The last pass stops 0.3 off the end face. | about 1:10 | 50–54% | 0.55 | |
+| 4 | T24 | Rough what's left down to Z5: the thin side strips on the walls | 0:24 | 7% | 0.16 | 0.06 |
+| 5 | T24 | Finish the slot walls and the relief stop walls, one full-depth pass | 0:08 | 45% | 0.38 | 0.16 |
+| 6 | T24 | Finish the walls and end faces Z16 → Z10.5, one full-height pass (meets op 1's finish; seam mid −X) | 0:25 | 16% | 0.18 | 0.04 |
+| 7 | T1 | Engrave the bottom numbers (22, 26) 0.3 deep | 0:13 | | | |
+| 8 | T1 | Edge break 0.3 on every edge of the bottom face: outline (includes the end faces' bottom edges), slots, reliefs | 0:12 | | | |
+
+**Nothing comes loose:**
+- The lugs sit on air: op 1 left them 8 thick, and below them is open.
+- Step 3 cuts them away as chips, strip by strip, from the free end in. What's left of a lug is always the
+  part still joined to the gauge.
+- The bores only split a strip into two pieces that both stay joined inward.
+- The side strips are 1.2 × 2 mm slivers along the walls, still joined along their whole length when step 4
+  and the wall finish take them.
 
 Check results:
 - **rCAD simulation:** op 2 starts from what op 1 really leaves (lugs and carrier included). No problems;
   unfinished 1 mm² (the slot-relief corner flag, as in op 1).
-- **rcnc simulator:** runs to the end with the lug bores in the bar. Find bores, started 0.4 / 0.3 mm off on
-  purpose, reads both bores 104.000 apart and moves G54 onto them.
-- **By hand:** the gauge's four vertical corners and the bottom end-face edges aren't reachable from above.
-  Break them with a file.
+- **rcnc simulator:** runs to the end with the lug bores in the bar (583 s). Find bores, started 0.4 / 0.3 mm
+  off on purpose, reads both bores 104.000 apart and moves G54 onto them.
 
-**Chips:** the slot rough is again the highest (0.91). Open-ended, 6 deep. If they pack, pause after step 2
-and blow them out (the job isn't long enough to justify a programmed stop here, unlike op 1's).
+**Sharp edges left for a file (vertical edges: a chamfer mill can't reach them):**
+- the gauge's **4 outside vertical corners**;
+- the **8 vertical edges at the slot mouths**, where each slot's side walls meet the end faces (2 per slot,
+  4 slots).
+
+Every horizontal edge is broken by op 1 or op 2.
 
 ## Design change since the concept
 

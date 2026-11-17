@@ -11,6 +11,8 @@ has more stock than there really is (op 1 left the lugs 8 thick and the side str
 frame), so op 2's simulated loads are on the high side: real cuts there are lighter or in air.
 """
 import json
+LUG = json.load(open("lug_passes.json"))
+n_lug = len(LUG)
 
 M = {"name": "DMC2", "model": "DMC2", "travel": [343, 234, 150], "max_feed": 3000, "rapid_z": 3000, "tool_changer": False, "spin_up": 4,
      "spindle_power": 1500, "spindle_efficiency": 0.78, "spindle_rated_rpm": 24000}
@@ -40,7 +42,9 @@ S += [op(C, "probe", f"Probe lug bore {'AB'[i]}", tool=99, at=xy,
 S += [
     op(C, "face", "Face the 3 mm carrier off (Z19 to Z16): finishes the gauge's bottom", tool=24, top=19.0, stepdown=1.0),
     op(C, "trace", "Rough the bottom slots and their end reliefs, 0.2 left on the walls (1 mm levels, F1000; floors to depth)", tool=24, sketches=[5], side="inside", top=16.0, depth=6.0, stepdown=1.0, leave=0.2, feed=1000, plunge_feed=250),
-    op(C, "adaptive", "Rough the lugs and the side strips off down to Z5", tool=24, bottom=5.0, stepdown=5.5, stepover=0.1, leave=0.3, leave_floor=0.0, rest=True),
+] + [op(C, "trace", f"Lug pass {k + 1}/{n_lug}: {'+' if e > 0 else '-'}Y lug, 1.5 wide strip at y {y:+.2f}, from its free end in", tool=24, sketches=[sid], side="both", top=16.0, depth=5.5, stepdown=5.5, seam=[-1000.0 * e, y])  # op 2 is flipped about X (Y mirrored): this makes each pass climb
+       for k, (sid, e, y) in enumerate(LUG)] + [
+    op(C, "adaptive", "Rough what is left down to Z5: the side strips (thin slivers on the walls) and the lugs' last 0.3", tool=24, bottom=5.0, stepdown=5.5, stepover=0.1, leave=0.3, leave_floor=0.0, rest=True),
     op(C, "trace", "Finish the slot walls and the relief stop walls, one full-depth 6 mm pass round their outline", tool=24, sketches=[5], side="inside", top=16.0, depth=6.0, stepdown=6.0, leave=0.0),
     op(C, "contour", "Finish the walls and end faces Z16 to Z10.5, one full-height pass (meets op 1's finish; seam mid -X side)", tool=24, side="outside", top=16.0, bottom=10.5, stepdown=7, seam=[-20, 0]),
     op(C, "trace", "Engrave the bottom numbers 0.3 deep", tool=1, sketches=[10], depth=0.3, stepdown=0.3),
