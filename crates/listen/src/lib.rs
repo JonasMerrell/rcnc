@@ -15,11 +15,13 @@ pub mod analysis;
 pub mod capture;
 pub mod cutlog;
 pub mod guard;
+pub mod limiter;
 pub mod tap;
 
 pub use analysis::{Analyzer, Context, Frame};
 pub use cutlog::{CutLog, Moment};
 pub use guard::{Guard, GuardSettings};
+pub use limiter::{Limiter, LimiterSettings};
 
 /// Where samples come from: a sound card or a WAV file played back in real time.
 pub enum Source {

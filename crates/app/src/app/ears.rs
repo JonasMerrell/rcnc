@@ -5,7 +5,7 @@
 use super::palette::*;
 use eframe::egui::{self, RichText};
 use gcode::Spindle;
-use listen::{Analyzer, Context, CutLog, Frame, Guard, GuardSettings, Source};
+use listen::{Analyzer, Context, CutLog, Frame, Guard, GuardSettings, Limiter, LimiterSettings, Source};
 use machine::{Command, ControllerHandle, Mode, Snapshot};
 use std::sync::Arc;
 
@@ -22,6 +22,9 @@ struct EarsSettings {
     /// Hold the feed when the spindle bogs (heard droop over its no-load droop, for a time).
     #[serde(default)]
     guard: GuardSettings,
+    /// The adaptive feed's tuning; a program turns it on with `(RCNC ADAPTIVE_FEED ...)`.
+    #[serde(default)]
+    limiter: LimiterSettings,
 }
 
 pub struct Ears {
@@ -35,6 +38,11 @@ pub struct Ears {
     log: Option<(std::path::PathBuf, CutLog)>,
     log_start: std::time::Instant,
     guard: Guard,
+    /// The adaptive feed (stage 1: reduce-only, on the spindle's sag), and the share last sent to the machine.
+    limiter: Limiter,
+    adaptive_sent: f64,
+    /// Per program: its adaptive feed settings (None: not asked for) and, per line, whether it's on there.
+    adaptive: (usize, Option<LimiterSettings>, Vec<bool>),
     /// Why the guard last held the feed, shown until the program moves on again.
     held: Option<String>,
     /// Since the listening started (the guard's clock).
@@ -69,6 +77,9 @@ impl Ears {
             log: None,
             log_start: std::time::Instant::now(),
             guard: Guard::default(),
+            limiter: Limiter::new(LimiterSettings::default()),
+            adaptive_sent: 1.0,
+            adaptive: (0, None, vec![]),
             held: None,
             clock: std::time::Instant::now(),
             recording: None,
@@ -78,6 +89,7 @@ impl Ears {
             ops: (0, vec![]),
         };
         e.guard = Guard::new(e.settings.guard);
+        e.limiter = Limiter::new(e.settings.limiter);
         e.reopen();
         e
     }
@@ -146,19 +158,41 @@ impl Ears {
         let now = self.log_start.elapsed().as_secs_f64();
         let step = samples_per_frame_s(src.rate());
         let n = frames.len();
-        if let Some((_, log)) = &mut self.log {
-            for (i, f) in frames.iter().enumerate() {
-                log.add_at(now - (n - 1 - i) as f64 * step, f);
-            }
-        }
         // the bog guard: hold the feed (the spindle stays on) when the spindle can't keep its speed
         let gt = self.clock.elapsed().as_secs_f64();
+        // the adaptive feed, where the program asks for it: only with the guard armed behind it
+        if self.adaptive.0 != Arc::as_ptr(&s.program) as usize {
+            let (set, on) = adaptive_lines(&s.program, self.settings.limiter);
+            self.adaptive = (Arc::as_ptr(&s.program) as usize, set, on);
+            self.limiter = Limiter::new(set.unwrap_or(self.settings.limiter));
+        }
+        let mut asked = vec![None; n];
         for (i, f) in frames.iter().enumerate() {
-            if let Some(why) = self.guard.update(gt - (n - 1 - i) as f64 * step, f) {
+            let t = gt - (n - 1 - i) as f64 * step;
+            if let Some(why) = self.guard.update(t, f) {
                 if matches!(s.mode, Mode::Running) && !s.hold {
                     machine.send(Command::FeedHold);
                     machine.send(Command::Note(why.clone()));
                     self.held = Some(why);
+                }
+            }
+            let line_on = self.adaptive.1.is_some() && f.ctx.line.checked_sub(1).and_then(|l| self.adaptive.2.get(l)).copied().unwrap_or(false);
+            if running && line_on && self.settings.guard.on {
+                asked[i] = Some(self.limiter.update(t, f, self.guard.air_droop(f.ctx.rpm)));
+            } else {
+                self.limiter.reset();
+            }
+        }
+        let want = asked.iter().rev().flatten().next().copied().unwrap_or(1.0);
+        if (want - self.adaptive_sent).abs() > 0.004 || (want == 1.0 && self.adaptive_sent != 1.0) {
+            machine.send(Command::SetAdaptiveFeed(want));
+            self.adaptive_sent = want;
+        }
+        if let Some((_, log)) = &mut self.log {
+            for (i, f) in frames.iter().enumerate() {
+                log.add_at(now - (n - 1 - i) as f64 * step, f);
+                if let Some(m) = log.timeline.last_mut() {
+                    m.adaptive_feed = asked[i];
                 }
             }
         }
@@ -264,6 +298,14 @@ impl Ears {
         ui.label(RichText::new(text).size(13.0).color(color).strong()).on_hover_text("From the microphone: the spindle's speed under load (droop) and chatter. Logged per line next to the program as .cutlog.json.");
         if let Some(why) = &self.held {
             ui.label(RichText::new("FEED HELD: spindle bogging").size(13.0).color(RED).strong()).on_hover_text(why);
+        }
+        if let Some(set) = self.adaptive.1 {
+            let (t, c) = if self.adaptive_sent < 0.995 { (format!("feed {:.0}% (adaptive)", self.adaptive_sent * 100.0), AMBER) } else { ("adaptive feed".to_string(), MUTED) };
+            ui.label(RichText::new(t).size(12.0).color(c)).on_hover_text(format!(
+                "The program asked for the adaptive feed: it lowers the feed (to {:.0}% at the least, never over the programmed feed) to keep the spindle's sag near {:.1}% over its no-load sag",
+                set.min * 100.0,
+                set.target * 100.0
+            ));
         }
         let (gtext, gcolor) = match self.guard_ready() {
             Ok(()) => ("hold armed", GREEN),
@@ -395,6 +437,42 @@ pub fn requires_guard(program: &str) -> bool {
     program.lines().any(|l| l.trim().to_ascii_uppercase().starts_with("(RCNC REQUIRE_GUARD"))
 }
 
+/// A program turns the adaptive feed on with `(RCNC ADAPTIVE_FEED TARGET=2 MIN=60)` (sag over no-load, %; the
+/// lowest feed, % of the programmed; both optional, else the Settings page's), and off and on again for
+/// operations with `(RCNC ADAPTIVE_FEED OFF)` / `(RCNC ADAPTIVE_FEED ON)`: on from its first such line. Its
+/// settings (None: not asked for) and, per line, whether it's on there.
+pub fn adaptive_lines(program: &str, base: LimiterSettings) -> (Option<LimiterSettings>, Vec<bool>) {
+    let mut set: Option<LimiterSettings> = None;
+    let mut on = false;
+    let lines = program
+        .lines()
+        .map(|l| {
+            let u = l.trim().to_ascii_uppercase();
+            if let Some(rest) = u.strip_prefix("(RCNC ADAPTIVE_FEED") {
+                let rest = rest.trim_end_matches(')');
+                let words: Vec<&str> = rest.split_whitespace().collect();
+                if words.first() == Some(&"OFF") {
+                    on = false;
+                } else {
+                    on = true;
+                    let s = set.get_or_insert(base);
+                    for w in words {
+                        let num = |k: &str| w.strip_prefix(k).and_then(|v| v.trim_end_matches('%').parse::<f64>().ok());
+                        if let Some(v) = num("TARGET=") {
+                            s.target = (v / 100.0).clamp(0.005, 0.05);
+                        }
+                        if let Some(v) = num("MIN=") {
+                            s.min = (v / 100.0).clamp(0.3, 1.0);
+                        }
+                    }
+                }
+            }
+            on
+        })
+        .collect();
+    (set, lines)
+}
+
 /// A program asks for its run to be recorded with an `(RCNC RECORD_AUDIO)` comment (a calibration program).
 pub fn records_audio(program: &str) -> bool {
     program.lines().any(|l| l.trim().to_ascii_uppercase().starts_with("(RCNC RECORD_AUDIO"))
@@ -402,6 +480,19 @@ pub fn records_audio(program: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_program_turns_the_adaptive_feed_on_for_its_roughing() {
+        let base = listen::LimiterSettings::default();
+        let (set, on) = super::adaptive_lines("G21\n(RCNC ADAPTIVE_FEED TARGET=1.5 MIN=70)\nG1 X1\n(RCNC ADAPTIVE_FEED OFF)\nG1 X2\n(rcnc adaptive_feed on)\nG1 X3", base);
+        let set = set.unwrap();
+        assert!((set.target - 0.015).abs() < 1e-12 && (set.min - 0.7).abs() < 1e-12);
+        assert_eq!(on, vec![false, true, true, false, false, true, true]);
+        assert_eq!(super::adaptive_lines("G21\nG1 X1\nM30", base), (None, vec![false, false, false]));
+        // nonsense is held to sane bounds
+        let (set, _) = super::adaptive_lines("(RCNC ADAPTIVE_FEED TARGET=40 MIN=5)", base);
+        assert_eq!((set.unwrap().target, set.unwrap().min), (0.05, 0.3));
+    }
+
     #[test]
     fn a_program_asks_to_be_recorded() {
         assert!(super::records_audio("G21\n(rcnc record_audio)\nM30"));

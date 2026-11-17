@@ -35,6 +35,9 @@ pub struct Moment {
     pub tooth_db: Option<f64>,
     /// Chatter heard: frequency, dB over the background.
     pub chatter: Option<(f64, f64)>,
+    /// The adaptive feed asked for after this window, share of the programmed feed (None: not in use).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_feed: Option<f64>,
 }
 
 /// One program line: what it asked for and what was heard while it ran.
@@ -84,6 +87,7 @@ impl CutLog {
             loud_db: f.loud_db,
             tooth_db: f.tooth_db,
             chatter: f.chatter,
+            adaptive_feed: None,
         });
         self.add(f);
     }
