@@ -166,3 +166,26 @@ Each slot now ends in a **14 × 8 relief**. Its far wall is cut by the tool movi
 needs the width, so there's **one centred slot per end per face (4 stations)**:
 - top: **24** (+Y) and **21** (−Y);
 - bottom: **22** (+Y) and **26** (−Y).
+
+## After op 1a: what the transducer heard
+
+Copy `op1a-calibrate.nc.cutlog.json` and `op1a-calibrate.nc.air.cutlog.json` from beside the program on the
+mill PC (plus the `.wav` files if you want them kept), then:
+
+    python3 analyse.py op1a-calibrate.nc.cutlog.json op1a-calibrate.nc.air.cutlog.json predicted.json
+
+Per pass C1–C16 it lists:
+- rCAD's predicted spindle % and watts;
+- the speed droop heard (with the air run's own droop taken off);
+- the tooth-pass and overall vibration level over the air run;
+- how often chatter was heard and at what frequency;
+- rCAD's chatter index.
+
+Then it fits:
+- spindle efficiency, from droop (rCAD now uses 0.78);
+- how straight droop follows predicted power;
+- the chatter scale (rCAD now 0.078), with a warning if the index can't separate clean passes from
+  chattering ones.
+
+`predicted.json` comes from rCAD's simulation of op 1a (`predicted.py`). rCAD's own `import_cutlog` can read the
+same log too.
