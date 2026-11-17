@@ -103,6 +103,8 @@ pub enum Command {
     FindStockContinue,
     /// A probing step in a program failed and holds it: run the same request again from the top.
     ProbeAgain,
+    /// Write a line in the message log (e.g. why the listening held the feed).
+    Note(String),
     /// A probing step in a program failed a tolerance check only: set what it measured anyway and carry on.
     ProbeAccept,
     /// The tool last measured on the setter sticks out exactly this far (mm): calibrate the stick-out check.
@@ -712,6 +714,7 @@ impl Controller {
             }
             Command::CycleStart => self.cycle_start(),
             Command::FeedHold => self.feed_hold(),
+            Command::Note(msg) => self.info(msg),
             Command::Stop => self.stop(),
             Command::ZeroAxis(axis) => {
                 if self.is_ready() && axis < AXIS_LETTERS.len() {

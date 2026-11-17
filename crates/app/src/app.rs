@@ -385,7 +385,7 @@ impl eframe::App for App {
         }
         self.watch_file(ctx.input(|i| i.time));
         let program = self.program_file.as_ref().map(|p| p.0.clone());
-        self.ears.poll(&self.snap, program.as_deref());
+        self.ears.poll(&self.snap, program.as_deref(), &self.machine);
         if self.ears.listening() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }

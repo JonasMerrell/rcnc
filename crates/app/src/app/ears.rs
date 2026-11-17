@@ -5,7 +5,7 @@
 use super::palette::*;
 use eframe::egui::{self, RichText};
 use gcode::Spindle;
-use listen::{Analyzer, Context, CutLog, Frame, Source};
+use listen::{Analyzer, Context, CutLog, Frame, Guard, GuardSettings, Source};
 use machine::{Command, ControllerHandle, Mode, Snapshot};
 use std::sync::Arc;
 
@@ -19,6 +19,9 @@ pub static DATA: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::
 struct EarsSettings {
     on: bool,
     device: Option<String>,
+    /// Hold the feed when the spindle bogs (heard droop over its no-load droop, for a time).
+    #[serde(default)]
+    guard: GuardSettings,
 }
 
 pub struct Ears {
@@ -28,8 +31,12 @@ pub struct Ears {
     analyzer: Option<Analyzer>,
     /// Why there's no input, if there isn't.
     problem: Option<String>,
-    /// What the running program sounds like, and where it goes when the program ends.
+    /// What the running program sounds like, and where it goes when the program ends; when it started.
     log: Option<(std::path::PathBuf, CutLog)>,
+    log_start: std::time::Instant,
+    guard: Guard,
+    /// Since the listening started (the guard's clock).
+    clock: std::time::Instant,
     /// A program with `(RCNC RECORD_AUDIO)` in it: the whole run's sound, written as a WAV beside it.
     recording: Option<(std::path::PathBuf, Vec<f32>)>,
     pub last: Option<Frame>,
@@ -58,12 +65,16 @@ impl Ears {
             analyzer: None,
             problem: None,
             log: None,
+            log_start: std::time::Instant::now(),
+            guard: Guard::default(),
+            clock: std::time::Instant::now(),
             recording: None,
             last: None,
             chatter_recent: Default::default(),
             tap: Tap::Idle,
             ops: (0, vec![]),
         };
+        e.guard = Guard::new(e.settings.guard);
         e.reopen();
         e
     }
@@ -95,7 +106,7 @@ impl Ears {
     }
 
     /// Each frame: take what came in, analyse it against what the machine is doing, log it per line.
-    pub fn poll(&mut self, s: &Snapshot, program: Option<&std::path::Path>) {
+    pub fn poll(&mut self, s: &Snapshot, program: Option<&std::path::Path>, machine: &ControllerHandle) {
         if self.source.is_none() {
             return;
         }
@@ -120,12 +131,27 @@ impl Ears {
                 // an air cut's log goes beside the real one, not over it
                 let air = s.air_cut.is_some();
                 self.log = Some((CutLog::path_for_run(p, air), CutLog::new(&p.display().to_string(), &src.name())));
+                self.log_start = std::time::Instant::now();
                 self.recording = records_audio(&s.program).then(|| (CutLog::wav_for_run(p, air), Vec::new()));
             }
         }
+        // windows come in batches a few times a second: spread them back over the time they took
+        let now = self.log_start.elapsed().as_secs_f64();
+        let step = samples_per_frame_s(src.rate());
+        let n = frames.len();
         if let Some((_, log)) = &mut self.log {
-            for f in &frames {
-                log.add(f);
+            for (i, f) in frames.iter().enumerate() {
+                log.add_at(now - (n - 1 - i) as f64 * step, f);
+            }
+        }
+        // the bog guard: hold the feed (the spindle stays on) when the spindle can't keep its speed
+        let gt = self.clock.elapsed().as_secs_f64();
+        for (i, f) in frames.iter().enumerate() {
+            if let Some(why) = self.guard.update(gt - (n - 1 - i) as f64 * step, f) {
+                if matches!(s.mode, Mode::Running) && !s.hold {
+                    machine.send(Command::FeedHold);
+                    machine.send(Command::Note(why));
+                }
             }
         }
         if let Some((_, rec)) = &mut self.recording {
@@ -183,6 +209,8 @@ impl Ears {
             teeth: tool.map(|t| t.flutes).filter(|f| *f > 0).unwrap_or(2),
             rpm: if s.spindle == Spindle::Off { 0.0 } else { s.rpm },
             feed: s.feed_rate,
+            pos: [s.work[0], s.work[1], s.work[2]],
+            velocity: s.velocity,
             cutting: s.spindle != Spindle::Off && matches!(s.mode, Mode::Running) && s.velocity > 0.0,
         }
     }
@@ -259,6 +287,24 @@ impl Ears {
         if inputs.is_empty() {
             ui.label(RichText::new("No input devices found (plug the microphone in, then open Settings again).").size(12.0).color(MUTED));
         }
+        ui.add_space(6.0);
+        let mut g = self.settings.guard;
+        ui.checkbox(&mut g.on, "Feed hold when the spindle bogs").on_hover_text(
+            "While cutting: when the heard speed is more than the limit under its no-load speed for longer than the time, hold the feed (the spindle stays on; Cycle Start carries on)",
+        );
+        ui.horizontal(|ui| {
+            let mut pct = g.limit * 100.0;
+            ui.label("over");
+            ui.add(egui::DragValue::new(&mut pct).range(2.0..=15.0).speed(0.1).suffix(" % slow"));
+            ui.label("for");
+            ui.add(egui::DragValue::new(&mut g.time).range(0.1..=2.0).speed(0.01).suffix(" s"));
+            g.limit = pct / 100.0;
+        });
+        if g != self.settings.guard {
+            self.settings.guard = g;
+            self.guard.settings = g;
+            self.save();
+        }
     }
 
     /// The tool change window's tap test: record a second while the operator taps the tool, then show what
@@ -303,6 +349,12 @@ impl Ears {
             }
         }
     }
+}
+
+/// Seconds between analysis windows (half a window: 8192 samples at 32 kHz and up, else 4096).
+fn samples_per_frame_s(rate: u32) -> f64 {
+    let n = if rate >= 32_000 { 8192 } else { 4096 };
+    (n / 2) as f64 / rate.max(1) as f64
 }
 
 /// A program asks for its run to be recorded with an `(RCNC RECORD_AUDIO)` comment (a calibration program).

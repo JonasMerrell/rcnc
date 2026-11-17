@@ -16,6 +16,12 @@ pub struct Context {
     pub feed: f64,
     /// A feed move is running with the spindle on (the tool may be in the work).
     pub cutting: bool,
+    /// Where the tool is (work X, Y, Z) and how fast it really moves, mm/min: the programmed feed is what the
+    /// interpreter last read, which runs ahead of the motion.
+    #[serde(default)]
+    pub pos: [f64; 3],
+    #[serde(default)]
+    pub velocity: f64,
 }
 
 /// One analysed window of sound.
@@ -43,6 +49,17 @@ pub struct Analyzer {
     buf: Vec<f32>,
     /// Samples between windows.
     hop: usize,
+    /// The spindle's own lines per speed (rpm / 250, rounded), heard with it on and not cutting: frequency
+    /// and loudest level, dB. A pickup on the spindle head hears its bearings, the VFD's carrier and the
+    /// motor's slot lines too; in a cut a peak there is chatter only if it stands well over its air level.
+    air: std::collections::HashMap<i64, Vec<(f64, f64)>>,
+}
+
+/// In a cut, a peak at one of the spindle's own (air) lines counts as chatter only this far over its air level, dB.
+pub const CHATTER_OVER_AIR_DB: f64 = 10.0;
+
+fn air_key(rpm: f64) -> i64 {
+    (rpm / 250.0).round() as i64
 }
 
 /// A peak must stand this far above the median of the spectrum to count as chatter, dB, and be no more
@@ -58,7 +75,7 @@ impl Analyzer {
         let n = if rate >= 32_000 { 8192 } else { 4096 };
         let fft = FftPlanner::new().plan_fft_forward(n);
         let window = (0..n).map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / n as f32).cos()).collect();
-        Analyzer { rate: rate as f32, n, fft, window, buf: vec![], hop: n / 2 }
+        Analyzer { rate: rate as f32, n, fft, window, buf: vec![], hop: n / 2, air: Default::default() }
     }
 
     /// Add samples; a frame for each full window, with `ctx` as what was going on.
@@ -66,10 +83,28 @@ impl Analyzer {
         self.buf.extend_from_slice(samples);
         let mut out = vec![];
         while self.buf.len() >= self.n {
-            out.push(self.analyse(&self.buf[..self.n].to_vec(), ctx));
+            let x = self.buf[..self.n].to_vec();
+            let air = self.air.get(&air_key(ctx.rpm)).cloned().unwrap_or_default();
+            let (f, peaks) = self.analyse_with(&x, ctx, &air);
+            // spindle on, not cutting: learn its own lines at this speed
+            if ctx.rpm > 0.0 && !ctx.cutting {
+                let known = self.air.entry(air_key(ctx.rpm)).or_default();
+                for (hz, db) in peaks {
+                    match known.iter_mut().find(|k| (k.0 - hz).abs() <= (0.01 * hz).max(3.0 * self.rate as f64 / self.n as f64)) {
+                        Some(k) => k.1 = k.1.max(db),
+                        None => known.push((hz, db)),
+                    }
+                }
+            }
+            out.push(f);
             self.buf.drain(..self.hop);
         }
         out
+    }
+
+    /// How many of the spindle's own lines it has heard in air at this speed.
+    pub fn air_lines(&self, rpm: f64) -> usize {
+        self.air.get(&air_key(rpm)).map(|v| v.len()).unwrap_or(0)
     }
 
     /// The window's magnitude spectrum, dB.
@@ -80,11 +115,18 @@ impl Analyzer {
     }
 
     pub fn analyse(&self, x: &[f32], ctx: &Context) -> Frame {
+        self.analyse_with(x, ctx, &[]).0
+    }
+
+    /// `analyse` with the spindle's air lines at this speed (peaks there must stand CHATTER_OVER_AIR_DB over
+    /// them to count as chatter); also returns the prominent peaks that aren't rotation harmonics (hz, dB).
+    fn analyse_with(&self, x: &[f32], ctx: &Context, air: &[(f64, f64)]) -> (Frame, Vec<(f64, f64)>) {
         let rms = (x.iter().map(|s| (*s as f64) * (*s as f64)).sum::<f64>() / x.len().max(1) as f64).sqrt();
         let loud_db = 20.0 * (rms + 1e-12).log10();
         let mut f = Frame { ctx: ctx.clone(), loud_db, ..Default::default() };
+        let mut peaks = vec![];
         if ctx.rpm <= 0.0 {
-            return f;
+            return (f, peaks);
         }
         let db = self.spectrum(x);
         let bin = self.rate as f64 / self.n as f64;
@@ -155,8 +197,16 @@ impl Analyzer {
                 let hz = self.interp(&db, i) ;
                 if harmonic(hz) {
                     top_h = top_h.max(db[i]);
-                } else if db[i] - floor > CHATTER_PROMINENCE_DB && best.is_none_or(|b| db[i] > b.1 + floor) {
-                    best = Some((hz, db[i] - floor));
+                } else if db[i] - floor > CHATTER_PROMINENCE_DB {
+                    peaks.push((hz, db[i]));
+                    // one of the spindle's own lines: only as chatter if well over its air level
+                    let own = air.iter().find(|a| (a.0 - hz).abs() <= (0.01 * hz).max(3.0 * bin));
+                    if own.is_some_and(|a| db[i] < a.1 + CHATTER_OVER_AIR_DB) {
+                        continue;
+                    }
+                    if best.is_none_or(|b| db[i] > b.1 + floor) {
+                        best = Some((hz, db[i] - floor));
+                    }
                 }
             }
             if let Some((hz, above)) = best {
@@ -165,7 +215,7 @@ impl Analyzer {
                 }
             }
         }
-        f
+        (f, peaks)
     }
 
     /// The strongest peak between `lo` and `hi` Hz, interpolated between bins.
@@ -263,6 +313,31 @@ pub(crate) mod tests {
         let (l, h) = (a.analyse(&light[..a.n], &ctx).tooth_db.unwrap(), a.analyse(&heavy[..a.n], &ctx).tooth_db.unwrap());
         // 0.3 of the amplitude: about 10.5 dB lower
         assert!((h - l - 10.46).abs() < 1.0, "{l} {h}");
+    }
+
+    /// The spindle's own line (a pickup on the head hears e.g. the VFD at 8.6 kHz) is learned in air and not
+    /// taken for chatter in the cut; real chatter elsewhere still is, and so is the same line grown much louder.
+    #[test]
+    fn the_spindles_own_lines_are_not_chatter() {
+        let mut a = Analyzer::new(48_000);
+        let air_ctx = Context { rpm: 24_000.0, teeth: 3, cutting: false, ..Default::default() };
+        let cut_ctx = Context { cutting: true, ..air_ctx.clone() };
+        // in air: the rotation plus a steady 8617 Hz line, as loud as chatter would be
+        let air: Vec<f32> = cut(24_000.0, 3, Some(8617.0), 1.0, 48_000);
+        let fresh = Analyzer::new(48_000);
+        assert!(fresh.analyse(&air[..fresh.n], &cut_ctx).chatter.is_some(), "without a baseline it looks like chatter");
+        let frames = a.push(&air, &air_ctx);
+        assert!(!frames.is_empty() && a.air_lines(24_000.0) > 0);
+        // cutting with the same line: not chatter
+        let same = a.push(&air, &cut_ctx);
+        assert!(same.iter().all(|f| f.chatter.is_none()), "{:?}", same.iter().map(|f| f.chatter).collect::<Vec<_>>());
+        // real chatter at the tool's mode, 7000 Hz, beside it: chatter
+        let mut both = cut(24_000.0, 3, Some(8617.0), 1.0, 48_000);
+        for (i, s) in both.iter_mut().enumerate() {
+            *s += 0.15 * (2.0 * std::f64::consts::PI * 7000.0 * i as f64 / 48_000.0).sin() as f32;
+        }
+        let f = a.push(&both, &cut_ctx);
+        assert!(f.iter().any(|f| f.chatter.is_some_and(|c| (c.0 - 7000.0).abs() < 15.0)), "{:?}", f.iter().map(|f| f.chatter).collect::<Vec<_>>());
     }
 
     #[test]
