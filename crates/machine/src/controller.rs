@@ -20,8 +20,10 @@ use crate::store::{self, SavedState};
 mod calibrate;
 mod probecal;
 mod findstock;
+mod hometest;
 mod toolchange;
 pub use calibrate::{CalibrateStage, CalibrateView};
+pub use hometest::{stats as home_test_stats, HomeTestView};
 pub use probecal::{ProbeCalShape, ProbeCalStage, ProbeCalTarget, ProbeCalView};
 pub use findstock::{FindStockStage, FindStockView, ProbeRetryView, StockFound, STOCK_REFERENCE};
 pub use toolchange::{ToolChangeStage, ToolChangeView};
@@ -116,6 +118,9 @@ pub enum Command {
     /// Calibrate the Z reference with this index: with the touch probe, or
     /// (`gauge`: its thickness) a measured tool on a gauge block.
     CalibrateZ { reference: usize, gauge: Option<f64> },
+    /// Homing repeatability test: home `axis` `cycles` more times, moving
+    /// `away` mm off the switch in between, and report the scatter.
+    HomeTest { axis: usize, cycles: usize, away: f64 },
     /// Carry on with the calibration: over the surface / on the gauge, or save.
     CalibrateContinue,
     /// Calibrate the touch probe on a known bore, cylinder, pocket, block or Z reference.
@@ -197,6 +202,8 @@ pub struct Snapshot {
     pub probe_runout: Option<[f64; 2]>,
     /// The tool last measured on the setter (it can calibrate the stick-out check).
     pub last_measured_tool: Option<u32>,
+    /// The last homing test, running or finished.
+    pub home_test: Option<HomeTestView>,
     /// The tool in the spindle as far as the controller knows (0: unknown).
     pub loaded_tool: u32,
     /// The loaded tool has been measured on the tool setter since it went in.
@@ -238,6 +245,8 @@ enum HomePhase {
     BackOff,
     /// Away by `home_clearance`; the axis is then at its home position.
     Clear,
+    /// Homing test: away from the switch before homing again.
+    Away,
 }
 
 #[derive(Debug)]
@@ -285,6 +294,11 @@ pub struct Controller {
     exec: Option<Exec>,
     home: VecDeque<usize>,
     home_phase: HomePhase,
+    /// Board position where the slow approach found the switch, and where
+    /// it released, this home.
+    home_latch_at: i64,
+    home_release_at: i64,
+    home_test: Option<HomeTestView>,
     homed: [bool; 6],
     spindle_override: f64,
     board: Option<BoardInfo>,
@@ -378,6 +392,9 @@ impl Controller {
             exec: None,
             home: VecDeque::new(),
             home_phase: HomePhase::Seek,
+            home_latch_at: 0,
+            home_release_at: 0,
+            home_test: None,
             homed: [false; 6],
             spindle_override: 1.0,
             board: None,
@@ -674,7 +691,13 @@ impl Controller {
                 self.jog_continuous = false;
             }
             Command::JogAlive => self.jog_alive = self.clock.now(),
-            Command::Home(axis) => self.start_homing(axis),
+            Command::Home(axis) => {
+                if let Some(t) = &mut self.home_test {
+                    t.running = false;
+                }
+                self.start_homing(axis)
+            }
+            Command::HomeTest { axis, cycles, away } => self.start_home_test(axis, cycles, away),
             Command::Mdi(text) => self.mdi(&text),
             Command::Load { name, text } => {
                 if matches!(self.mode, Mode::Running | Mode::Homing | Mode::Probing) {
@@ -1411,6 +1434,15 @@ impl Controller {
                 acceleration: a.acceleration * spu,
                 stop_on: None,
             },
+            // At half the axis's top speed, like a rapid across the table.
+            HomePhase::Away => AxisMove {
+                axis,
+                positive: !toward,
+                steps: (self.home_test.as_ref().map_or(0.0, |t| t.away) * spu).round() as u32,
+                velocity: a.max_velocity * 0.5 * self.axis_override() * spu,
+                acceleration: a.acceleration * spu,
+                stop_on: None,
+            },
         };
         if let Err(e) = self.backend.axis_move(&m) {
             self.raise(format!("Homing failed: {e}"));
@@ -1449,6 +1481,7 @@ impl Controller {
                         AXIS_LETTERS[axis]
                     ));
                 }
+                self.home_latch_at = self.status.position[axis];
                 self.home_phase = HomePhase::BackOff;
             }
             HomePhase::BackOff => {
@@ -1458,11 +1491,19 @@ impl Controller {
                         AXIS_LETTERS[axis]
                     ));
                 }
+                self.home_release_at = self.status.position[axis];
                 self.home_phase = HomePhase::Clear;
+            }
+            HomePhase::Away => {
+                self.home_phase = HomePhase::Seek;
             }
             HomePhase::Clear => {
                 let mut steps = self.status.position;
                 steps[axis] = (a.home_position * a.steps_per_unit).round() as i64;
+                // Where the last home would put this one: how far the switch moved.
+                let shift = self.homed[axis]
+                    .then(|| (self.status.position[axis] - steps[axis]) as f64 / a.steps_per_unit);
+                let hysteresis = (self.home_latch_at - self.home_release_at).abs() as f64 / a.steps_per_unit;
                 if let Err(e) = self.backend.set_position(steps) {
                     return self.raise(format!("Homing failed: {e}"));
                 }
@@ -1471,7 +1512,14 @@ impl Controller {
                 if axis == 2 && a.home_positive {
                     self.z_top = Some(a.home_position);
                 }
-                self.info(format!("{} homed", AXIS_LETTERS[axis]));
+                match shift {
+                    Some(d) => self.info(format!("{} homed ({:+.3} mm from the last home)", AXIS_LETTERS[axis], d)),
+                    None => self.info(format!("{} homed", AXIS_LETTERS[axis])),
+                }
+                if self.home_test_record(axis, shift, hysteresis) {
+                    self.home_phase = HomePhase::Away;
+                    return self.home_move();
+                }
                 self.home.pop_front();
                 self.home_phase = HomePhase::Seek;
                 if self.home.is_empty() {
@@ -2207,6 +2255,7 @@ impl Controller {
             probe_cal: self.probe_cal.clone(),
             probe_runout: self.probe_runout,
             last_measured_tool: self.last_setter_hit.map(|h| h.0),
+            home_test: self.home_test.clone(),
             loaded_tool: self.loaded_tool,
             tool_measured: self.tool_measured,
             air_cut: self.air_cut,
@@ -3689,6 +3738,40 @@ mod tests {
         assert!(backoff.positive != toward && backoff.velocity == latch.velocity);
         assert!(clear.stop_on.is_none());
         assert!((c.snapshot().machine[0] - -8.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn homing_test_reports_each_rehome_shift() {
+        let (mut c, clock) = setup();
+        c.handle(Command::Home(Some(0)));
+        run_until_idle(&mut c, &clock, 60.0);
+        // Lose 3 steps: the first re-home must see them.
+        let mut p = c.status.position;
+        p[0] += 3;
+        c.backend.set_position(p).unwrap();
+        c.status.position = p;
+        c.handle(Command::HomeTest { axis: 0, cycles: 4, away: 50.0 });
+        assert_eq!(c.mode(), Mode::Homing);
+        run_until_idle(&mut c, &clock, 240.0);
+        assert_eq!(c.mode(), Mode::Idle, "{:?}", c.snapshot().alarm);
+        let t = c.snapshot().home_test.clone().unwrap();
+        assert!(!t.running);
+        assert_eq!(t.shifts.len(), 4);
+        assert!((t.shifts[0] - 0.015).abs() < 1e-9, "{:?}", t.shifts);
+        assert!(t.shifts[1..].iter().all(|d| d.abs() < 1e-9), "{:?}", t.shifts);
+        assert_eq!(t.hysteresis.len(), 4);
+        assert!((c.snapshot().machine[0] - -8.0).abs() < 1e-9);
+        assert!(c.snapshot().log.iter().any(|l| l.contains("homing test, 4 re-homes")));
+    }
+
+    #[test]
+    fn homing_test_homes_an_unhomed_axis_first() {
+        let (mut c, clock) = setup();
+        c.handle(Command::HomeTest { axis: 1, cycles: 2, away: 30.0 });
+        run_until_idle(&mut c, &clock, 240.0);
+        let t = c.snapshot().home_test.clone().unwrap();
+        assert_eq!(t.shifts.len(), 2, "the first home has nothing to compare with");
+        assert_eq!(t.hysteresis.len(), 3);
     }
 
     #[test]
