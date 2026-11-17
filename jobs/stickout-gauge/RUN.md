@@ -108,6 +108,42 @@ sim's grid at a sharp corner, not stock left.
 - the 3 mm carrier under the gauge;
 - the end lugs (8 thick) with the two Ø8 bores.
 
+## Op 2: the gauge's bottom side (`op2-bottom.nc`, about 8:30 plus the stop before probing)
+
+1. **Unclamp, flip about Y** (end over end is fine too: the lug bores are symmetric) and put op 1's finished
+   top down on the ledges.
+   - Close the jaws on the **23 mm finished walls**, gripping 4.7 mm as usual.
+   - The lugs stand up past the jaw ends.
+   - **Blow out both lug bores and deburr their upper ends** (where they broke through in op 1) with a
+     deburring tool. The program stops there first and reminds you.
+2. Cycle Start. `(RCNC Z_REFERENCE Vise)`, then T99 **Find bores**: `A=0,-52 B=0,52 D=8 TOP=19 DEPTH=4
+   TOL=0.1 ROT=0.2`. This sets X/Y from the bores **before any cutting**.
+   - `TOP=19` is the lugs' top here (the bar's bottom), so the ball touches 5 mm down, in the middle of the
+     8 mm lug.
+   - If a check fails, rcnc holds the program with Probe again.
+3. T24, with a Tap test, then T1:
+
+| # | Tool | Operation | Time | Spindle | Chatter | Chip |
+|---|---|---|---|---|---|---|
+| 1 | T24 | Face the 3 mm carrier off (Z19 → Z16): **finishes the gauge's bottom** | 2:20 | 20% | 0.23 | 0 |
+| 2 | T24 | Rough the bottom slots and reliefs (1 mm levels, F1000, 0.2 left) | 0:43 | 21% | 0.75 | 0.91 |
+| 3 | T24 | Rough the lugs and the side strips off down to Z5 | 4:01 | **43%** | 0.44 | 0.10 |
+| 4 | T24 | Finish the slot walls and the relief stop walls, one full-depth pass | 0:08 | 45% | 0.38 | 0.16 |
+| 5 | T24 | Finish the walls and end faces Z16 → Z10.5, one full-height pass (meets op 1's finish; seam mid −X) | 0:25 | 16% | 0.18 | 0.04 |
+| 6 | T1 | Engrave the bottom numbers (22, 26) 0.3 deep | 0:13 | | | |
+| 7 | T1 | Edge break 0.3 on every edge of the bottom face: outline, slots, reliefs | 0:12 | | | |
+
+Check results:
+- **rCAD simulation:** op 2 starts from what op 1 really leaves (lugs and carrier included). No problems;
+  unfinished 1 mm² (the slot-relief corner flag, as in op 1).
+- **rcnc simulator:** runs to the end with the lug bores in the bar. Find bores, started 0.4 / 0.3 mm off on
+  purpose, reads both bores 104.000 apart and moves G54 onto them.
+- **By hand:** the gauge's four vertical corners and the bottom end-face edges aren't reachable from above.
+  Break them with a file.
+
+**Chips:** the slot rough is again the highest (0.91). Open-ended, 6 deep. If they pack, pause after step 2
+and blow them out (the job isn't long enough to justify a programmed stop here, unlike op 1's).
+
 ## Design change since the concept
 
 An end mill can't cut a flat slot end. A Ø6.35 flat tool's tip would hit the slot's corner radii about 2 mm

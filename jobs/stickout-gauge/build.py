@@ -106,7 +106,7 @@ def gauge(d, z0=0.0, sharp=False):
             # anchor is the text's lower left: past the relief toward the open end
             y = e * (L / 2 - s + RL + 1.5) - (TXT_H if e < 0 else 0.0)
             # beside the slot (x 4.2 .. about 9.5): on the bottom face mirrored so it reads right way round there
-            items.append({"type": "text", "at": [4.2 if up else -9.6, y], "text": str(s), "height": TXT_H})
+            items.append({"type": "text", "at": [4.2 if up else -10.3, y], "text": str(s), "height": TXT_H})
         # left as sketches: the CAM engraves them (a text extrude leaves stray mesh points that spoil renders)
         d.sketch(items, face(z, 0, 14, up))
 
@@ -157,10 +157,12 @@ d.S.append({"tool": "save_document", "args": {"path": "/home/jonas/dmc2/gauge/ga
 d.studio("Op 1 CAM body")
 gauge(d)
 d.feat("transform", {"bodies": [{"kind": "body", "body": [2, 0]}], "mode": "translate", "direction": {"kind": "axis", "axis": 2}, "distance": str(CARRIER)}, "Gauge 3 up (the carrier under it)")
-sk = d.sketch([rect(-BAR / 2, -BAR_L / 2, BAR / 2, BAR_L / 2)])
-d.extrude(sk, CARRIER, "add", "Carrier slab, the bar's whole length (op 2 faces it off)")
+# carrier and lugs are bodies of their own: op 1 keeps all of them, op 2 (following op 1) machines the gauge
+# alone, so they are stock to it
+sk = d.sketch([rect(-BAR / 2, -L / 2, BAR / 2, L / 2)])
+d.extrude(sk, CARRIER, "new", "Carrier slab under the gauge (op 2 faces it off)")
 sk = d.sketch([rect(-BAR / 2, L / 2, BAR / 2, BAR_L / 2), rect(-BAR / 2, -BAR_L / 2, BAR / 2, -L / 2)])
-d.extrude(sk, LUG_T, "add", "End lugs 8 tall")
+d.extrude(sk, LUG_T, "new", "End lugs 8 tall")
 sk = d.sketch([{"type": "circle", "center": [0, s_ * LUG_Y], "radius": LUG_BORE / 2} for s_ in (1, -1)])
 d.extrude(sk, LUG_T + 1, "remove", "Ø8 through bores in the lugs")
 import contextlib, io
