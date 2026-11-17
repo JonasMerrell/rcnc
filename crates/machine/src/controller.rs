@@ -4253,6 +4253,16 @@ mod tests {
                 sim.world.bores.push(([(bx[0] + bx[1]) / 2 + (v[0] * spu) as i64, (by[0] + by[1]) / 2 + (v[1] * spu) as i64], (4.0 * spu) as i64));
             }
         }
+        // RCNC_STEP="x,h": a stepped top: past x (mm from the middle, toward +X) the block is only h tall
+        if let Ok(st) = std::env::var("RCNC_STEP") {
+            let v: Vec<f64> = st.split(',').map(|n| n.trim().parse().unwrap()).collect();
+            let (bx, by, top) = sim.world.block.unwrap();
+            let spu = config.axes[0].steps_per_unit;
+            let xs = (bx[0] + bx[1]) / 2 + (v[0] * spu) as i64;
+            let low = sim.world.probe_z + (v[1] * config.axes[2].steps_per_unit) as i64;
+            sim.world.block = Some((bx, by, low));
+            sim.world.blocks.push(([bx[0], xs], by, top));
+        }
         let world = sim.world.clone();
         let mut c = Controller::new(config.clone(), Box::new(sim), clock.clone());
         c.handle(Command::Connect);
@@ -4261,7 +4271,11 @@ mod tests {
         run_until_idle(&mut c, &clock, 600.0);
         let spu = |a: usize| config.axes[a].steps_per_unit;
         let middle = |a: usize| crate::sim::homed_position(&config, &world, a, world.travel[a] as f64 / 2.0 / spu(a));
-        let top = crate::sim::homed_position(&config, &world, 2, world.block.unwrap().2 as f64 / spu(2));
+        // the stock's highest top (a stepped bar's full-height part)
+        let high = world.blocks.iter().map(|b| b.2).chain(world.block.map(|b| b.2)).max().unwrap();
+        let top = crate::sim::homed_position(&config, &world, 2, high as f64 / spu(2));
+        // RCNC_LOCATE_X: where across the stock (mm from its middle) the operator puts the probe for Find stock
+        let locate_x: f64 = std::env::var("RCNC_LOCATE_X").ok().and_then(|v| v.parse().ok()).unwrap_or(2.5);
         if let Some(l) = std::env::var("RCNC_AIR_CUT").ok().filter(|l| !l.is_empty()) {
             c.handle(Command::SetAirCut(Some(l.parse().unwrap())));
         }
@@ -4301,7 +4315,7 @@ mod tests {
                     run_until(c, &clock, 120.0, "the end of a jog", |s| s.mode == Mode::Probing);
                 };
                 go(&mut c, 2, s.machine[2].max(top + 30.0));
-                go(&mut c, 0, middle(0) + 2.5);
+                go(&mut c, 0, middle(0) + locate_x);
                 go(&mut c, 1, middle(1) - 3.0);
                 go(&mut c, 2, top - 5.0);
                 go(&mut c, 2, top + 5.0);
@@ -4315,6 +4329,11 @@ mod tests {
         let s = c.snapshot();
         for l in s.log.iter().filter(|l| l.contains("Stock found") || l.contains("Bores found") || l.contains("touched off") || l.starts_with("Warning")) {
             println!("{l}");
+        }
+        if std::env::var("RCNC_FULL_LOG").is_ok() {
+            for l in s.log.iter() {
+                println!("log: {l}");
+            }
         }
         println!("{path}: finished after {t:.0} s simulated, tool changes {changes:?}, work offset {:?}", s.work_offsets[0]);
         println!("lowest the tool went with the spindle on: {lowest_cut:.3} mm from the stock top");

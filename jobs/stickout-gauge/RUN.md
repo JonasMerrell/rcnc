@@ -26,20 +26,28 @@ At each change, use **Tap test** in the tool change window (Settings → Listeni
 C4 (1.8 × 6 at F2400): the spindle stalled.
 
 **Before:**
-- rcnc on the **listen-guard** build. The program has `(RCNC REQUIRE_GUARD)`, so Cycle Start refuses unless
-  Settings → Listening is on, the feed hold is on and the input is live. The status bar must say
-  **"hold armed"**.
-- **A new T24** at stick-out 24. Use Tap test at the change.
-- The wall meter where you can read it.
+1. **Pick the carbide out of the torn end.** The broken T24's tip may still be stuck in the first run's C4 cut
+   at the +X end. Look in the cut and its end with a light, and pick out any fragment (a magnet won't
+   reliably hold carbide; use a scriber or pick). A new tool hitting a carbide chip breaks too.
+2. rcnc on the **listen-guard** build (mill/stickout-gauge 02c350c or later).
+3. **Home** the machine first.
+4. **A new T24 at stick-out 24.** Use Tap test at the change.
+5. **Settings → Listening:** input on, **feed hold on**. The status bar must say **"hold armed"** (green)
+   before Cycle Start. The program has `(RCNC REQUIRE_GUARD)`, so Cycle Start refuses without it.
+6. The wall meter where you can read it.
 
 **Run:**
 1. Air cut on (+25), once: the no-load baseline. It writes `op1a-calibrate-v2.nc.air.cutlog.json`.
 2. Air cut off, for real.
-   - **Find stock:** jog the probe over the **unstepped** part of the top (x < 10). The +X side has the first
-     run's 4.75 mm step at Z26.
+   - **Find stock:** the bar is stepped. Only **X −16 to +11.2** is still full height (Z32); past x +11.2
+     the first run cut it down to Z26. Jog the probe over the **middle of the full-height part, about
+     X −2** (a few mm left of the bar's middle), a few mm above it, and press Continue.
+   - The side touches are at Z24, below the step's floor, so they still find the full 32 width.
    - Find stock sets X/Y; Z stays from the Vise reference.
-3. Each pass shows **"Pass N: …"** in the message line, then the spindle runs 3 s in air, then the cut.
-   - Read the meter during the 3 s of air and during the cut, and call out "pass N = W".
+3. **Wall watts.** Write them down as you go:
+   - **air first:** each pass shows **"Pass N: …"**, then the spindle runs 3 s in air. Read the meter in the
+     3 s of air at each new rpm (24k, 21k, 18k, 15k, 12k);
+   - **then each pass:** read it during the cut and call out "pass N = W".
    - Afterwards put them in `wall_watts.json`: `{"air": {"24000": W, "21000": W, …}, "C9": W, …}`.
 4. If the bog guard holds ("FEED HELD: spindle bogging"):
    - **stop the program** (don't Cycle Start through it);
