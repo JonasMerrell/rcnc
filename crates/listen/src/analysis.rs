@@ -186,7 +186,7 @@ impl Analyzer {
             let floor = band[band.len() / 2];
             let harmonic = |hz: f64| {
                 let k = (hz / heard_rot).round();
-                k >= 1.0 && (hz - k * heard_rot).abs() <= (0.015 * hz).max(2.5 * bin)
+                k >= 1.0 && (hz - k * heard_rot).abs() <= (0.004 * hz).max(2.5 * bin)
             };
             let mut top_h = f64::NEG_INFINITY;
             let mut best: Option<(f64, f64)> = None;
