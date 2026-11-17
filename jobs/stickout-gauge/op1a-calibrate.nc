@@ -9,6 +9,7 @@
 G21 G17 G40 G49 G80 G90 G91.1 G94 G64
 G54
 (RCNC Z_REFERENCE Vise)
+(RCNC RECORD_AUDIO: the calibration passes; rcnc saves the run's sound beside this file as .wav)
 
 (Probe stock top - Probe)
 G53 G0 Z0
