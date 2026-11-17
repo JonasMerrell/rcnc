@@ -148,7 +148,23 @@ impl Analyzer {
             }
         };
         let harmonics = 12usize.min(((self.rate as f64 / 2.0 * 0.9) / rot) as usize).max(1);
-        let score = |f: f64| (1..=harmonics).map(|k| at(k as f64 * f)).sum::<f64>();
+        // each harmonic counts by how far it stands over the spectrum's median, dB, at most 30: summing raw
+        // amplitudes let one loud fixed line (the DMC2 has one at 3122 Hz, 130 dB) pull the comb onto it as an
+        // 8th harmonic, reading 2.45% slow in air where the spindle ran 397.0 Hz on every real harmonic
+        let floor = {
+            let mut d: Vec<f64> = db[(300.0 / bin) as usize..((self.rate as f64 / 2.0 * 0.9) / bin) as usize].to_vec();
+            d.sort_by(|a, b| a.total_cmp(b));
+            d.get(d.len() / 2).copied().unwrap_or(-120.0)
+        };
+        let at_db = |hz: f64| {
+            let i = (hz / bin).round() as usize;
+            if i + 1 >= db.len() || i == 0 {
+                0.0
+            } else {
+                (db[i - 1].max(db[i]).max(db[i + 1]) - floor).clamp(0.0, 30.0)
+            }
+        };
+        let score = |f: f64| (1..=harmonics).map(|k| at_db(k as f64 * f)).sum::<f64>();
         let (lo_f, hi_f) = (rot * (1.0 - MAX_DROOP), rot * 1.02);
         let step = bin / (2.0 * harmonics as f64);
         let mut best = (f64::NEG_INFINITY, rot);
@@ -163,11 +179,29 @@ impl Analyzer {
         // it must stand out from the harmonics of a frequency well off it
         let off = score(best.1 * 1.37).max(score(best.1 * 0.71));
         if best.0 > 2.0 * off {
-            // finer: the strongest of those harmonics, its peak interpolated between bins, over its number
-            let k = (1..=harmonics).max_by(|a, b| at(*a as f64 * best.1).total_cmp(&at(*b as f64 * best.1))).unwrap_or(1);
-            let i = (k as f64 * best.1 / bin).round() as usize;
-            let i = (i.saturating_sub(1)..=(i + 1).min(db.len() - 2)).max_by(|a, b| db[*a].total_cmp(&db[*b])).unwrap_or(i);
-            let fine = self.interp(&db, i) / k as f64;
+            // finer: the strongest few harmonics from the 2nd up to the 24th, each peak interpolated between bins
+            // and over its number, weighted by that number. One harmonic alone misreads: the fundamental (a bin
+            // is 1.5% of 397 Hz) let a neighbouring line pull it a bin off near the work (coolant), reading 2.45%
+            // slow where the spindle ran its no-load 0.8%
+            let top = 24usize.min(((self.rate as f64 / 2.0 * 0.9) / best.1) as usize).max(1);
+            let mut ks: Vec<(usize, f64)> = (2.min(top)..=top).map(|k| (k, at(k as f64 * best.1))).collect();
+            ks.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let strongest = ks.first().map(|k| k.1).unwrap_or(0.0);
+            let (mut sum, mut weight) = (0.0, 0.0);
+            for (k, a) in ks.iter().take(4) {
+                // within 12 dB of the strongest
+                if *a < strongest * 0.25 {
+                    continue;
+                }
+                let i = (*k as f64 * best.1 / bin).round() as usize;
+                if i + 2 >= db.len() || i < 2 {
+                    continue;
+                }
+                let i = (i - 1..=i + 1).max_by(|a, b| db[*a].total_cmp(&db[*b])).unwrap_or(i);
+                sum += self.interp(&db, i) / *k as f64 * *k as f64;
+                weight += *k as f64;
+            }
+            let fine = if weight > 0.0 { sum / weight } else { best.1 };
             let rpm = fine / rot * ctx.rpm;
             f.rpm = Some(rpm);
             f.droop = Some(1.0 - rpm / ctx.rpm);
@@ -313,6 +347,35 @@ pub(crate) mod tests {
         let (l, h) = (a.analyse(&light[..a.n], &ctx).tooth_db.unwrap(), a.analyse(&heavy[..a.n], &ctx).tooth_db.unwrap());
         // 0.3 of the amplitude: about 10.5 dB lower
         assert!((h - l - 10.46).abs() < 1.0, "{l} {h}");
+    }
+
+    /// A loud fixed line near a harmonic (the DMC2 has one at 3122 Hz, 130 dB, a bin off its 8th at 397 Hz) mustn't
+    /// pull the speed onto it: the recording read 2.45% slow in air there while the spindle ran 397.0 Hz.
+    #[test]
+    fn a_loud_fixed_line_does_not_pull_the_speed() {
+        let rate = 24_000;
+        let rot = 397.0;
+        let mut seed = 12345u64;
+        let mut noise = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 10_000) as f64 / 10_000.0 - 0.5
+        };
+        let x: Vec<f32> = (0..rate)
+            .map(|i| {
+                let t = i as f64 / rate as f64;
+                let mut s: f64 = (1..=16).map(|k| 0.02 / (k as f64).sqrt() * (2.0 * std::f64::consts::PI * k as f64 * rot * t).sin()).sum();
+                s += 0.5 * (2.0 * std::f64::consts::PI * 3122.0 * t).sin();
+                (s + 0.01 * noise()) as f32
+            })
+            .collect();
+        let mut a = Analyzer::new(rate);
+        let ctx = Context { rpm: 24_000.0, teeth: 3, cutting: true, ..Default::default() };
+        for f in a.push(&x, &ctx) {
+            let d = f.droop.expect("found the spindle");
+            assert!((d - (1.0 - rot / 400.0)).abs() < 0.002, "{d}");
+        }
     }
 
     /// The spindle's own line (a pickup on the head hears e.g. the VFD at 8.6 kHz) is learned in air and not

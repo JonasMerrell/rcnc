@@ -23,7 +23,7 @@ fn main() {
         for (i, f) in frames.iter().enumerate() {
             let t = t_end - (k - 1 - i) as f64 * hop;
             if t >= from && t <= to {
-                println!("{t:.3} {}", f.droop.map(|d| format!("{:.4}", d * 100.0)).unwrap_or("-".into()));
+                println!("{t:.3} {} {}", f.droop.map(|d| format!("{:.4}", d * 100.0)).unwrap_or("-".into()), f.tooth_db.map(|d| format!("{d:.1}")).unwrap_or("-".into()));
             }
         }
         fed = end;

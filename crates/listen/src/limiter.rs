@@ -15,9 +15,9 @@ use crate::Frame;
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LimiterSettings {
-    /// Sag over the no-load sag to hold, share (0.03 = 3%), on the bog guard's scale (its no-load sag is learned
-    /// with the spindle on and the machine standing: so moving near the work in air already reads about 1.7%,
-    /// the broken-tool run's C1 0.6 x 6 about 1.5%, C2 1.0 x 6 3.2%, and the guard holds at 6%).
+    /// Sag over the no-load sag to hold, share (0.03 = 3%), on the bog guard's scale (`Guard::excess`; the
+    /// broken-tool run's C1 0.6 x 6 read 1.4%, C2 1.0 x 6 (rCAD 499 W) 3.0%, C3 6.5% and rising; the guard
+    /// holds at 6%).
     pub target: f64,
     /// The lowest share of the programmed feed it goes to.
     pub min: f64,

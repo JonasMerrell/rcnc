@@ -1,15 +1,14 @@
 //! The adaptive feed limiter against a model of the DMC2's spindle fitted to the run that broke T24 (stick-out
 //! gauge op 1a, 2026-11-17; `broken_tool.rs` has its recording). All sags are on the bog guard's scale: over the
-//! no-load sag it learns with the spindle on and the machine standing (0.8% there: 397 Hz at S24000). Moving
-//! near the work in air already reads 1.65% more (the coolant on the tool), and the cuts add to that:
-//! C1 0.6 x 6 (rCAD 318 W) nothing more (1.5%), C2 1.0 x 6 (499 W) 3.1%, C3 1.4 x 6 (about 680 W) 5.6% at 0.5 s
-//! and still rising, 7.3% at 3 s, C4 1.8 x 6 (about 860 W) 7.9% at 0.5 s, 11.3% at 0.8 s, running away (the tool
+//! no-load sag it learns with the spindle on and the machine standing (0.8%: 397 Hz at S24000; in air near the
+//! work it reads the same since the analysis stopped locking onto the 3122 Hz line). Heard, from each cut's
+//! start: C1 0.6 x 6 (rCAD 318 W) 1.4%, C2 1.0 x 6 (499 W) 3.0%, C3 1.4 x 6 (about 680 W) 5.6% at 0.5 s and
+//! still rising, 7.3% at 3 s, C4 1.8 x 6 (about 860 W) 7.8% at 0.5 s, 11.4% at 0.8 s, running away (the tool
 //! broke about 1.6 s in).
 //!
-//! The model: that 1.65% while moving, plus the cut's: the VFD holds its speed up to about 413 W, then sags
-//! 0.0169% a watt (first order, 0.2 s);
-//! past its pull-out (650 W) the motor falls behind and keeps falling, faster the further it has fallen.
-//! Load goes with the feed to the 0.75 (Kienzle: the chip thickens as the feed rises).
+//! The model: the sag rises 0.0088% a watt from about 160 W to C2's 3.0% at 499 W, 0.0122% a watt past it
+//! (first order, 0.1 s); past its pull-out (650 W) the motor falls behind and keeps falling, faster the further
+//! it has fallen. Load goes with the feed to the 0.75 (Kienzle: the chip thickens as the feed rises).
 //!
 //! The loop as on the machine: windows of 0.17 s every 0.085 s (24 kHz), handed over in the app's 0.1 s
 //! batches; a feed change reaches the cut 0.245 s later (the board's queue, measured in the controller's
@@ -18,9 +17,8 @@
 use cnc_listen::{Context, Frame, Guard, GuardSettings, Limiter, LimiterSettings};
 
 const DT: f64 = 0.005;
-/// The no-load sag the guard learns standing, and what moving near the work adds.
+/// The no-load sag the guard learns.
 const AIR: f64 = 0.008;
-const MOVING: f64 = 0.0165;
 const HOP: f64 = 2048.0 / 24_000.0;
 const WINDOW: f64 = 4096.0 / 24_000.0;
 const POLL: f64 = 0.1;
@@ -34,8 +32,8 @@ struct Spindle {
 impl Spindle {
     /// One step with `p` W of cut: the sag over the no-load sag.
     fn step(&mut self, p: f64) -> f64 {
-        let steady = (0.000169 * (p - 413.0)).max(0.0);
-        self.lag += (steady - self.lag) * DT / 0.2;
+        let steady = if p <= 499.0 { (0.000088 * (p - 160.0)).max(0.0) } else { 0.030 + 0.000122 * (p - 499.0) };
+        self.lag += (steady - self.lag) * DT / 0.1;
         if p > 650.0 {
             self.behind += 0.00015 * (p - 650.0) * (1.0 + self.behind / 0.02) * DT;
         } else {
@@ -80,7 +78,7 @@ fn run(p100: f64, secs: f64, settings: Option<LimiterSettings>, queue: f64, guar
         let p = p100 * feed_now.powf(0.75);
         let stopped = r.stalled_at.is_some() || (guard_stops && r.held_at.is_some());
         let cut = if stopped { 0.0 } else { sp.step(p) };
-        let e = if stopped { 0.0 } else { MOVING + cut };
+        let e = cut;
         sag_hist.push((t, e));
         r.peak = r.peak.max(e);
         if cut > 0.15 && r.stalled_at.is_none() {
@@ -121,15 +119,15 @@ fn at(r: &Run, t: f64) -> (f64, f64, f64, f64) {
 fn the_model_matches_the_recording() {
     // heard (windowed, as the analysis reports it) from each cut's start, against the recording's windows
     let c2 = run(499.0, 3.0, None, QUEUE, false);
-    assert!((at(&c2, 2.5).3 - 0.031).abs() < 0.002, "C2 {:?}", at(&c2, 2.5));
+    assert!((at(&c2, 2.5).3 - 0.030).abs() < 0.002, "C2 {:?}", at(&c2, 2.5));
     let c3 = run(680.0, 3.1, None, QUEUE, false);
     let (h05, h30) = (at(&c3, 0.5).3, at(&c3, 3.0).3);
     eprintln!("C3 heard: 0.5 s {:.1}% (recorded 5.6), 3 s {:.1}% (7.3)", h05 * 100.0, h30 * 100.0);
-    assert!(h05 > 0.047 && h05 < 0.065 && h30 > 0.066 && h30 < 0.09, "C3 {h05} {h30}");
+    assert!(h05 > 0.045 && h05 < 0.065 && h30 > 0.063 && h30 < 0.085, "C3 {h05} {h30}");
     let c4 = run(860.0, 2.0, None, QUEUE, false);
     let (h05, h08) = (at(&c4, 0.5).3, at(&c4, 0.8).3);
-    eprintln!("C4 heard: 0.5 s {:.1}% (recorded 7.9), 0.8 s {:.1}% (11.3); stalls at {:?} (the tool broke about 1.6 s in)", h05 * 100.0, h08 * 100.0, c4.stalled_at);
-    assert!(h05 > 0.066 && h05 < 0.097 && h08 > 0.096 && h08 < 0.15, "C4 {h05} {h08}");
+    eprintln!("C4 heard: 0.5 s {:.1}% (recorded 7.8), 0.8 s {:.1}% (11.4); stalls at {:?} (the tool broke about 1.6 s in)", h05 * 100.0, h08 * 100.0, c4.stalled_at);
+    assert!(h05 > 0.065 && h05 < 0.095 && h08 > 0.095 && h08 < 0.15, "C4 {h05} {h08}");
     assert!(c4.stalled_at.is_some_and(|t| t > 0.9 && t < 2.0), "{:?}", c4.stalled_at);
     // the guard as it is holds in both (as on the recording)
     assert!(c3.held_at.is_some() && c4.held_at.is_some(), "{:?} {:?}", c3.held_at, c4.held_at);
@@ -163,10 +161,10 @@ fn what_it_would_have_done_in_c3_and_c4() {
     // and C4 had the guard's hold been ignored: the limiter alone
     let c4_alone = run(860.0, 3.1, Some(s), QUEUE, false);
     report("C4, the guard's hold ignored", &c4_alone);
-    // C3: slowed to about 65% (the 3% target is about 490 W) and kept cutting, under the guard's limit
+    // C3: slowed to about 77% (the 3% target is C2's 499 W) and kept cutting, under the guard's limit
     assert!(c3.held_at.is_none() && c3.stalled_at.is_none(), "C3 held {:?} stalled {:?}", c3.held_at, c3.stalled_at);
     let (e, _, f, _) = at(&c3, 3.0);
-    assert!(f > 0.6 && f < 0.75 && (e - s.target).abs() < 0.006, "C3 at 3 s: sag {e} feed {f}");
+    assert!(f > 0.68 && f < 0.85 && (e - s.target).abs() < 0.006, "C3 at 3 s: sag {e} feed {f}");
     // C4: too sudden for the feed (0.4 s before a change shows): the guard holds it, as now, before a stall;
     // the limiter alone takes it to the 60% floor and it doesn't stall either
     assert!(c4.held_at.is_some_and(|t| t < 0.9) && c4.stalled_at.is_none(), "C4 held {:?} stalled {:?}", c4.held_at, c4.stalled_at);
