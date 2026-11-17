@@ -35,6 +35,8 @@ pub struct Ears {
     log: Option<(std::path::PathBuf, CutLog)>,
     log_start: std::time::Instant,
     guard: Guard,
+    /// Why the guard last held the feed, shown until the program moves on again.
+    held: Option<String>,
     /// Since the listening started (the guard's clock).
     clock: std::time::Instant,
     /// A program with `(RCNC RECORD_AUDIO)` in it: the whole run's sound, written as a WAV beside it.
@@ -67,6 +69,7 @@ impl Ears {
             log: None,
             log_start: std::time::Instant::now(),
             guard: Guard::default(),
+            held: None,
             clock: std::time::Instant::now(),
             recording: None,
             last: None,
@@ -122,6 +125,10 @@ impl Ears {
             }
             return;
         }
+        // the hold is over once the program moves again (Cycle Start) or stops
+        if self.held.is_some() && (!s.hold || !matches!(s.mode, Mode::Running)) && s.velocity > 0.0 {
+            self.held = None;
+        }
         let Some(a) = &mut self.analyzer else { return };
         let frames = a.push(&samples, &ctx);
         // a program running: log it, and write the log beside the program when it stops
@@ -150,7 +157,8 @@ impl Ears {
             if let Some(why) = self.guard.update(gt - (n - 1 - i) as f64 * step, f) {
                 if matches!(s.mode, Mode::Running) && !s.hold {
                     machine.send(Command::FeedHold);
-                    machine.send(Command::Note(why));
+                    machine.send(Command::Note(why.clone()));
+                    self.held = Some(why);
                 }
             }
         }
@@ -215,6 +223,21 @@ impl Ears {
         }
     }
 
+    /// Whether the bog guard can hold the feed now: listening, the hold on, and sound coming in.
+    pub fn guard_ready(&self) -> Result<(), String> {
+        if self.source.is_none() {
+            return Err(self.problem.clone().map(|p| format!("there is no input ({p})")).unwrap_or("listening is off".into()));
+        }
+        if !self.settings.guard.on {
+            return Err("the feed hold is switched off".into());
+        }
+        match &self.last {
+            Some(f) if f.loud_db > -80.0 => Ok(()),
+            Some(f) => Err(format!("the input is silent ({:.0} dB)", f.loud_db)),
+            None => Err("nothing has been heard yet".into()),
+        }
+    }
+
     pub fn recording(&self) -> bool {
         self.recording.is_some()
     }
@@ -239,6 +262,16 @@ impl Ears {
             _ => ("mic: on".to_string(), MUTED),
         };
         ui.label(RichText::new(text).size(13.0).color(color).strong()).on_hover_text("From the microphone: the spindle's speed under load (droop) and chatter. Logged per line next to the program as .cutlog.json.");
+        if let Some(why) = &self.held {
+            ui.label(RichText::new("FEED HELD: spindle bogging").size(13.0).color(RED).strong()).on_hover_text(why);
+        }
+        let (gtext, gcolor) = match self.guard_ready() {
+            Ok(()) => ("hold armed", GREEN),
+            Err(_) if !self.settings.guard.on => ("hold off", MUTED),
+            Err(_) => ("hold NOT armed", AMBER),
+        };
+        ui.label(RichText::new(gtext).size(12.0).color(gcolor))
+            .on_hover_text(format!("Feed hold when the spindle bogs: over {:.0}% slow for {:.1} s, or still slowing down after {:.1} s (Settings -> Listening)", self.settings.guard.limit * 100.0, self.settings.guard.time, self.settings.guard.rising_time));
         if self.recording.is_some() {
             ui.label(RichText::new("● REC").size(13.0).color(RED).strong()).on_hover_text("The program asked for (RCNC RECORD_AUDIO): its sound is saved as a .wav beside it when it ends");
         }
@@ -357,6 +390,11 @@ fn samples_per_frame_s(rate: u32) -> f64 {
     (n / 2) as f64 / rate.max(1) as f64
 }
 
+/// A program asks for the listening feed hold with `(RCNC REQUIRE_GUARD)`: Cycle Start refuses without it.
+pub fn requires_guard(program: &str) -> bool {
+    program.lines().any(|l| l.trim().to_ascii_uppercase().starts_with("(RCNC REQUIRE_GUARD"))
+}
+
 /// A program asks for its run to be recorded with an `(RCNC RECORD_AUDIO)` comment (a calibration program).
 pub fn records_audio(program: &str) -> bool {
     program.lines().any(|l| l.trim().to_ascii_uppercase().starts_with("(RCNC RECORD_AUDIO"))
@@ -369,5 +407,6 @@ mod tests {
         assert!(super::records_audio("G21\n(rcnc record_audio)\nM30"));
         assert!(super::records_audio("(RCNC RECORD_AUDIO: calibration passes)"));
         assert!(!super::records_audio("G21\n(RECORD_AUDIO)\nM30"));
+        assert!(super::requires_guard("(RCNC REQUIRE_GUARD: the feed hold must be armed)\nM30") && !super::requires_guard("M30"));
     }
 }

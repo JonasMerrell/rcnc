@@ -2906,6 +2906,38 @@ mod tests {
         assert!(spin > 0.0 && (changed - plain - want).abs() < 0.05, "{plain} {changed} {want}");
     }
 
+    /// How long a feed hold takes to stop a cut at 2400 mm/min, from the command to the axes at rest (the
+    /// board still plays what is queued, about 0.24 s, then the planner's deceleration), and how far it goes.
+    #[test]
+    fn feed_hold_stops_a_cut_quickly() {
+        let (mut c, clock) = setup();
+        c.homed = [true; 6];
+        c.handle(Command::Mdi("G91 G1 Y100 F2400".into()));
+        // into the cut at full feed
+        for _ in 0..200 {
+            clock.advance(0.005);
+            c.update();
+        }
+        let s = c.snapshot();
+        assert!((s.velocity - 2400.0).abs() < 1.0, "{}", s.velocity);
+        let (t0, y0) = (clock.now(), s.machine[1]);
+        c.handle(Command::FeedHold);
+        let mut stopped = None;
+        let mut last = y0;
+        for _ in 0..400 {
+            clock.advance(0.005);
+            c.update();
+            let y = c.snapshot().machine[1];
+            if (y - last).abs() < 1e-9 && stopped.is_none() {
+                stopped = Some((clock.now() - t0, y - y0));
+            }
+            last = y;
+        }
+        let (dt, dy) = stopped.expect("stopped");
+        eprintln!("feed hold: stopped {dt:.3} s and {dy:.2} mm after the command");
+        assert!(dt < 0.35 && dy < 12.0, "{dt} {dy}");
+    }
+
     #[test]
     fn estop_rewinds_and_forgets_the_spindle() {
         let (mut c, clock) = setup();
