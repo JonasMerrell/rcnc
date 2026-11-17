@@ -12,11 +12,12 @@ X across the bar (the vise clamps along X), Y along it, Z up; part bottom at z 0
 import json, math
 
 W, L, H = 23.0, 88.0, 16.0         # gauge (23 wide: 3 mm outer slot walls, stiff in op 2's jaws)
-SW, SD = 6.8, 6.0                  # slot width (6.35 / 6 tools slide in), depth
+SW, SD = 7.2, 6.0                  # slot width (6.35 / 6 tools slide in; room for the rough's 0.2 each side), depth
 SX = 0.0                           # one slot per end per face, centred (the relief needs the width)
 # (face, end, x, stick-out): end +1 = +Y
 SLOTS = [("top", 1, 0, 24), ("top", -1, 0, 21), ("bottom", 1, 0, 22), ("bottom", -1, 0, 26)]
-RW, RL = 13.0, 7.0                 # cross relief at each slot's end: its far wall (flat across 6.65 > a tool's 6.35) is the stop
+RW, RL = 14.0, 8.0                 # cross relief at each slot's end: its far wall (flat across 6.8 > a tool's 6.35) is the stop
+RF = 3.6                           # the relief's inside corners: R3.6 (> the tool's 3.175 + the rough's 0.2)
 DISH_D, DISH_H = 16.0, 3.5         # thumb dish, spherical, top face middle
 CH, EB = 0.5, 0.3                  # outer edge chamfer, edge break elsewhere
 TXT_H, TXT_D = 4.0, 0.3            # engraved numbers
@@ -67,7 +68,16 @@ def slot_rect(end, x, s, over=2.0):
     yr = yf + end * RL
     P = lambda px, py: [round(px, 4), round(py, 4)]
     hw, rw = SW / 2, RW / 2
-    pts = [P(x - hw, yo), P(x + hw, yo), P(x + hw, yr), P(x + rw, yr), P(x + rw, yf), P(x - rw, yf), P(x - rw, yr), P(x - hw, yr)]
+    def fillet(cx, cy, a0, a1):
+        """Points along an R`RF` arc about (cx, cy) from angle a0 to a1 (degrees), ends included."""
+        return [P(cx + RF * math.cos(math.radians(a0 + (a1 - a0) * k / 8)), cy + RF * math.sin(math.radians(a0 + (a1 - a0) * k / 8))) for k in range(9)]
+    # corners in order round the outline; e flips the relief's corners for the -Y end
+    pts = [P(x - hw, yo), P(x + hw, yo), P(x + hw, yr)]
+    if end > 0:
+        pts += fillet(x + rw - RF, yr - RF, 90, 0) + fillet(x + rw - RF, yf + RF, 0, -90) + fillet(x - rw + RF, yf + RF, -90, -180) + fillet(x - rw + RF, yr - RF, 180, 90)
+    else:
+        pts += fillet(x + rw - RF, yr + RF, -90, 0) + fillet(x + rw - RF, yf - RF, 0, 90) + fillet(x - rw + RF, yf - RF, 90, 180) + fillet(x - rw + RF, yr + RF, 180, 270)
+    pts += [P(x - hw, yr)]
     return {"type": "polyline", "points": pts, "closed": True}
 
 

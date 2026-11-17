@@ -73,15 +73,17 @@ S += [setup("Op 1 top", 3, follows="Op 1a calibration")]
 S += [tool(1, 11)]   # the tool table is the document's: T1 and T24 are there from op 1a
 S += [
     op(1, "face", "Face the top to Z19 (what the calibration left of the band)", tool=24, stepdown=1.0),
-    op(1, "trace", "Cut the top slots and their end reliefs to size (inside the outline, 1 mm levels, F1000: the first lap is a full-width cut)", tool=24, sketches=[3], side="inside", top=19.0, depth=6.0, stepdown=1.0, leave=0.0, feed=1000, plunge_feed=250),
+    op(1, "trace", "Rough the top slots and their end reliefs, 0.2 left on the walls (1 mm levels, F1000: the first lap is a full-width cut; floors to depth)", tool=24, sketches=[3], side="inside", top=19.0, depth=6.0, stepdown=1.0, leave=0.2, feed=1000, plunge_feed=250),
     op(1, "adaptive", "Rough everything above Z8: the end lugs, the band beside the gauge, the dish", tool=24, bottom=8.0, stepdown=5.5, stepover=0.1, leave=0.3, leave_floor=0.0, rest=True),
     op(1, "contour", "Rough the walls to Z5 and the lugs to Z8 (extra passes at 25% of Ø outside the wall)", tool=24, side="outside", bottom=5.0, stepdown=7.0, leave=0.3, finish_lap=0, seam=[-20, 0]),
+    op(1, "trace", "Finish the slot walls and the relief stop walls, one full-depth 6 mm pass round their outline (starts at the slot's mouth)", tool=24, sketches=[3], side="inside", top=19.0, depth=6.0, stepdown=6.0, leave=0.0),
     op(1, "contour", "Finish the walls and end faces Z19 to Z8, one full-height pass (seam mid -X side)", tool=24, side="outside", bottom=8.0, stepdown=12, seam=[-20, 0]),
     op(1, "contour", "Finish the walls Z8 to Z5 (lugs' outsides too)", tool=24, side="outside", top=8.0, bottom=5.0, stepdown=3.5, seam=[-20, 0]),
     op(1, "bore", "Two Ø8 bores through the lugs (op 2 finds them)", tool=24, points=[[0, 52], [0, -52]], thread_diameter=8.0, bottom=-0.5),
     op(1, "scallop", "Finish the thumb dish (0.2 stepover = 0.033 D)", tool=11, stepover=0.033, slope_min=3, leave=0.0),
     op(1, "trace", "Engrave the top numbers 0.3 deep", tool=1, sketches=[9], depth=0.3, stepdown=0.3),
-    op(1, "chamfer", "Chamfer 0.4 every top edge (outline, slots, dish rim, lugs)", tool=1, chamfer=0.4, side="both", tip_offset=1.0),
+    op(1, "deburr", "Edge break 0.3 on the two bore mouths in the lugs (op 2 probes these bores)", tool=1, chamfer=0.3, tip_offset=0.7, edges=[[4.0, 52.0, 8.0], [4.0, -52.0, 8.0]]),
+    op(1, "chamfer", "Edge break 0.3 on every edge of the gauge's top: outline (op 2 sits it on the 1.9 ledges), slots, reliefs, dish rim", tool=1, chamfer=0.3, side="both", tip_offset=1.0),
 ]
 S += out(1, "op1-top")
 S += [{"tool": "save_document", "args": {"path": "gauge-cam.json"}}]

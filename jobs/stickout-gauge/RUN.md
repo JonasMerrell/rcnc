@@ -50,36 +50,56 @@ The rCAD stock simulation of these passes, with rCAD's cutting model:
 - The rcnc simulator runs it to the end: Find stock read the top at Z25.400.
 - The passes only take the top 6 mm band and the 1.2 mm strip outside the +X wall.
 
-## Op 1: the gauge's top side (`op1-top.nc`, about 26 min)
+## Op 1: the gauge's top side (`op1-top.nc`, about 24 min plus one chip pause)
 
-Run it straight after op 1a, **without unclamping**. It doesn't probe: G54 stays from op 1a. Its stock
-model is what op 1a's passes left.
+Run it straight after op 1a, **without unclamping**. It doesn't probe: G54 stays from op 1a. Its stock model
+is what op 1a's passes left.
 
 | # | Tool | Operation | Time | Spindle | Chatter | Chip |
 |---|---|---|---|---|---|---|
 | 1 | T24 | Face the top to Z19 (the rest of the band) | 5:31 | 20% | 0.23 | 0 |
-| 2 | T24 | Slots and their end reliefs to size: traced inside the outline, 1 mm levels, **F1000** (the first lap is a full-width cut) | 0:42 | 21% | 0.75 | **0.89** |
-| 3 | T24 | Rough everything above Z8: end lugs, the band beside the gauge, the dish | 12:23 | **65%** | **0.81** | 0.23 |
-| 4 | T24 | Rough the walls to Z5 (extra passes ≤ 25% Ø) | 0:50 | 46% | 0.47 | 0.08 |
-| 5 | T24 | **Finish** the walls and end faces Z19→Z8, one full-height pass (leads, 1.5 overlap, 0.03 last lap; seam mid −X side) | 1:12 | 23% | 0.21 | 0.06 |
-| 6 | T24 | Finish the walls Z8→Z5 (lug outsides too) | 0:22 | 20% | 0.19 | 0.03 |
-| 7 | T24 | Two Ø8 bores through the lugs at y ±52 (op 2 finds them) | 0:25 | 2% | | 0.60 |
-| 8 | T11 | Finish the thumb dish, scallop **0.2 stepover (0.033 D)** | 3:23 | 0% | 0.04 | 0.08 |
-| 9 | T1 | Engrave the top numbers 0.3 deep | 0:18 | | | |
-| 10 | T1 | Chamfer 0.4 on every top edge, tip offset 1 | 0:16 | | | |
+| 2 | T24 | Rough the slots and reliefs: traced inside, 1 mm levels, **F1000**, 0.2 left on the walls, floors to depth | 0:43 | 21% | 0.73 | 0.91 |
+| — | | **CHIP PAUSE**: spindle and coolant stop, rcnc says "Blow the chips out of the two slots and their end reliefs". Blow them out, then Cycle Start. | | | | |
+| 3 | T24 | Rough everything above Z8: end lugs, the band beside the gauge, the dish | 12:25 | **65%** | **0.81** | 0.22 |
+| 4 | T24 | Rough the walls to Z5 (extra passes ≤ 25% Ø) | 0:53 | 46% | 0.47 | 0.08 |
+| 5 | T24 | **Finish the slot walls and the relief stop walls**: one full-depth 6 mm pass round their outline | 0:09 | 45% | 0.38 | 0.16 |
+| 6 | T24 | **Finish** the walls and end faces Z19→Z8, one full-height pass (leads, 1.5 overlap, 0.03 last lap; seam mid −X side) | 1:12 | 23% | 0.21 | 0.05 |
+| 7 | T24 | Finish the walls Z8→Z5 (lug outsides too) | 0:22 | 20% | 0.19 | 0.03 |
+| 8 | T24 | Two Ø8 bores through the lugs at y ±52 (op 2 finds them) | 0:25 | 2% | | 0.60 |
+| 9 | T11 | Finish the thumb dish, scallop **0.2 stepover (0.033 D)** | 0:50 | 0% | 0.04 | 0.17 |
+| 10 | T1 | Engrave the numbers 0.3 deep | 0:18 | | | |
+| 11 | T1 | Edge break 0.3 on the two bore mouths (top side) | 0:08 | | | |
+| 12 | T1 | Edge break 0.3 on every edge of the gauge's top: outline, slots, reliefs, dish rim | 0:16 | | | |
+
+**The slots:**
+- Slots are now **7.2 wide** (the tool cradles in them; 0.2 rough allowance each side).
+- Each relief is **14 × 8** with R3.6 inside corners. That's bigger than the tool's 3.175 plus the 0.2
+  allowance, so the corners finish too.
+- The far wall (the stop) is flat across **6.8 mm**, wider than a tool's 6.35.
+
+**Edges:**
+- Every edge op 1 makes on the gauge gets a 0.3 edge break, not 0.4. These top edges become the bottom in
+  op 2, standing on the 1.9 mm vise ledges, so 1.6 mm of land is left on each ledge.
+- The engraving needs none.
+
+**Chips:** step 2 has the highest chip index (0.91). It's a full-width cut 6 deep, so the pause after it stays.
+The slots are open at the end faces, so flood should clear most of it.
+
+**Bores:** chip index 0.60. Before op 2:
+- blow out both lug bores;
+- deburr their **bottom ends** by hand (a deburring tool or countersink, lightly). That's where the bores
+  broke through in op 1, and it's the side op 2 probes from.
+
+Op 2's program also says so before Find bores.
 
 Check results:
-- **rCAD simulation:** no problems. Peak spindle 65%; chatter at most 0.81, below the phone stand's 0.82.
-- **rcnc simulator:** op 1a followed by op 1 runs to the end (1641 s simulated).
-- **Jaws:** in the model, with 0.3 mm clearance. Nothing goes below Z5 beside the jaws.
-- **Lug bores:** they break through 0.5 below Z0 at y ±52, beyond the vise body.
+- **rCAD simulation:** no problems. Peak spindle 65%; chatter at most 0.81.
+- **rcnc simulator:** op 1a followed by op 1 runs to the end (1552 s), including the chip pause.
 
-**Not finished, on purpose (217 mm² flagged):** the corners where each slot meets its relief keep R3.2 fillets
-(an end mill's radius). Those faces don't register anything. The stop is the relief's **far wall**, which is
-flat across 6.65 mm. That's wider than a tool's 6.35, so the tool's tip lands on the flat.
-
-**Chips:** step 2 cuts 6 mm deep, 6.8 mm slots that are open at the end face, so flood should clear them. If
-chips pack (the sim's 0.89 is the highest of op 1), stop after step 2 and blow them out.
+**Unfinished flag (200 mm² at one convex corner):** the sim flags the corner where a slot wall meets its
+relief's near wall (x −3.6, y −31). The finishing pass in step 5 wraps that corner with an R3.175 arc (the
+`G3 X-3.089 Y-27.84 … X-0.425 Y-32.1` moves). The flag reads the wall's full height (5.8 mm), so it's the
+sim's grid at a sharp corner, not stock left.
 
 **What op 1 leaves for op 2:**
 - the gauge's top side finished;
@@ -88,15 +108,12 @@ chips pack (the sim's 0.89 is the highest of op 1), stop after step 2 and blow t
 - the 3 mm carrier under the gauge;
 - the end lugs (8 thick) with the two Ø8 bores.
 
-Op 2 flips the part (top down on the ledges), grips the finished 23 mm walls, and finds the lug bores with
-Find bores before any cutting. Op 2 is being planned while op 1 runs.
-
 ## Design change since the concept
 
 An end mill can't cut a flat slot end. A Ø6.35 flat tool's tip would hit the slot's corner radii about 2 mm
 before its end wall, so the gauge would read about 2 mm short.
 
-Each slot now ends in a **13 × 7 relief**. Its far wall is cut by the tool moving sideways, so it's flat. That
+Each slot now ends in a **14 × 8 relief**. Its far wall is cut by the tool moving sideways, so it's flat. That
 needs the width, so there's **one centred slot per end per face (4 stations)**:
 - top: **24** (+Y) and **21** (−Y);
 - bottom: **22** (+Y) and **26** (−Y).
