@@ -10,7 +10,7 @@ import math
 
 D, Z_TEETH = 6.35, 3
 KC1, MC = 700.0, 0.25
-P_IN, EFF, RATED = 1500.0, 0.78, 24000.0
+P_IN, EFF, RATED = 1500.0, 0.43, 24000.0   # 645 W: the measured pull-out at 24k (so % is of pull-out)
 LEN = 134.0   # y -67 -> +67: the tool's radius + 3.5 past each sawn end (60.35)
 TOP = 32.0
 BAR = 32.0   # the bar is 32 x 32 (measured), not 1"
@@ -28,6 +28,8 @@ def predict(w, d, f, rpm):
     return dict(fz=fz, hm=hm, kc=kc, p=p, pct=100 * p / avail, force=force, mrr=w * d * f / 1000)
 
 
+# cuts that have run fine on this machine (step over, depth, feed at 24k)
+PROVEN = {(0.6, 6.0, 2400), (1.0, 6.0, 2400), (0.6, 10.0, 2500)}
 passes = []   # (id, what, w, d, f, rpm, x_low_edge, z_floor, side): the strip x_low_edge .. +w; side +1: cut from +X (climb +Y)
 x = BAR / 2
 # no air passes: running the program once with rcnc's Air cut on (+25) gives every pass's baseline at its own
@@ -54,23 +56,42 @@ def cut_neg(what, w, d, f, rpm):
     xn += w
 
 
-# top band from +X, 6 deep (z 32 -> 26): width ladder, then feed, then the rpm sweep at one fixed cut
-for w in (0.6, 1.0, 1.4, 1.8):
-    cut("width ladder", w, 6.0, 2400, 24000)
-for f in (1800, 3000):
-    cut("feed ladder", 1.4, 6.0, f, 24000)
-for rpm in (18000, 19500, 21000, 22500, 24000):
-    cut("rpm sweep (same chip)", 1.0, 6.0, rpm // 10, rpm)
-cut("repeat of C3 (drift, repeatability)", 1.4, 6.0, 2400, 24000)
-# shallower last: a deeper pass after them would also cut what they left under them
-for d in (4.5, 3.0):
-    cut("depth ladder", 1.4, d, 2400, 24000)
+# --- op 1a v2, after T24 broke in C4 (1.8 x 6 at 2400) on this bar. The +X side already has a 4.75 wide step
+# down to z 26 (C1-C3 and most of C4), torn at C4's far end. Jonas's rules: step over 0.3-1.0 (<= 15% of D),
+# removal from depth and feed, each pass at most about 10 points of predicted load over the one before, the
+# ladder stopped at the first heard droop over the limit (the listen-guard feed hold), not at a number.
+x = BAR / 2 - 4.8          # the step's wall (4.75 measured, 4.8 planned: C1-C4)
+# 0. clean C4's torn far end with <= 1 mm strips: the outer 0.8 (12.2 .. 13.0) then the inner 1.0 (11.2 .. 12.2),
+# each in four levels. Air where C4 did cut; the loads are for a full strip, the worst case at the torn end
+for xw, w in ((BAR / 2 - 3.8, 0.8), (BAR / 2 - 4.8, 1.0)):
+    for d in (2.0, 3.5, 5.0, 6.0):
+        n += 1
+        passes.append((f"C{n}", f"clean the torn end of the old C4: {w:g} strip", w, d, 2400, 24000, xw, TOP - d, 1))
+# The ladder, in running order. Chips at the proven 0.033 mm a tooth (F2400 at 24k, F = rpm / 10 below);
+# each cut twice, back to back, in the same direction (about 6 s of steady cutting for the wall meter).
+# +X: 6 deep from the step's wall in; -X: 12 deep from the bar's edge in (each region keeps one depth, so no
+# pass ever cuts under an earlier one).
+def pair(side, what, w, d, f, rpm):
+    for k in range(2):
+        (cut if side > 0 else cut_neg)(f"{what} ({k + 1}/2)", w, d, f, rpm)
+
+
+# 1. the new tool on a cut that already ran fine (the first run's C1: 0.6 x 6 at 2400, 1.8% sag)
+pair(1, "baseline: the first run's C1 again, new tool", 0.6, 6.0, 2400, 24000)
+# 2. lightest to heaviest by the model's watts and by metal removal rate
+pair(-1, "12 deep", 0.2, 12.0, 2400, 24000)
+pair(-1, "12 deep", 0.3, 12.0, 2400, 24000)
+# 3. rpm sweep from 24k down, the same 0.3 x 12 and the same chip: watts fall with the rpm, so with constant
+# torque each is the same 53% of what the spindle has at that speed (and at most about 60% of it)
+for rpm in (21000, 18000, 15000, 12000):
+    pair(-1, f"rpm sweep {rpm // 1000}k", 0.3, 12.0, rpm // 10, rpm)
+pair(1, "6 deep", 0.8, 6.0, 2400, 24000)
+pair(-1, "12 deep", 0.4, 12.0, 2400, 24000)
+# a deliberate comparison: the thin chip (half the proven feed per tooth), labelled as such
+pair(-1, "THIN-CHIP COMPARISON 12 deep at half the chip", 0.6, 12.0, 1200, 24000)
+pair(1, "6 deep (bog guard armed)", 1.0, 6.0, 2400, 24000)
+pair(-1, "12 deep (heaviest, bog guard armed)", 0.45, 12.0, 2400, 24000)
 band_wall = x
-# from -X, 12 deep (z 32 -> 20, above the gauge's top at 19): 0.3, Jonas's known 0.6 x 12 at 2500, then 0.9
-# slower to stay under 75%
-for w, f, what in ((0.3, 2400, "12 deep"), (0.6, 2500, "12 deep: Jonas's known 0.6 x 12 at 2500"), (0.9, 2000, "12 deep, wider (F2000 keeps it under 75%)")):
-    cut_neg(what, w, 12.0, f, 24000)
-# then op 1 takes the rest of the band (x xn .. band_wall, and what the depth ladder left) and the side strips
 
 rows = []
 total = 0.0
@@ -82,10 +103,10 @@ for pid, what, w, d, f, rpm, xw, zf, side in passes:
         continue
     m = predict(w, d, f, rpm)
     rows.append(
-        f"| {pid} | {what} | {w:g} | {d:g} | {f} | {rpm} | **{m['pct']:.0f}%** ({m['p']:.0f} W) | {m['force']:.0f} | {m['hm'] * 1000:.1f} µm | {t:.1f} | x {xw:+.2f} .. {xw + w:+.2f}, z {zf:.1f} |")
+        f"| {pid} | {what} | {w:g} | {d:g} | {f} | {rpm} | {w * d * f / 1000:.1f} | **{m['p']:.0f} W** ({m['pct']:.0f}% of pull-out) | {m['hm'] * 1000:.1f} µm | {t:.1f} | {'proven' if (w, d, f) in PROVEN else ('guard' if m['p'] > 500 else '')} | | x {xw:+.2f} .. {xw + w:+.2f}, z {zf:.1f} |")
 
-head = """| Pass | What | Width ae (mm) | Depth ap (mm) | Feed (mm/min) | rpm | Predicted spindle | Mean cutting force (N) | Mean chip | Steady cut (s) | Where (op 1 frame) |
-|---|---|---|---|---|---|---|---|---|---|---|"""
+head = """| Pass | What | Step over (mm) | Depth (mm) | Feed (mm/min) | rpm | MRR (cm³/min) | Model | Mean chip | Steady cut (s) | Proven? | Wall W (fill in) | Where (op 1 frame) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|"""
 with open("calibration.md", "w") as fo:
     fo.write("# Calibration passes (op 1's waste)\n\n")
     fo.write("T24 (1/4\" 3-flute DLC carbide, stick-out 24), climb, straight along +Y over the whole 120 bar (126 mm "

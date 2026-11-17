@@ -15,7 +15,8 @@ LUG = json.load(open("lug_passes.json"))
 n_lug = len(LUG)
 
 M = {"name": "DMC2", "model": "DMC2", "travel": [343, 234, 150], "max_feed": 3000, "rapid_z": 3000, "tool_changer": False, "spin_up": 4,
-     "spindle_power": 1500, "spindle_efficiency": 0.78, "spindle_rated_rpm": 24000}
+     "spindle_power": 1500, "spindle_efficiency": 0.43, "spindle_rated_rpm": 24000,
+     "spindle_never_exceed": 0.85, "spindle_caution": 0.775}
 JAW_T, JAW_H, JAW_L = 12.7, 4.7, 95.5
 FIXED_R, TABLE_X, LEDGE_Z = 25.5, 47.8, 23.195
 W, BAR_L = 23.0, 120.7
@@ -31,7 +32,7 @@ def op(c, kind, name, **a):
     return {"tool": "cam_op", "args": a}
 
 
-C = 2
+C = 3
 S = [{"tool": "open_document", "args": {"path": "gauge-cam.json"}},
      {"tool": "create_cam", "args": {"post": "rcnc", "machine": M, "max_rpm": 24000, "clearance": 5, "retract": 2, "fixture_clearance": 0.3, "probe": {"z_reference": "Vise"},
                                      "name": "Op 2 bottom", "studio": 3, "bodies": [[2, 0]], "follows": "Op 1 top", "orient": "bottom", "origin": "part_bottom_center",

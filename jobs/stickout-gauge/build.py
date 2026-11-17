@@ -189,6 +189,22 @@ for e in (1, -1):
     for y in ys:
         sid = d.sketch([{"type": "line", "from": [-23.0, round(e * y, 4)], "to": [23.0, round(e * y, 4)]}])
         LUG.append((sid, e, round(e * y, 4)))
+# the first run's passes that did cut (C1-C3 of op1a v1 on this bar; C4 broke the tool: taken as not cut at all,
+# the worst case), for the simulation to start from the bar as it really is: centre x, 6 deep from the top
+OLD = []
+for xc in (18.575, 17.575, 16.175):
+    sid = d.sketch([{"type": "line", "from": [xc, -67.0], "to": [xc, 67.0]}])
+    OLD.append((sid, xc))
+json.dump(OLD, open("/home/jonas/dmc2/gauge/old_passes.json", "w"), indent=1)
+# op 1's side passes: lines along Y (tool centre), three 1.4 wide strips on each side from the bar's edge in to
+# 0.3 off the gauge's wall
+SIDE = []   # (sketch id, side, x)
+for sgn in (1, -1):
+    for k in range(3):
+        edge = BAR / 2 - 1.4 * (k + 1)          # the strip's inner edge, distance from the middle
+        x = sgn * (edge + 6.35 / 2)
+        sid = d.sketch([{"type": "line", "from": [round(x, 4), -67.0], "to": [round(x, 4), 67.0]}])
+        SIDE.append((sid, sgn, round(x, 4)))
 d.S.append({"tool": "set_part", "args": {"body": [2, 0], "name": "Op 1 CAM body", "color": "#c9ced6", "material": "Aluminium 6061"}})
 # 4: the gauge alone in op 1's frame, for op 2 (it follows op 1's stock)
 d.studio("Op 2 CAM body")
@@ -197,6 +213,7 @@ d.feat("transform", {"bodies": [{"kind": "body", "body": [2, 0]}], "mode": "tran
 d.S.append({"tool": "set_part", "args": {"body": [2, 0], "name": "Stick-out gauge", "color": "#c9ced6", "material": "Aluminium 6061"}})
 json.dump(CAL, open("/home/jonas/dmc2/gauge/cal_passes.json", "w"), indent=1)
 json.dump(LUG, open("/home/jonas/dmc2/gauge/lug_passes.json", "w"), indent=1)
+json.dump(SIDE, open("/home/jonas/dmc2/gauge/side_passes.json", "w"), indent=1)
 d.S.append({"tool": "save_document", "args": {"path": "/home/jonas/dmc2/gauge/gauge.json"}})
 R = lambda view, path, w=1400, h=1000: {"tool": "render", "args": {"view": view, "path": path, "width": w, "height": h, "sketches": "unused"}}
 SW_ = lambda i: {"tool": "switch_part_studio", "args": {"index": i}}

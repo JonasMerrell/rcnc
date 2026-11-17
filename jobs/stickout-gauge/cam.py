@@ -9,11 +9,15 @@ op 1 follows it in the same clamping and doesn't probe again (G54 stays).
 import json
 
 M = {"name": "DMC2", "model": "DMC2", "travel": [343, 234, 150], "max_feed": 3000, "rapid_z": 3000, "tool_changer": False, "spin_up": 4,
-     "spindle_power": 1500, "spindle_efficiency": 0.78, "spindle_rated_rpm": 24000}
+     "spindle_power": 1500, "spindle_efficiency": 0.43, "spindle_rated_rpm": 24000,
+     "spindle_never_exceed": 0.85, "spindle_caution": 0.775}
 JAW_T, JAW_H, JAW_L = 12.7, 4.7, 95.5
 FIXED_R, TABLE_X, LEDGE_Z = 25.5, 47.8, 23.195
 BAR, BAR_L = 32.0, 120.7   # measured: 32 x 32, not 1"
 CAL = json.load(open("cal_passes.json"))
+LUG = json.load(open("lug_passes.json"))
+SIDE = json.load(open("side_passes.json"))
+OLD = json.load(open("old_passes.json"))
 
 
 def jaws(w):
@@ -58,34 +62,49 @@ def out(c, stem):
 S = [{"tool": "open_document", "args": {"path": "gauge.json"}},
      {"tool": "import_tool_library", "args": {"path": "../tools/fusion-library.csv", "material": "carbide"}}]
 
+# ---- what the first run on this bar cut (not posted): op1a v1's C1-C3, 6 deep from +X; C4 broke the tool there ----
+S += [setup("Already cut (first run)", 3, stock={"size": [BAR, BAR_L, BAR], "bottom": 0.0, "material": "6061-T6"})]
+S += [tool(0, 1), tool(0, 24), tool(0, 99)]
+for k, (sid, xc) in enumerate(OLD):
+    S.append(op(0, "trace", f"First run C{k + 1} (already cut)", tool=24, sketches=[sid], side="both", top=BAR, depth=6.0, stepdown=6.0, seam=[0, -1000.0]))
+
 # ---- op 1a: Find stock, then the calibration passes (studio 5: the raw bar with a line per pass) ----
-S += [setup("Op 1a calibration", 3, stock={"size": [BAR, BAR_L, BAR], "bottom": 0.0, "material": "6061-T6"})]
-S += [tool(0, 1), tool(0, 24), tool(0, 99)]   # T1 first in every setup: cam_op's tool takes ids first
-S += [op(0, "probe", "Probe stock top", tool=99, probing={"cycle": "z", "depth": 8, "tolerance": 3.0}),
-      op(0, "probe", "Probe stock centre", tool=99, probing={"cycle": "boss", "depth": 8, "tolerance": 3.0})]
+S += [setup("Op 1a calibration", 3, follows="Already cut (first run)")]
+S += [op(1, "probe", "Probe stock top", tool=99, probing={"cycle": "z", "depth": 8, "tolerance": 3.0}),
+      op(1, "probe", "Probe stock centre", tool=99, probing={"cycle": "boss", "depth": 8, "tolerance": 3.0})]
 for sid, pid, what, w, d, f, rpm, xc, depth, seam_y in CAL:
-    S.append(op(0, "trace", f"{pid} {what}: {w:g} x {d:g} F{f} S{rpm}", tool=24, sketches=[sid], side="both", top=BAR, depth=depth, stepdown=depth,
+    S.append(op(1, "trace", f"{pid} {what}: {w:g} x {d:g} F{f} S{rpm}", tool=24, sketches=[sid], side="both", top=BAR, depth=depth, stepdown=depth,
                 rpm=rpm, feed=f, seam=[0, seam_y]))
-S += out(0, "op1a-calibrate")
+S += out(1, "op1a-calibrate")
 
 # ---- op 1: the gauge's top side (studio 3: gauge 3 up on the carrier, end lugs with bores), no probing ----
 S += [setup("Op 1 top", 3, follows="Op 1a calibration")]
-S += [tool(1, 11)]   # the tool table is the document's: T1 and T24 are there from op 1a
+S += [tool(2, 11)]   # the tool table is the document's: T1 and T24 are there from op 1a
+S += [op(2, "face", "Face the band over the gauge down to Z19, 1 mm levels (finishes the gauge's top)", tool=24, stepdown=1.0)]
+# the end lugs down to 8 thick: strips across X from each free end in, two 5.5 levels each (+Y lug runs -X, -Y lug +X: climb)
+for k, (sid, e, y) in enumerate(LUG):
+    for d in (5.5, 11.0):
+        S.append(op(2, "trace", f"Lug {'+' if e > 0 else '-'}Y, strip at y {y:+.2f}, down to Z{19 - d:g}", tool=24, sketches=[sid], side="both", top=19.0, depth=d, stepdown=d,
+                    seam=[1000.0 * e, y]))
+# the side strips beside the gauge down to Z8.5: three 1.4 wide passes each side from the bar's edge in, two levels
+for sid, sgn, x in SIDE:
+    for d in (5.25, 10.5):
+        S.append(op(2, "trace", f"Side {'+' if sgn > 0 else '-'}X, strip at x {x:+.2f}, down to Z{19 - d:g}", tool=24, sketches=[sid], side="both", top=19.0, depth=d, stepdown=d,
+                    seam=[x, -1000.0 * sgn]))
 S += [
-    op(1, "face", "Face the top to Z19 (what the calibration left of the band)", tool=24, stepdown=1.0),
-    op(1, "trace", "Rough the top slots and their end reliefs, 0.2 left on the walls (1 mm levels, F1000: the first lap is a full-width cut; floors to depth)", tool=24, sketches=[3], side="inside", top=19.0, depth=6.0, stepdown=1.0, leave=0.2, feed=1000, plunge_feed=250),
-    op(1, "adaptive", "Rough everything above Z8: the end lugs, the band beside the gauge, the dish", tool=24, bottom=8.0, stepdown=5.5, stepover=0.1, leave=0.3, leave_floor=0.0, rest=True),
-    op(1, "contour", "Rough the walls to Z5 and the lugs to Z8 (extra passes at 25% of Ø outside the wall)", tool=24, side="outside", bottom=5.0, stepdown=7.0, leave=0.3, finish_lap=0, seam=[-20, 0]),
-    op(1, "trace", "Finish the slot walls and the relief stop walls, one full-depth 6 mm pass round their outline (starts at the slot's mouth)", tool=24, sketches=[3], side="inside", top=19.0, depth=6.0, stepdown=6.0, leave=0.0),
-    op(1, "contour", "Finish the walls and end faces Z19 to Z8, one full-height pass (seam mid -X side)", tool=24, side="outside", bottom=8.0, stepdown=12, seam=[-20, 0]),
-    op(1, "contour", "Finish the walls Z8 to Z5 (lugs' outsides too)", tool=24, side="outside", top=8.0, bottom=5.0, stepdown=3.5, seam=[-20, 0]),
-    op(1, "bore", "Two Ø8 bores through the lugs (op 2 finds them)", tool=24, points=[[0, 52], [0, -52]], thread_diameter=8.0, bottom=-0.5),
-    op(1, "scallop", "Finish the thumb dish (0.2 stepover = 0.033 D)", tool=11, stepover=0.033, slope_min=3, leave=0.0),
-    op(1, "trace", "Engrave the top numbers 0.3 deep", tool=1, sketches=[9], depth=0.3, stepdown=0.3),
-    op(1, "deburr", "Edge break 0.3 on the two bore mouths in the lugs (op 2 probes these bores)", tool=1, chamfer=0.3, tip_offset=0.7, edges=[[4.0, 52.0, 8.0], [4.0, -52.0, 8.0]]),
-    op(1, "chamfer", "Edge break 0.3 on every edge of the gauge's top: outline (op 2 sits it on the 1.9 ledges), slots, reliefs, dish rim", tool=1, chamfer=0.3, side="both", tip_offset=1.0),
+    op(2, "adaptive", "Rough the thumb dish", tool=24, top=19.0, bottom=15.3, stepdown=1.8, stepover=0.1, leave=0.2, leave_floor=0.2, rest=True),
+    op(2, "trace", "Rough the top slots and their end reliefs, 0.2 left on the walls (1 mm levels, F1000: the first lap is a full-width cut; floors to depth)", tool=24, sketches=[3], side="inside", top=19.0, depth=6.0, stepdown=1.0, leave=0.2, feed=1000, plunge_feed=250),
+    op(2, "contour", "Rough the walls Z8.5 to Z5 (beside the jaws) and the lugs' sides", tool=24, side="outside", top=8.5, bottom=5.0, stepdown=3.5, leave=0.3, finish_lap=0, seam=[-20, 0]),
+    op(2, "trace", "Finish the slot walls and the relief stop walls, one full-depth 6 mm pass round their outline (starts at the slot's mouth)", tool=24, sketches=[3], side="inside", top=19.0, depth=6.0, stepdown=6.0, leave=0.0),
+    op(2, "contour", "Finish the walls and end faces Z19 to Z8, one full-height pass (seam mid -X side)", tool=24, side="outside", bottom=8.0, stepdown=12, seam=[-20, 0]),
+    op(2, "contour", "Finish the walls Z8 to Z5 (lugs' outsides too)", tool=24, side="outside", top=8.0, bottom=5.0, stepdown=3.5, seam=[-20, 0]),
+    op(2, "bore", "Two Ø8 bores through the lugs (op 2 finds them)", tool=24, points=[[0, 52], [0, -52]], thread_diameter=8.0, bottom=-0.5),
+    op(2, "scallop", "Finish the thumb dish (0.2 stepover = 0.033 D)", tool=11, stepover=0.033, slope_min=3, leave=0.0),
+    op(2, "trace", "Engrave the top numbers 0.3 deep", tool=1, sketches=[9], depth=0.3, stepdown=0.3),
+    op(2, "deburr", "Edge break 0.3 on the two bore mouths in the lugs (op 2 probes these bores)", tool=1, chamfer=0.3, tip_offset=0.7, edges=[[4.0, 52.0, 8.0], [4.0, -52.0, 8.0]]),
+    op(2, "chamfer", "Edge break 0.3 on every edge of the gauge's top: outline (op 2 sits it on the 1.9 ledges), slots, reliefs, dish rim", tool=1, chamfer=0.3, side="both", tip_offset=1.0),
 ]
-S += out(1, "op1-top")
+S += out(2, "op1-top")
 S += [{"tool": "save_document", "args": {"path": "gauge-cam.json"}}]
 json.dump(S, open("cam.json", "w"), indent=1)
 print(len(S), "steps")
