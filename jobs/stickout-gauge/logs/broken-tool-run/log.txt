@@ -1,0 +1,122 @@
+2026-11-17 02:05:48Z Connected to BlueSkyT USB card (V3.25)
+2026-11-17 02:06:03Z Reset: drives enabled
+2026-11-17 02:06:06Z Z homed
+2026-11-17 02:06:08Z Y homed
+2026-11-17 02:06:12Z Alarm: X home switch still on after backing off 2 mm (raise the home pull-off)
+2026-11-17 02:06:17Z Reset: drives enabled
+2026-11-17 02:06:24Z Z homed (-0.005 mm from the last home)
+2026-11-17 02:06:25Z Y homed (-0.005 mm from the last home)
+2026-11-17 02:06:27Z X homed
+2026-11-17 02:06:42Z Homing test: 20 × X, 100 mm away each time
+2026-11-17 02:06:43Z X homed (+0.000 mm from the last home)
+2026-11-17 02:06:50Z X homed (-0.005 mm from the last home)
+2026-11-17 02:06:57Z X homed (+0.005 mm from the last home)
+2026-11-17 02:07:04Z X homed (-0.005 mm from the last home)
+2026-11-17 02:07:11Z X homed (+0.005 mm from the last home)
+2026-11-17 02:07:18Z X homed (-0.010 mm from the last home)
+2026-11-17 02:07:24Z X homed (+0.010 mm from the last home)
+2026-11-17 02:07:31Z X homed (-0.005 mm from the last home)
+2026-11-17 02:07:38Z X homed (-0.015 mm from the last home)
+2026-11-17 02:07:45Z X homed (+0.010 mm from the last home)
+2026-11-17 02:07:52Z X homed (-0.005 mm from the last home)
+2026-11-17 02:07:59Z X homed (+0.010 mm from the last home)
+2026-11-17 02:08:05Z X homed (-0.005 mm from the last home)
+2026-11-17 02:08:12Z X homed (+0.000 mm from the last home)
+2026-11-17 02:08:19Z X homed (-0.010 mm from the last home)
+2026-11-17 02:08:26Z X homed (+0.010 mm from the last home)
+2026-11-17 02:08:33Z X homed (+0.000 mm from the last home)
+2026-11-17 02:08:39Z X homed (+0.105 mm from the last home)
+2026-11-17 02:08:46Z X homed (-0.005 mm from the last home)
+2026-11-17 02:08:53Z X homed (-0.020 mm from the last home)
+2026-11-17 02:08:53Z X homing test, 20 re-homes: shift mean +3.5 µm, std dev 25.3 µm, range 125.0 µm; switch hysteresis 0.902 mm ± 11.2 µm
+2026-11-17 02:09:23Z Homing test: 20 × Y, 100 mm away each time
+2026-11-17 02:09:24Z Y homed (-0.010 mm from the last home)
+2026-11-17 02:09:31Z Y homed (-0.005 mm from the last home)
+2026-11-17 02:09:37Z Y homed (+0.005 mm from the last home)
+2026-11-17 02:09:44Z Y homed (+0.000 mm from the last home)
+2026-11-17 02:09:50Z Y homed (+0.005 mm from the last home)
+2026-11-17 02:09:57Z Y homed (-0.005 mm from the last home)
+2026-11-17 02:10:03Z Y homed (+0.005 mm from the last home)
+2026-11-17 02:10:10Z Y homed (-0.005 mm from the last home)
+2026-11-17 02:10:16Z Y homed (-0.005 mm from the last home)
+2026-11-17 02:10:23Z Y homed (+0.005 mm from the last home)
+2026-11-17 02:10:29Z Y homed (-0.005 mm from the last home)
+2026-11-17 02:10:36Z Y homed (+0.000 mm from the last home)
+2026-11-17 02:10:42Z Y homed (+0.000 mm from the last home)
+2026-11-17 02:10:49Z Y homed (+0.000 mm from the last home)
+2026-11-17 02:10:55Z Y homed (-0.010 mm from the last home)
+2026-11-17 02:11:02Z Y homed (+0.000 mm from the last home)
+2026-11-17 02:11:09Z Y homed (+0.005 mm from the last home)
+2026-11-17 02:11:15Z Y homed (+0.005 mm from the last home)
+2026-11-17 02:11:22Z Y homed (-0.005 mm from the last home)
+2026-11-17 02:11:28Z Y homed (+0.000 mm from the last home)
+2026-11-17 02:11:28Z Y homing test, 20 re-homes: shift mean -1.0 µm, std dev 5.0 µm, range 15.0 µm; switch hysteresis 0.146 mm ± 3.2 µm
+2026-11-17 04:36:41Z Connected to BlueSkyT USB card (V3.25)
+2026-11-17 04:53:26Z Tool table: updated T24 from the program (measured lengths kept)
+2026-11-17 04:53:26Z Loaded op1a-calibrate.nc
+2026-11-17 04:53:33Z Reset: drives enabled
+2026-11-17 04:53:36Z Z homed
+2026-11-17 04:53:39Z Y homed
+2026-11-17 04:53:46Z X homed
+2026-11-17 04:58:31Z Z zero for the tools measured from now on: the Vise reference
+2026-11-17 04:58:31Z Tool change to T99 started
+2026-11-17 04:58:39Z Load tool 99, then press Continue (or Cycle Start)
+2026-11-17 04:59:46Z Probe: touched Z between -60.5200 and -60.6100, stopped at -60.6100 (0.0000 past the first poll that saw it)
+2026-11-17 04:59:47Z Probe: touched Z between -60.5700 and -60.5850, stopped at -60.5850 (0.0000 past the first poll that saw it)
+2026-11-17 04:59:49Z Probe: touched Z between -60.5800 and -60.5850, stopped at -60.5850 (0.0000 past the first poll that saw it)
+2026-11-17 04:59:50Z Tool touched off: Z zero set on the vise, setter top at Z40.610
+2026-11-17 04:59:50Z Tool 99 loaded
+2026-11-17 04:59:56Z Tool change to T99 done
+2026-11-17 04:59:56Z Find stock: tap the probe's stylus, jog it over the middle of the stock, a few mm above the top, then press Continue
+2026-11-17 05:06:00Z Find stock: probe input works
+2026-11-17 05:06:02Z Find stock: probing down from machine Z-64.400; the sides 8.000 mm below the top, size within ±3.000 mm
+2026-11-17 05:06:03Z Probe: touched Z between -68.9350 and -69.1750, stopped at -69.1750 (0.0000 past the first poll that saw it)
+2026-11-17 05:06:05Z Probe: touched Z between -69.1500 and -69.1500, stopped at -69.1500 (0.0000 past the first poll that saw it)
+2026-11-17 05:06:05Z Find stock: top at machine Z-69.150
+2026-11-17 05:06:06Z Probe: touched X between 103.5200 and 103.6300, stopped at 103.6300 (0.0000 past the first poll that saw it)
+2026-11-17 05:06:08Z Probe: touched X between 103.5850 and 103.5950, stopped at 103.5950 (0.0000 past the first poll that saw it)
+2026-11-17 05:06:10Z Probe: touched X between 137.5650 and 137.5250, stopped at 137.5250 (0.0000 past the first poll that saw it)
+2026-11-17 05:06:12Z Probe: touched X between 137.5350 and 137.5300, stopped at 137.5300 (0.0000 past the first poll that saw it)
+2026-11-17 05:06:16Z Probe: touched Y between 325.8700 and 326.0200, stopped at 326.0200 (0.0000 past the first poll that saw it)
+2026-11-17 05:06:17Z Probe: touched Y between 325.9750 and 325.9900, stopped at 325.9900 (0.0000 past the first poll that saw it)
+2026-11-17 05:06:22Z Probe: touched Y between 448.4450 and 448.3300, stopped at 448.3300 (0.0000 past the first poll that saw it)
+2026-11-17 05:06:24Z Probe: touched Y between 448.3700 and 448.3700, stopped at 448.3700 (0.0000 past the first poll that saw it)
+2026-11-17 05:06:25Z Find stock: The stock measures X 31.922 × Y 120.447 (job: 25.400 × 120.700), more than 3.000 mm off. Nothing was set. Check the stock in the vise and the job's stock size, then jog over the middle again and press Continue, or Stop.
+2026-11-17 05:17:15Z Stopped
+2026-11-17 05:18:10Z Loaded op1a-calibrate.nc
+2026-11-17 05:18:20Z Loaded op1a-calibrate.nc
+2026-11-17 05:20:46Z Loaded op1a-calibrate.nc
+2026-11-17 05:20:56Z Tool table: updated T11 from the program (measured lengths kept)
+2026-11-17 05:20:56Z Loaded op1-top.nc
+2026-11-17 05:21:03Z Loaded op1a-calibrate.nc
+2026-11-17 05:21:42Z Loaded op1a-calibrate.nc
+2026-11-17 05:23:47Z Loaded op1a-calibrate.nc
+2026-11-17 05:23:58Z Z zero for this work offset and the tools measured from now on: the Vise reference
+2026-11-17 05:23:58Z T99 is already loaded
+2026-11-17 05:23:58Z Find stock: tap the probe's stylus, jog it over the middle of the stock, a few mm above the top, then press Continue
+2026-11-17 05:24:14Z Find stock: probe input works
+2026-11-17 05:24:17Z Find stock: probing down from machine Z-67.960; the sides 8.000 mm below the top, size within ±3.000 mm
+2026-11-17 05:24:17Z Probe: touched Z between -69.1600 and -69.1750, stopped at -69.1750 (0.0000 past the first poll that saw it)
+2026-11-17 05:24:19Z Probe: touched Z between -69.1450 and -69.1450, stopped at -69.1450 (0.0000 past the first poll that saw it)
+2026-11-17 05:24:19Z Find stock: top at machine Z-69.145
+2026-11-17 05:24:21Z Probe: touched X between 103.5000 and 103.6300, stopped at 103.6300 (0.0000 past the first poll that saw it)
+2026-11-17 05:24:23Z Probe: touched X between 103.5900 and 103.6050, stopped at 103.6050 (0.0000 past the first poll that saw it)
+2026-11-17 05:24:25Z Probe: touched X between 137.6400 and 137.5200, stopped at 137.5200 (0.0000 past the first poll that saw it)
+2026-11-17 05:24:27Z Probe: touched X between 137.5450 and 137.5400, stopped at 137.5400 (0.0000 past the first poll that saw it)
+2026-11-17 05:24:31Z Probe: touched Y between 326.0000 and 326.0300, stopped at 326.0300 (0.0000 past the first poll that saw it)
+2026-11-17 05:24:33Z Probe: touched Y between 325.9900 and 325.9950, stopped at 325.9950 (0.0000 past the first poll that saw it)
+2026-11-17 05:24:37Z Probe: touched Y between 448.3400 and 448.3300, stopped at 448.3300 (0.0000 past the first poll that saw it)
+2026-11-17 05:24:39Z Probe: touched Y between 448.3750 and 448.3700, stopped at 448.3700 (0.0000 past the first poll that saw it)
+2026-11-17 05:24:40Z Stock found: X 31.922 × Y 120.442 (job: 32.000 × 120.700), centre machine X120.572 Y387.183; work X/Y set, Z kept. Top at Z32.050 (0.050 mm from the job's)
+2026-11-17 05:24:41Z Find stock done
+2026-11-17 05:24:42Z Tool change to T24 started
+2026-11-17 05:24:45Z Load tool 24, then press Continue (or Cycle Start)
+2026-11-17 05:25:57Z Probe: touched Z between -85.2600 and -85.4150, stopped at -85.4150 (0.0000 past the first poll that saw it)
+2026-11-17 05:25:59Z Probe: touched Z between -85.3900 and -85.3900, stopped at -85.3900 (0.0000 past the first poll that saw it)
+2026-11-17 05:26:01Z Probe: touched Z between -85.3800 and -85.3900, stopped at -85.3900 (0.0000 past the first poll that saw it)
+2026-11-17 05:26:01Z Tool touched off: Z zero set on the vise, setter top at Z40.610
+2026-11-17 05:26:01Z Tool 24 loaded
+2026-11-17 05:26:01Z Staying at the safe height: going back to the same work Z would go lower than where the change began
+2026-11-17 05:26:07Z Tool change to T24 done
+2026-11-17 05:26:44Z Axes need homing again
+2026-11-17 05:26:44Z E-stop: E-stop pressed
