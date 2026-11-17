@@ -56,10 +56,13 @@ for d in (4.5, 3.0):
     cut("depth ladder", 1.4, d, 2400, 24000)
 band_wall = x
 # then the facing takes the rest of the band (x -12.7 .. band_wall and what the depth ladder left) to z 19
-# side strip outside the gauge's +X wall (x 10 .. 12.7, below z 19), 12 deep (z 19 -> 7), after the facing
+# side strips outside the gauge's walls (x +-11.5 .. +-12.7, below z 19), 12 deep (z 19 -> 7), after the facing;
+# 0.3 of each strip is left for the wall's finishing passes
 x = BAR / 2
-for w, f, what in ((0.3, 2400, "side, deep"), (0.6, 2500, "side, deep: Jonas's known 0.6 x 12 at 2500"), (0.75, 2400, "side, deep")):
+for w, f, what in ((0.3, 2400, "side +X, deep"), (0.6, 2500, "side +X, deep: Jonas's known 0.6 x 12 at 2500")):
     cut(what, w, 12.0, f, 24000, floor=19.0 - 12.0)
+n += 1
+passes.append((f"C{n}", "side -X, deep: the 0.6 x 12 again, at 2400 (climb along -Y)", 0.6, 12.0, 2400, 24000, -BAR / 2, 19.0 - 12.0))
 
 rows = []
 total = 0.0
@@ -93,8 +96,8 @@ from matplotlib.patches import Rectangle
 
 fig, ax = plt.subplots(figsize=(11, 7.5))
 ax.add_patch(Rectangle((-BAR / 2, 0), BAR, TOP, fc="#e4e7ec", ec="#555", lw=1))
-ax.add_patch(Rectangle((-10, 3), 20, 16, fc="#9aa9ba", ec="#333", lw=1.2))
-ax.text(0, 11, "gauge\n20 x 16", ha="center", va="center", fontsize=11)
+ax.add_patch(Rectangle((-11.5, 3), 23, 16, fc="#9aa9ba", ec="#333", lw=1.2))
+ax.text(0, 11, "gauge\n23 x 16", ha="center", va="center", fontsize=11)
 ax.add_patch(Rectangle((-BAR / 2, 0), BAR, 3, fc="#f3d9a6", ec="#a07a2a", lw=0.8))
 ax.text(0, 1.5, "carrier 3 (op 2 faces it off)", ha="center", va="center", fontsize=8)
 for s in (-1, 1):

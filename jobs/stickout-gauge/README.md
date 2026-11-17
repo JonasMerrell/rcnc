@@ -9,7 +9,7 @@ calibration cut plan, the op plan and the bar length, for Jonas to approve befor
 
 ![in use](in-use.png)
 
-A 6061 bar, **20 × 88 × 16 mm**, with open-ended slots that run in from its end faces. **The slot's length
+A 6061 bar, **23 × 88 × 16 mm**, with open-ended slots that run in from its end faces. **The slot's length
 is the stick-out.**
 
 To use it:
@@ -31,14 +31,45 @@ along the bar, and their depth is only 6 mm.
 | Bottom face (−Y end) | 20, 23 |
 
 - The stick-outs we use are 21 (T11), 22 (T1) and 24 (T24); the others are spares.
-- Slots are 7 wide (Ø6 and Ø6.35 tools slide in) and 6 deep, at x ±5. That leaves 1.5 mm outer walls and
-  a 3 mm web between them.
+- Slots are 6.8 wide (Ø6 and Ø6.35 tools slide in) and 6 deep, at x ±5.1. That leaves **3.0 mm outer walls**
+  and a 3.4 mm web between them, with a 4 mm floor between top and bottom slots.
 - The numbers are engraved 4 mm high beside each slot's inner end (the blue sketch text in the renders).
 - A **Ø16 × 3.5 thumb dish** sits in the top's middle, ball-finished, so the ball rules get exercised.
 - Outer edges get a 0.5 chamfer; slot, dish and engraving edges get a 0.2–0.3 edge break.
 
 It also calibrates rcnc's stick-out check. Set a tool to 24 with the gauge, measure it on the setter, and
 use **Tool change → Calibrate stick-out (24)** to give rcnc the nut face height.
+
+## Changes after review (2026-11-17)
+
+- **Width 20 → 23 and slots 7 → 6.8 wide, so the outer walls are 3.0 mm, not 1.5.**
+  - In op 2 the jaws grip the bottom 4.7 mm of the flipped part, which at the ends is these walls.
+  - Treating a wall as a cantilever off the slot floor (6 deep, 3 thick, about 40 N/mm of jaw load), it
+    springs about 7 µm, against about 56 µm for the 1.5 mm wall. That's elastic, and too small to shift or
+    chatter the part.
+  - The wider bar leaves only 1.2 mm of side strip, so the deep side passes are now 0.3 + 0.6 on +X and 0.6
+    on −X (the 0.75 pass is gone). Each side keeps 0.3 for the wall's finishing passes.
+- **How the nut seats.**
+  - The tool's axis is 2.8 mm below the top face (6 deep slot, 6.35 tool). An ER16 nut's face ring (about
+    Ø17–28) therefore lands on the end face below and beside the tool: about 145 mm² for the standard 28 mm
+    nut, about 85 mm² for a 22 mm mini nut.
+  - That patch is off to one side, but it doesn't need to self-centre. The tool lies cradled in a slot
+    milled square to that end face in the same setup, so the slot holds the gauge parallel to the tool. The
+    end face only has to touch, and it touches flat.
+  - Press the gauge straight up; don't rock it on the patch.
+  - Slots deep enough to put the axis at mid-height would need about 11 mm, which leaves no floor between top
+    and bottom slots.
+- **Under the lugs (vise CAD, `vise.step`).** The vise is separate blocks on the table:
+  - jaw blocks 48 × 95.5;
+  - jaw plates 12.7 × 95.5 with the 1.9 mm ledges;
+  - the 37 × 144.5 fixed-jaw centre block;
+  - 61 × 140 end bases.
+
+  Between the jaws a station is open down to the fixture plate, and the 144.5 block sits beside the station,
+  not under it. So under x 0, y ±52 there is nothing for about 20 mm below the ledges, and the bores' 1 mm
+  breakthrough is safe. (The STEP's parts aren't placed consistently in Z, so this comes from the part sizes
+  and layout. One look at the vise confirms it.)
+- **12 mm overhang each end:** fine (Jonas).
 
 ## Stock: N = 120
 
@@ -72,7 +103,7 @@ Three cutters (T24, T11, T1), within the limit of 3.
 
 ### Op 2: flipped about Y
 
-Op 1's top goes down on the parallels. The jaws are re-set to grip the gauge's finished 20 mm walls, and the
+Op 1's top goes down on the parallels. The jaws are re-set to grip the gauge's finished 23 mm walls, and the
 lugs stand up at the ends.
 
 | Tool | Steps |
@@ -108,8 +139,8 @@ See [calibration.md](calibration.md) for the full table. In short:
   chatter show.
 - **Repeat of C3 (C12):** shows drift and how repeatable a reading is.
 - **Depth ladder (C13–C14):** 1.4 at 4.5 and 3 deep. 43 and 29%.
-- **Deep side cuts (C15–C17):** 12 deep: 0.3 at 2400, **your known 0.6 at 2500** and 0.75 at 2400. 30, 56
-  and 66%.
+- **Deep side cuts (C15–C17):** 12 deep: 0.3 at 2400 (30%) and **your known 0.6 at 2500** (56%) on +X, and
+  0.6 at 2400 (54%) on −X.
 
 Nothing is predicted above 72%. Every pass is a 126 mm straight run, about 3 s of steady signal (25+
 analysis windows at 48 kHz). The whole sweep is about 1 min of cutting plus the rapids.

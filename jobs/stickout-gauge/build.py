@@ -1,6 +1,6 @@
 """Stick-out setting gauge: the rCAD document and the concept renders. Writes build.json for `rcad run`.
 
-A 20 x 88 x 16 mm 6061 bar with open-ended slots running in from its machined end faces. Slot length =
+A 23 x 88 x 16 mm 6061 bar with open-ended slots running in from its machined end faces. Slot length =
 stick-out: push the gauge's end face up against the ER16 nut face, the tool slides down the slot until its
 tip rests on the slot's end wall, tighten. Top face: 21, 22, 24, 26 and a thumb dish; bottom face: 18, 19,
 20, 23. Numbers engraved beside each slot.
@@ -11,9 +11,9 @@ X across the bar (the vise clamps along X), Y along it, Z up; part bottom at z 0
 """
 import json, math
 
-W, L, H = 20.0, 88.0, 16.0         # gauge
-SW, SD = 7.0, 6.0                  # slot width (6.35 / 6 tools slide in), depth
-SX = 5.0                           # slot centres at x +-5: 1.5 outer walls, 3 web
+W, L, H = 23.0, 88.0, 16.0         # gauge (23 wide: 3 mm outer slot walls, stiff in op 2's jaws)
+SW, SD = 6.8, 6.0                  # slot width (6.35 / 6 tools slide in), depth
+SX = 5.1                           # slot centres at x +-5.1: 3.0 outer walls, 3.4 web
 # (face, end, x, stick-out): end +1 = +Y
 SLOTS = [("top", 1, 5, 24), ("top", 1, -5, 22), ("top", -1, 5, 21), ("top", -1, -5, 26),
          ("bottom", 1, 5, 19), ("bottom", 1, -5, 18), ("bottom", -1, 5, 20), ("bottom", -1, -5, 23)]
@@ -66,11 +66,11 @@ def slot_rect(end, x, s, over=2.0):
 
 def gauge(d, z0=0.0, sharp=False):
     sk = d.sketch([rect(-W / 2, -L / 2, W / 2, L / 2)])
-    d.extrude(sk, H, "add", "Gauge 20 x 88 x 16") if z0 == 0 else None
+    d.extrude(sk, H, "add", "Gauge 23 x 88 x 16") if z0 == 0 else None
     for fc, up, z in (("top", True, H), ("bottom", False, 0.0)):
         items = [slot_rect(e, x, s) for f, e, x, s in SLOTS if f == fc]
         sk = d.sketch(items, face(z, 0, 0, up))
-        d.extrude(sk, SD, "remove", f"{fc.capitalize()} slots 7 wide x 6 deep: " + ", ".join(str(s) for f, e, x, s in SLOTS if f == fc))
+        d.extrude(sk, SD, "remove", f"{fc.capitalize()} slots 6.8 wide x 6 deep: " + ", ".join(str(s) for f, e, x, s in SLOTS if f == fc))
     # thumb dish: a spherical cap, revolved about Z
     r = DISH_D / 2
     R = (r * r + DISH_H * DISH_H) / (2 * DISH_H)
@@ -106,7 +106,7 @@ Z1 = CARRIER                       # gauge bottom in op 1
 sk = d.sketch([rect(-BAR / 2, -BAR_L / 2, BAR / 2, BAR_L / 2)])
 d.extrude(sk, CARRIER + H, "add", "Bar faced to z 19 (25.4 wide, 120 long)")
 sk = d.sketch([rect(-BAR / 2 - 1, -L / 2, -W / 2, L / 2), rect(W / 2, -L / 2, BAR / 2 + 1, L / 2)], face(CARRIER + H, 0, 0))
-d.extrude(sk, CARRIER + H - 5.0, "remove", "Gauge walls down to z 5 (the jaws grip 4.7)")
+d.extrude(sk, CARRIER + H - 5.0, "remove", "Gauge walls (23 wide) down to z 5 (the jaws grip 4.7)")
 sk = d.sketch([rect(-BAR / 2 - 1, L / 2, BAR / 2 + 1, BAR_L / 2 + 1), rect(-BAR / 2 - 1, -BAR_L / 2 - 1, BAR / 2 + 1, -L / 2)], face(CARRIER + H, 0, 0))
 d.extrude(sk, CARRIER + H - LUG_T, "remove", "End lugs down to 8 thick")
 sk = d.sketch([{"type": "circle", "center": [0, s * LUG_Y], "radius": LUG_BORE / 2} for s in (1, -1)], face(LUG_T, 0, LUG_Y))
