@@ -15,7 +15,9 @@ use crate::Frame;
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LimiterSettings {
-    /// Sag over the no-load sag to hold, share (0.02 = 2%).
+    /// Sag over the no-load sag to hold, share (0.03 = 3%), on the bog guard's scale (its no-load sag is learned
+    /// with the spindle on and the machine standing: so moving near the work in air already reads about 1.7%,
+    /// the broken-tool run's C1 0.6 x 6 about 1.5%, C2 1.0 x 6 3.2%, and the guard holds at 6%).
     pub target: f64,
     /// The lowest share of the programmed feed it goes to.
     pub min: f64,
@@ -32,7 +34,7 @@ pub struct LimiterSettings {
 
 impl Default for LimiterSettings {
     fn default() -> Self {
-        LimiterSettings { target: 0.02, min: 0.6, kp: 4.0, ki: 10.0, slew_down: 2.0, slew_up: 0.15, hold_off: 0.5 }
+        LimiterSettings { target: 0.03, min: 0.6, kp: 4.0, ki: 10.0, slew_down: 2.0, slew_up: 0.15, hold_off: 0.5 }
     }
 }
 
@@ -60,16 +62,17 @@ impl Limiter {
         self.engaged_at = None;
     }
 
-    /// A window heard at `t` s, with the no-load sag learned at its speed (the guard's): the feed to ask for.
-    pub fn update(&mut self, t: f64, f: &Frame, air: Option<f64>) -> f64 {
+    /// A window heard at `t` s, with its sag over the no-load sag as the bog guard measures it
+    /// (`Guard::excess`: one baseline for both): the feed to ask for.
+    pub fn update(&mut self, t: f64, f: &Frame, over_air: Option<f64>) -> f64 {
         let s = self.settings;
         let dt = self.last_t.map(|l| (t - l).clamp(0.0, 0.5)).unwrap_or(0.0);
         self.last_t = Some(t);
         let moving = f.ctx.rpm > 0.0 && f.ctx.cutting;
-        let excess = match (f.droop, air) {
-            (Some(d), Some(a)) if moving => Some(d - a),
+        let excess = match over_air {
+            Some(e) if moving => Some(e),
             // the speed lost in a cut right after a high sag: it ran away past what the analysis searches
-            (None, Some(_)) if moving && self.last_excess.is_some_and(|e| e > 2.0 * s.target) => self.last_excess.map(|e| e.max(3.0 * s.target)),
+            None if moving && f.droop.is_none() && self.last_excess.is_some_and(|e| e > 1.5 * s.target) => self.last_excess.map(|e| e.max(2.0 * s.target)),
             _ => None,
         };
         let Some(e) = excess else {
@@ -108,11 +111,18 @@ mod tests {
         Frame { ctx: Context { rpm: 24_000.0, cutting, teeth: 3, ..Default::default() }, droop, ..Default::default() }
     }
 
+    /// A window as the app passes it: its sag over `air`, the no-load sag the guard learned.
+    fn step(l: &mut Limiter, t: f64, cutting: bool, droop: Option<f64>, air: Option<f64>) -> f64 {
+        let f = frame(cutting, droop);
+        let over = droop.zip(air).map(|(d, a)| d - a);
+        l.update(t, &f, over)
+    }
+
     #[test]
     fn a_light_cut_keeps_the_programmed_feed() {
         let mut l = Limiter::new(LimiterSettings::default());
         for k in 0..100 {
-            assert_eq!(l.update(k as f64 * 0.085, &frame(true, Some(0.0245 + 0.012)), Some(0.0245)), 1.0);
+            assert_eq!(step(&mut l, k as f64 * 0.085, true, Some(0.0245 + 0.012), Some(0.0245)), 1.0);
         }
     }
 
@@ -121,7 +131,7 @@ mod tests {
         let mut l = Limiter::new(LimiterSettings::default());
         let mut f = 1.0;
         for k in 0..100 {
-            f = l.update(k as f64 * 0.085, &frame(true, Some(0.0245 + 0.06)), Some(0.0245));
+            f = step(&mut l, k as f64 * 0.085, true, Some(0.0245 + 0.06), Some(0.0245));
         }
         assert_eq!(f, 0.6);
     }
@@ -130,15 +140,15 @@ mod tests {
     fn no_signal_keeps_the_feed_and_never_raises_it() {
         let mut l = Limiter::new(LimiterSettings::default());
         for k in 0..10 {
-            l.update(k as f64 * 0.085, &frame(true, Some(0.0245 + 0.04)), Some(0.0245));
+            step(&mut l, k as f64 * 0.085, true, Some(0.0245 + 0.04), Some(0.0245));
         }
         let low = l.feed;
         assert!(low < 1.0);
         // no learned no-load sag, a lost speed after a modest sag, the spindle stopped: it stays
         for k in 10..60 {
             let t = k as f64 * 0.085;
-            assert!(l.update(t, &frame(true, Some(0.0)), None) <= low + 1e-12);
-            assert!(l.update(t, &frame(false, Some(0.0)), Some(0.0245)) <= low + 1e-12);
+            assert!(step(&mut l, t, true, Some(0.0), None) <= low + 1e-12);
+            assert!(step(&mut l, t, false, Some(0.0), Some(0.0245)) <= low + 1e-12);
         }
     }
 
@@ -146,10 +156,10 @@ mod tests {
     fn a_lost_speed_after_a_high_sag_slows_it_more() {
         let mut l = Limiter::new(LimiterSettings::default());
         for k in 0..4 {
-            l.update(k as f64 * 0.085, &frame(true, Some(0.0245 + 0.05)), Some(0.0245));
+            step(&mut l, k as f64 * 0.085, true, Some(0.0245 + 0.05), Some(0.0245));
         }
         let before = l.feed;
-        l.update(0.4, &frame(true, None), Some(0.0245));
+        step(&mut l, 0.4, true, None, Some(0.0245));
         assert!(l.feed < before, "{before} {}", l.feed);
     }
 
@@ -157,16 +167,16 @@ mod tests {
     fn it_comes_back_up_slowly_once_the_cut_lightens() {
         let mut l = Limiter::new(LimiterSettings::default());
         for k in 0..30 {
-            l.update(k as f64 * 0.085, &frame(true, Some(0.0245 + 0.05)), Some(0.0245));
+            step(&mut l, k as f64 * 0.085, true, Some(0.0245 + 0.05), Some(0.0245));
         }
         let low = l.feed;
         let mut t = 30.0 * 0.085;
         let mut f = low;
         while t < 30.0 * 0.085 + 1.0 {
-            f = l.update(t, &frame(true, Some(0.0245 + 0.005)), Some(0.0245));
+            f = step(&mut l, t, true, Some(0.0245 + 0.005), Some(0.0245));
             t += 0.085;
         }
-        // at most slew_up a second
-        assert!(f > low && f <= low + 0.15 + 1e-9, "{low} {f}");
+        // at most slew_up a second (12 windows: 1.02 s)
+        assert!(f > low && f <= low + 0.15 * 12.0 * 0.085 + 1e-9, "{low} {f}");
     }
 }

@@ -59,6 +59,12 @@ impl Guard {
         self.air.get(&((rpm / 250.0).round() as i64)).copied()
     }
 
+    /// A window's sag over the no-load sag learned at its speed: the one scale the hold and the adaptive feed
+    /// both work in. None without a heard speed or before any no-load sag is learned there.
+    pub fn excess(&self, f: &Frame) -> Option<f64> {
+        Some(f.droop? - self.air_droop(f.ctx.rpm)?)
+    }
+
     /// A window heard at `t` s: Some(why) when the feed should be held now (once per bog: it re-arms when the
     /// droop is back under the limit).
     pub fn update(&mut self, t: f64, f: &Frame) -> Option<String> {

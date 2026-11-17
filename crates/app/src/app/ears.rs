@@ -178,7 +178,7 @@ impl Ears {
             }
             let line_on = self.adaptive.1.is_some() && f.ctx.line.checked_sub(1).and_then(|l| self.adaptive.2.get(l)).copied().unwrap_or(false);
             if running && line_on && self.settings.guard.on {
-                asked[i] = Some(self.limiter.update(t, f, self.guard.air_droop(f.ctx.rpm)));
+                asked[i] = Some(self.limiter.update(t, f, self.guard.excess(f)));
             } else {
                 self.limiter.reset();
             }
