@@ -70,26 +70,56 @@ and wall W.
 
     python3 analyse.py op1a-calibrate-v2.nc.cutlog.json op1a-calibrate-v2.nc.air.cutlog.json predicted.json wall_watts.json
 
-## Op 1: the gauge's top side (NOT YET RE-PLANNED for the 32 mm bar and the pull-out model: do not run) (`op1-top.nc`, about 24 min plus one chip pause)
+## Op 1: the gauge's top side (`op1-top.nc`, about 52 min plus one chip pause)
 
-Run it straight after op 1a, **without unclamping**. It doesn't probe: G54 stays from op 1a. Its stock model
-is what op 1a's passes left.
+Re-planned for the **32 × 32 bar** and the spindle pull-out model (645 W stall at 24k):
+- every bulk cut is a **straight pass at ≤ 1 mm stepover**;
+- **peak 432 W** by rCAD's sim; nothing over 450.
 
-| # | Tool | Operation | Time | Spindle | Chatter | Chip |
-|---|---|---|---|---|---|---|
-| 1 | T24 | Face the top to Z19 (the rest of the band) | 5:31 | 20% | 0.23 | 0 |
-| 2 | T24 | Rough the slots and reliefs: traced inside, 1 mm levels, **F1000**, 0.2 left on the walls, floors to depth | 0:43 | 21% | 0.73 | 0.91 |
-| — | | **CHIP PAUSE**: spindle and coolant stop, rcnc says "Blow the chips out of the two slots and their end reliefs". Blow them out, then Cycle Start. | | | | |
-| 3 | T24 | Rough everything above Z8: end lugs, the band beside the gauge, the dish | 12:25 | **65%** | **0.81** | 0.22 |
-| 4 | T24 | Rough the walls to Z5 (extra passes ≤ 25% Ø) | 0:53 | 46% | 0.47 | 0.08 |
-| 5 | T24 | **Finish the slot walls and the relief stop walls**: one full-depth 6 mm pass round their outline | 0:09 | 45% | 0.38 | 0.16 |
-| 6 | T24 | **Finish** the walls and end faces Z19→Z8, one full-height pass (leads, 1.5 overlap, 0.03 last lap; seam mid −X side) | 1:12 | 23% | 0.21 | 0.05 |
-| 7 | T24 | Finish the walls Z8→Z5 (lug outsides too) | 0:22 | 20% | 0.19 | 0.03 |
-| 8 | T24 | Two Ø8 bores through the lugs at y ±52 (op 2 finds them) | 0:25 | 2% | | 0.60 |
-| 9 | T11 | Finish the thumb dish, scallop **0.2 stepover (0.033 D)** | 0:50 | 0% | 0.04 | 0.17 |
-| 10 | T1 | Engrave the numbers 0.3 deep | 0:18 | | | |
-| 11 | T1 | Edge break 0.3 on the two bore mouths (top side) | 0:08 | | | |
-| 12 | T1 | Edge break 0.3 on every edge of the gauge's top: outline, slots, reliefs, dish rim | 0:16 | | | |
+Run it straight after op1a v2, **without unclamping**:
+- It doesn't probe: G54 stays from op 1a.
+- Its stock model is what op1a v2 leaves: z 32 in the middle, the +X side at z 26 in to x +6.4, the −X side at
+  z 20 in to x −9.7.
+- It has `(RCNC REQUIRE_GUARD)`: keep Listening on with the feed hold armed.
+
+| # | Tool | Operation | Passes | Time | Peak W (spindle %) |
+|---|---|---|---|---|---|
+| 1 | T24 | **Band z32 → 26** (the middle, x +6.4 → −9.7): 0.85 × 6 strips, **F2100**, climb along +Y | 19 | 1:54 | 427 (66%) |
+| 2 | T24 | **Band z26 → 19.2** (x +16 → −9.7): 0.73 × 6.8, **F2100** | 35 | 4:05 | 423 (66%) |
+| 3 | T24 | Band −X side z20 → 19.2: 0.9 × 0.8 | 7 | 0:42 | 63 |
+| 4 | T24 | **Finish the gauge's top**: face z19.2 → 19, one 0.2 level | 1 | 0:54 | 47 |
+| 5 | T24 | **Lugs** z19 → 8: lines across X, 0.89 strips from each free end in, two 5.5 levels each; last line 0.3 off the end face | 72 | 7:12 | 432 (67%) |
+| 6 | T24 | **Side strips** beside the gauge z19 → 8.5: five 0.84 strips a side from the bar's edge in, two 5.25 levels | 20 | 2:50 | 413 (64%) |
+| 7 | T24 | Rough the thumb dish (adaptive, 0.64 stepover, 1 mm levels) | 1 | 7:35 | 299 |
+| 8 | T24 | Rough the slots and reliefs: traced inside, 1 mm levels, F1000, 0.2 left on the walls | 1 | 0:46 | 242 |
+| — | | **CHIP PAUSE**: spindle and coolant stop. Blow the chips out of the two slots and their reliefs, then Cycle Start. | | | |
+| 9 | T24 | Rough the walls z8.5 → 5 beside the jaws (adaptive, 0.64 stepover, 1.2 levels, 0.3 left) | 1 | 10:17 | 205 |
+| 10 | T24 | **Finish the slot walls and relief stop walls**: one full-depth 6 mm pass at **F1200** (the relief corners carry more) | 1 | 0:15 | 321 |
+| 11 | T24 | **Finish** the walls and end faces z19 → 8, one full-height pass (seam mid −X side) | 1 | 0:47 | 254 |
+| 12 | T24 | Finish the walls z8 → 5 (lugs' outsides too), F1200 | 1 | 0:44 | 270 |
+| 13 | T24 | Two Ø8 bores through the lugs at y ±52 (op 2 finds them) | 1 | 0:28 | 222 |
+| 14 | T11 | Finish the thumb dish: scallop, **0.2 stepover (0.033 D)** | 1 | 8:01 | 4 |
+| 15 | T1 | Engrave the numbers 0.3 deep | 1 | 0:28 | |
+| 16 | T1 | Edge break 0.3 on the two bore mouths | 1 | 0:08 | |
+| 17 | T1 | Edge break 0.3 on every edge of the gauge's top: outline, slots, reliefs, dish rim | 1 | 0:16 | |
+
+**Loads:**
+- The band passes are F2100, not F2400. rCAD's sim grid (0.134 cells) reads the 0.85 / 0.73 strips about 0.1
+  wider; at F2400 the sim read 472 W. The plan model (true width) gives 431 W at F2400 and about 400 at F2100.
+- Each pass runs y −67 → +67: plunge and exit are in air past the sawn ends.
+- Every straight pass climbs, with the material on the tool's left.
+- The bog guard is the backstop on all of it.
+
+**Chips:** chip index at most 0.21 on the straight passes. The slot rough is 0.71, so the pause stays after it.
+Bores 0.50.
+
+Check results:
+- **rCAD simulation:** ok, no problems, peak 432 W (67%).
+  - It flags 792 mm² "unfinished" at the slot/relief convex corner (x +3.6, y −31). The slot finish wraps that
+    corner with an R3.17 arc (`G3 X0.425 Y-32.098 …`), so it's the sim's grid at a sharp corner, as before.
+- **rcnc simulator:** op1a v2 then op 1, on the stepped bar (Find stock with the probe at x −2.4), runs to the
+  end in 3108 s. Find stock read 32.000 × 120.700, top Z32. Chip pause and tool changes T99 → T24 → T11 → T1 as
+  planned. The lowest the tool goes is Z0.5 (the bores).
 
 **The slots:**
 - Slots are now **7.2 wide** (the tool cradles in them; 0.2 rough allowance each side).
@@ -102,24 +132,12 @@ is what op 1a's passes left.
   op 2, standing on the 1.9 mm vise ledges, so 1.6 mm of land is left on each ledge.
 - The engraving needs none.
 
-**Chips:** step 2 has the highest chip index (0.91). It's a full-width cut 6 deep, so the pause after it stays.
-The slots are open at the end faces, so flood should clear most of it.
-
-**Bores:** chip index 0.60. Before op 2:
+**Bores:** before op 2:
 - blow out both lug bores;
 - deburr their **bottom ends** by hand (a deburring tool or countersink, lightly). That's where the bores
   broke through in op 1, and it's the side op 2 probes from.
 
 Op 2's program also says so before Find bores.
-
-Check results:
-- **rCAD simulation:** no problems. Peak spindle 65%; chatter at most 0.81.
-- **rcnc simulator:** op 1a followed by op 1 runs to the end (1552 s), including the chip pause.
-
-**Unfinished flag (200 mm² at one convex corner):** the sim flags the corner where a slot wall meets its
-relief's near wall (x −3.6, y −31). The finishing pass in step 5 wraps that corner with an R3.175 arc (the
-`G3 X-3.089 Y-27.84 … X-0.425 Y-32.1` moves). The flag reads the wall's full height (5.8 mm), so it's the
-sim's grid at a sharp corner, not stock left.
 
 **What op 1 leaves for op 2:**
 - the gauge's top side finished;
@@ -128,7 +146,7 @@ sim's grid at a sharp corner, not stock left.
 - the 3 mm carrier under the gauge;
 - the end lugs (8 thick) with the two Ø8 bores.
 
-## Op 2: the gauge's bottom side (`op2-bottom.nc`, about 6:30 plus two stops)
+## Op 2: the gauge's bottom side (BEING RE-PLANNED for the 32 mm bar: not posted yet)
 
 1. **Unclamp and flip** the part: op 1's finished top goes down on the ledges.
    - Turn it over either way (about X or about Y). The bores and the part are symmetric about the middle, so

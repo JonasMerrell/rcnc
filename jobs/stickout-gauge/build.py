@@ -205,6 +205,22 @@ for sgn in (1, -1):
         x = sgn * (edge + 6.35 / 2)
         sid = d.sketch([{"type": "line", "from": [round(x, 4), -67.0], "to": [round(x, 4), 67.0]}])
         SIDE.append((sid, sgn, round(x, 4)))
+# the re-planned straight passes (passes.py: step over <= 1 mm, the pull-out model): tool-centre lines
+import passes as P_
+NEW = {"band": [], "lug": [], "side": [], "carrier": []}
+for grp, x, top_, dep, w, seam, label in P_.OP1:
+    sid = d.sketch([{"type": "line", "from": [x, -67.0], "to": [x, 67.0]}])
+    NEW["band"].append([sid, x, top_, dep, round(w, 4), seam, label])
+for e, y in P_.LUG:
+    sid = d.sketch([{"type": "line", "from": [-23.0, y], "to": [23.0, y]}])
+    NEW["lug"].append([sid, e, y])
+for sgn, x, w in P_.SIDE:
+    sid = d.sketch([{"type": "line", "from": [x, -67.0], "to": [x, 67.0]}])
+    NEW["side"].append([sid, sgn, x, round(w, 4)])
+for x, w in P_.CARRIER:
+    sid = d.sketch([{"type": "line", "from": [x, -67.0], "to": [x, 67.0]}])
+    NEW["carrier"].append([sid, x, round(w, 4)])
+json.dump(NEW, open("/home/jonas/dmc2/gauge/straight_passes.json", "w"), indent=1)
 d.S.append({"tool": "set_part", "args": {"body": [2, 0], "name": "Op 1 CAM body", "color": "#c9ced6", "material": "Aluminium 6061"}})
 # 4: the gauge alone in op 1's frame, for op 2 (it follows op 1's stock)
 d.studio("Op 2 CAM body")
