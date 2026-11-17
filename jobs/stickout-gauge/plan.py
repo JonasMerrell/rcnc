@@ -2,7 +2,7 @@
 (rCAD cam_cutting: Kienzle kc1 700 / mc 0.25 for 6061, the DMC2's 1.5 kW x 0.78 spindle, constant torque below
 24 000 rpm) predicts for each. Writes calibration.md (the table) and calibration-passes.png (where they cut).
 
-Op 1's frame: the bar's bottom on the parallels at z 0, X across (+-12.7), Y along (the bar is 120 long; passes
+Op 1's frame: the bar's bottom on the parallels at z 0, X across (+-16), Y along (the bar is 120 long; passes
 run y -63 -> +63, in from air at one end and out at the other). T24 (1/4" 3 flute carbide, stick-out 24).
 Every pass is a straight climb cut along +Y with the material on the tool's -X side.
 """
@@ -12,8 +12,8 @@ D, Z_TEETH = 6.35, 3
 KC1, MC = 700.0, 0.25
 P_IN, EFF, RATED = 1500.0, 0.78, 24000.0
 LEN = 134.0   # y -67 -> +67: the tool's radius + 3.5 past each sawn end (60.35)
-TOP = 25.4
-BAR = 25.4
+TOP = 32.0
+BAR = 32.0   # the bar is 32 x 32 (measured), not 1"
 
 
 def predict(w, d, f, rpm):
@@ -28,22 +28,33 @@ def predict(w, d, f, rpm):
     return dict(fz=fz, hm=hm, kc=kc, p=p, pct=100 * p / avail, force=force, mrr=w * d * f / 1000)
 
 
-passes = []   # (id, what, w, d, f, rpm, x_wall_after, z_floor) ; x of the new wall (the pass's -X edge)
+passes = []   # (id, what, w, d, f, rpm, x_low_edge, z_floor, side): the strip x_low_edge .. +w; side +1: cut from +X (climb +Y)
 x = BAR / 2
-air_z = TOP + 4.6
 # no air passes: running the program once with rcnc's Air cut on (+25) gives every pass's baseline at its own
 # speed and feed (logged to <program>.air.cutlog.json)
 n = 0
 
 
-def cut(what, w, d, f, rpm, floor=None):
+def cut(what, w, d, f, rpm):
+    """A strip in from the +X side of the top band: material on the tool's -X side, climb along +Y."""
     global x, n
     x -= w
     n += 1
-    passes.append((f"C{n}", what, w, d, f, rpm, x, floor if floor is not None else TOP - d))
+    passes.append((f"C{n}", what, w, d, f, rpm, x, TOP - d, 1))
 
 
-# top band, 6 deep (z 25.4 -> 19.4): width ladder, then feed, then the rpm sweep at one fixed cut
+xn = -BAR / 2
+
+
+def cut_neg(what, w, d, f, rpm):
+    """A strip in from the -X side: material on the tool's +X side, climb along -Y."""
+    global xn, n
+    n += 1
+    passes.append((f"C{n}", what, w, d, f, rpm, xn, TOP - d, -1))
+    xn += w
+
+
+# top band from +X, 6 deep (z 32 -> 26): width ladder, then feed, then the rpm sweep at one fixed cut
 for w in (0.6, 1.0, 1.4, 1.8):
     cut("width ladder", w, 6.0, 2400, 24000)
 for f in (1800, 3000):
@@ -55,17 +66,15 @@ cut("repeat of C3 (drift, repeatability)", 1.4, 6.0, 2400, 24000)
 for d in (4.5, 3.0):
     cut("depth ladder", 1.4, d, 2400, 24000)
 band_wall = x
-# then the facing takes the rest of the band (x -12.7 .. band_wall and what the depth ladder left) to z 19
-# the side strip outside the gauge's +X wall (x 11.5 .. 12.7): the width ladder took it down to z 19.4, these
-# take it 12 deeper (z 7.4); 0.3 is left for the wall's finishing passes. (Not on -X: the band there is still
-# full height until op 1 faces it, so a 12-deep pass would really be 18.)
-x = BAR / 2
-for w, f, what in ((0.3, 2400, "side +X, 12 deep"), (0.6, 2500, "side +X, 12 deep: Jonas's known 0.6 x 12 at 2500")):
-    cut(what, w, 12.0, f, 24000, floor=19.4 - 12.0)
+# from -X, 12 deep (z 32 -> 20, above the gauge's top at 19): 0.3, Jonas's known 0.6 x 12 at 2500, then 0.9
+# slower to stay under 75%
+for w, f, what in ((0.3, 2400, "12 deep"), (0.6, 2500, "12 deep: Jonas's known 0.6 x 12 at 2500"), (0.9, 2000, "12 deep, wider (F2000 keeps it under 75%)")):
+    cut_neg(what, w, 12.0, f, 24000)
+# then op 1 takes the rest of the band (x xn .. band_wall, and what the depth ladder left) and the side strips
 
 rows = []
 total = 0.0
-for pid, what, w, d, f, rpm, xw, zf in passes:
+for pid, what, w, d, f, rpm, xw, zf, side in passes:
     t = LEN / f * 60
     total += t
     if w == 0:
@@ -100,20 +109,20 @@ ax.text(0, 11, "gauge\n23 x 16", ha="center", va="center", fontsize=11)
 ax.add_patch(Rectangle((-BAR / 2, 0), BAR, 3, fc="#f3d9a6", ec="#a07a2a", lw=0.8))
 ax.text(0, 1.5, "carrier 3 (op 2 faces it off)", ha="center", va="center", fontsize=8)
 for s in (-1, 1):
-    ax.add_patch(Rectangle((12.7 if s > 0 else -14.7, 0), 2.0, 4.7, fc="#777", ec="#333"))
-ax.text(15.0, 2.3, "jaws\ngrip 4.7", fontsize=8, va="center")
+    ax.add_patch(Rectangle((BAR / 2 if s > 0 else -BAR / 2 - 2.0, 0), 2.0, 4.7, fc="#777", ec="#333"))
+ax.text(18.3, 2.3, "jaws\ngrip 4.7", fontsize=8, va="center")
 cmap = plt.get_cmap("viridis")
-for pid, what, w, d, f, rpm, xw, zf in passes:
+for pid, what, w, d, f, rpm, xw, zf, side in passes:
     if w == 0:
         continue
     m = predict(w, d, f, rpm)
     c = cmap(min(1, max(0, (m["pct"] - 20) / 60)))
     ax.add_patch(Rectangle((xw, zf), w, d, fc=c, ec="k", lw=0.5, alpha=0.9))
     ax.text(xw + w / 2, zf + d / 2, pid, ha="center", va="center", fontsize=6.5, rotation=90, color="w" if m["pct"] < 50 else "k")
-ax.add_patch(Rectangle((-BAR / 2, 19), band_wall + BAR / 2, 6.4, fc="none", ec="#c33", lw=1, ls="--"))
-ax.text((band_wall - BAR / 2) / 2, 22.2, "faced off\n(adaptive / face)", ha="center", fontsize=8, color="#c33")
-ax.set_xlim(-16, 17)
-ax.set_ylim(-1, 32)
+ax.add_patch(Rectangle((xn, 19), band_wall - xn, TOP - 19, fc="none", ec="#c33", lw=1, ls="--"))
+ax.text((band_wall + xn) / 2, 25, "faced off\n(adaptive / face)", ha="center", fontsize=8, color="#c33")
+ax.set_xlim(-19, 20)
+ax.set_ylim(-1, 34)
 ax.set_aspect("equal")
 ax.set_xlabel("X (mm, across the bar)")
 ax.set_ylabel("Z (mm, op 1)")

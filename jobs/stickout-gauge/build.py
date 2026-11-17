@@ -21,7 +21,7 @@ RF = 3.6                           # the relief's inside corners: R3.6 (> the to
 DISH_D, DISH_H = 16.0, 3.5         # thumb dish, spherical, top face middle
 CH, EB = 0.5, 0.3                  # outer edge chamfer, edge break elsewhere
 TXT_H, TXT_D = 4.0, 0.3            # engraved numbers
-BAR, BAR_L = 25.4, 120.7           # stock: 1" square bar, bandsawn to 120.7 (measured)
+BAR, BAR_L = 32.0, 120.7           # stock: 32 x 32 bar (measured, not the nominal 1"), bandsawn to 120.7
 CARRIER = 3.0                      # stock below the gauge in op 1 (removed in op 2)
 LUG_T, LUG_Y, LUG_BORE = 8.0, 52.0, 8.0   # end lugs: 8 thick in op 1, bore centres at y +-52, Ø8 through
 
@@ -121,7 +121,7 @@ d.S.append({"tool": "set_part", "args": {"body": [2, 0], "name": "Stick-out gaug
 d.studio("After op 1 (op 1 frame)")
 Z1 = CARRIER                       # gauge bottom in op 1
 sk = d.sketch([rect(-BAR / 2, -BAR_L / 2, BAR / 2, BAR_L / 2)])
-d.extrude(sk, CARRIER + H, "add", "Bar faced to z 19 (25.4 wide, 120 long)")
+d.extrude(sk, CARRIER + H, "add", "Bar faced to z 19 (32 wide, 120.7 long)")
 sk = d.sketch([rect(-BAR / 2 - 1, -L / 2, -W / 2, L / 2), rect(W / 2, -L / 2, BAR / 2 + 1, L / 2)], face(CARRIER + H, 0, 0))
 d.extrude(sk, CARRIER + H - 5.0, "remove", "Gauge walls (23 wide) down to z 5 (the jaws grip 4.7)")
 sk = d.sketch([rect(-BAR / 2 - 1, L / 2, BAR / 2 + 1, BAR_L / 2 + 1), rect(-BAR / 2 - 1, -BAR_L / 2 - 1, BAR / 2 + 1, -L / 2)], face(CARRIER + H, 0, 0))
@@ -169,10 +169,10 @@ import contextlib, io
 with contextlib.redirect_stdout(io.StringIO()):
     import plan
 CAL = []   # (sketch id, pass id, what, w, d, f, rpm, centre x, depth below 25.4, seam y): a line per calibration pass
-for pid, what, w, d_, f, rpm, xw, zf in plan.passes:
+for pid, what, w, d_, f, rpm, xw, zf, side in plan.passes:
     if w == 0:
         continue
-    plus = xw > -BAR / 2 + 1e-6      # +X side passes: material on -X, climb runs +Y
+    plus = side > 0                  # +X side passes: material on -X, climb runs +Y; -X side ones run -Y
     xc = xw + 6.35 / 2 if plus else (xw + w) - 6.35 / 2
     sid = d.sketch([{"type": "line", "from": [round(xc, 4), -67.0], "to": [round(xc, 4), 67.0]}])
     CAL.append((sid, pid, what, w, d_, f, rpm, xc, round(BAR - zf, 4), -1000.0 if plus else 1000.0))
@@ -187,7 +187,7 @@ for e in (1, -1):
         y -= 1.5
     ys.append(L / 2 + 0.3 + 6.35 / 2)
     for y in ys:
-        sid = d.sketch([{"type": "line", "from": [-20.0, round(e * y, 4)], "to": [20.0, round(e * y, 4)]}])
+        sid = d.sketch([{"type": "line", "from": [-23.0, round(e * y, 4)], "to": [23.0, round(e * y, 4)]}])
         LUG.append((sid, e, round(e * y, 4)))
 d.S.append({"tool": "set_part", "args": {"body": [2, 0], "name": "Op 1 CAM body", "color": "#c9ced6", "material": "Aluminium 6061"}})
 # 4: the gauge alone in op 1's frame, for op 2 (it follows op 1's stock)

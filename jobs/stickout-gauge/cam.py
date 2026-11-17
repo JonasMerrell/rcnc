@@ -1,7 +1,7 @@
 """Stick-out gauge CAM, op 1: op 1a (the calibration passes) and op 1 (the gauge's top side). Writes cam.json for
 `rcad run` (rCAD master + PR 151: per-operation rpm/feed, trace lines that start at the seam point's end).
 
-The bar (25.4 x 25.4 x 120.7, 6061) lies along Y in the right station, fixed jaw on the left (-X), on the vise's
+The bar (32 x 32 x 120.7, 6061; measured) lies along Y in the right station, fixed jaw on the left (-X), on the vise's
 built-in ledges: Z0 = the Vise reference (the bar's bottom). The jaws grip 4.7; beside them the tool stays 0.3
 over them (fixture_clearance). Op 1a probes the stock (Find stock, Z kept from the Vise reference) and sets G54;
 op 1 follows it in the same clamping and doesn't probe again (G54 stays).
@@ -12,7 +12,7 @@ M = {"name": "DMC2", "model": "DMC2", "travel": [343, 234, 150], "max_feed": 300
      "spindle_power": 1500, "spindle_efficiency": 0.78, "spindle_rated_rpm": 24000}
 JAW_T, JAW_H, JAW_L = 12.7, 4.7, 95.5
 FIXED_R, TABLE_X, LEDGE_Z = 25.5, 47.8, 23.195
-BAR, BAR_L = 25.4, 120.7
+BAR, BAR_L = 32.0, 120.7   # measured: 32 x 32, not 1"
 CAL = json.load(open("cal_passes.json"))
 
 
