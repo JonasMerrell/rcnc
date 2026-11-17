@@ -203,8 +203,10 @@ impl Ears {
             }
         }
         if !running && !matches!(s.mode, Mode::Probing) && s.paused.is_none() {
-            if let Some((path, log)) = self.log.take() {
+            if let Some((path, mut log)) = self.log.take() {
                 if !log.lines.is_empty() {
+                    // where it chattered: a speed to try next time (in the log for rCAD; never changed here)
+                    log.suggest(s.config.spindle_max_rpm.max(1.0));
                     let _ = log.save(&path);
                 }
             }

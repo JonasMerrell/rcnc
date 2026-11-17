@@ -14,6 +14,40 @@ pub struct CutLog {
     /// when the line is wrong (a board that doesn't report it), and a run that ends early keeps its last seconds.
     #[serde(default)]
     pub timeline: Vec<Moment>,
+    /// Per operation that chattered: the spindle speeds that should calm it (`suggest`), for rCAD to plan the
+    /// next run with; rcnc never changes the speed itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggestions: Vec<RpmSuggestion>,
+}
+
+/// An operation that chattered, and the speed to try instead.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RpmSuggestion {
+    pub op: String,
+    pub tool: u32,
+    pub teeth: u32,
+    /// The speed it ran at, and the chatter heard: its frequency (the one heard most) and in how many of the
+    /// operation's cutting windows.
+    pub rpm: f64,
+    pub chatter_hz: f64,
+    pub chatter_windows: u32,
+    pub windows: u32,
+    /// The speed to try: the teeth then pass at the chatter frequency over a whole number (`lobe`), the top of a
+    /// stability lobe; and the feed scaled with it to keep the chip.
+    pub suggest_rpm: f64,
+    pub lobe: u32,
+    pub feed_scale: f64,
+}
+
+/// The spindle speed nearest `rpm`, at most `max_rpm` and at least 60% of `rpm`, at which `teeth` teeth pass at
+/// the chatter frequency over a whole number: the tops of the stability lobes, where a cut is stablest. None if
+/// there is none in range. The frequency moves a little with the speed, so it's a speed to try, not a promise.
+pub fn lobe_rpm(chatter_hz: f64, rpm: f64, teeth: u32, max_rpm: f64) -> Option<(f64, u32)> {
+    let z = teeth.max(1) as f64;
+    (1..=60u32)
+        .map(|n| (60.0 * chatter_hz / (z * n as f64), n))
+        .filter(|(r, _)| *r <= max_rpm + 1e-9 && *r >= 0.6 * rpm)
+        .min_by(|a, b| (a.0 - rpm).abs().total_cmp(&(b.0 - rpm).abs()))
 }
 
 /// One analysed window (about 0.09 s apart).
@@ -65,11 +99,13 @@ pub struct Line {
     pub tooth_max_db: f64,
     #[serde(default)]
     pub tooth_frames: u32,
+    #[serde(default)]
+    pub teeth: u32,
 }
 
 impl CutLog {
     pub fn new(program: &str, input: &str) -> CutLog {
-        CutLog { program: program.into(), input: input.into(), lines: BTreeMap::new(), timeline: vec![] }
+        CutLog { program: program.into(), input: input.into(), lines: BTreeMap::new(), timeline: vec![], suggestions: vec![] }
     }
 
     /// Add a window heard `t` seconds into the run.
@@ -102,6 +138,7 @@ impl CutLog {
             rpm: f.ctx.rpm,
             feed: f.ctx.feed,
             cutting: f.ctx.cutting,
+            teeth: f.ctx.teeth,
             loud_max_db: f64::NEG_INFINITY,
             ..Default::default()
         });
@@ -128,6 +165,52 @@ impl CutLog {
             // the latest; good enough to tell which mode it was
             l.chatter_hz = hz;
         }
+    }
+
+    /// Work out `suggestions` (call before saving): each operation that chattered in at least a fifth of its
+    /// cutting windows (and at least 4), the chatter frequency heard most (to 25 Hz), and the speed to try.
+    pub fn suggest(&mut self, max_rpm: f64) {
+        let mut by_op: Vec<(String, u32, u32, f64, u32, u32, Vec<f64>)> = vec![];
+        for l in self.lines.values().filter(|l| l.cutting && l.rpm > 0.0) {
+            let i = match by_op.iter().position(|o| o.0 == l.op && o.3 == l.rpm) {
+                Some(i) => i,
+                None => {
+                    by_op.push((l.op.clone(), l.tool, l.teeth, l.rpm, 0, 0, vec![]));
+                    by_op.len() - 1
+                }
+            };
+            by_op[i].4 += l.chatter;
+            by_op[i].5 += l.frames;
+        }
+        // the frequencies, from the timeline (each window's)
+        for m in self.timeline.iter().filter(|m| m.cutting) {
+            if let (Some((hz, _)), Some(o)) = (m.chatter, by_op.iter_mut().find(|o| o.0 == m.op && o.3 == m.rpm)) {
+                o.6.push(hz);
+            }
+        }
+        self.suggestions = by_op
+            .into_iter()
+            .filter(|o| o.4 >= 4 && o.4 as f64 >= 0.2 * o.5 as f64)
+            .filter_map(|(op, tool, teeth, rpm, chatter, windows, hzs)| {
+                // the most heard, in 25 Hz bins (the line's last one if the timeline has none)
+                let hz = if hzs.is_empty() {
+                    self.lines.values().find(|l| l.op == op && l.chatter > 0).map(|l| l.chatter_hz)?
+                } else {
+                    let mut bins: Vec<(i64, Vec<f64>)> = vec![];
+                    for h in hzs {
+                        let k = (h / 25.0).round() as i64;
+                        match bins.iter_mut().find(|b| b.0 == k) {
+                            Some(b) => b.1.push(h),
+                            None => bins.push((k, vec![h])),
+                        }
+                    }
+                    let best = bins.into_iter().max_by_key(|b| b.1.len())?;
+                    best.1.iter().sum::<f64>() / best.1.len() as f64
+                };
+                let (suggest_rpm, lobe) = lobe_rpm(hz, rpm, teeth, max_rpm)?;
+                Some(RpmSuggestion { op, tool, teeth, rpm, chatter_hz: hz, chatter_windows: chatter, windows, suggest_rpm: suggest_rpm.round(), lobe, feed_scale: suggest_rpm / rpm })
+            })
+            .collect();
     }
 
     /// `<program>.cutlog.json` beside the program.
@@ -167,6 +250,40 @@ impl CutLog {
 mod tests {
     use super::*;
     use crate::{Analyzer, Context};
+
+    #[test]
+    fn the_lobe_speed_puts_the_teeth_on_the_chatter_over_a_whole_number() {
+        // 3 teeth at 24k chattering at 7500 Hz: 7500 / 1200 = 6.25 teeth passes a wave; 6 or 7 a wave
+        // would be 25000 or 21429 rpm: under the 24000 top, 21429 (lobe 7)
+        let (r, n) = lobe_rpm(7500.0, 24_000.0, 3, 24_000.0).unwrap();
+        assert_eq!(n, 7);
+        assert!((r - 21428.6).abs() < 0.1, "{r}");
+        // nothing in range
+        assert!(lobe_rpm(100.0, 24_000.0, 3, 24_000.0).is_none());
+    }
+
+    #[test]
+    fn a_chattering_operation_gets_a_speed_to_try() {
+        let mut log = CutLog::new("t.nc", "test");
+        let f = |line, op: &str, chatter: Option<(f64, f64)>| Frame {
+            ctx: Context { line, op: op.into(), tool: 24, teeth: 3, rpm: 24_000.0, feed: 2400.0, cutting: true, ..Default::default() },
+            droop: Some(0.01),
+            chatter,
+            ..Default::default()
+        };
+        for k in 0..20 {
+            log.add_at(k as f64 * 0.085, &f(5, "Rough walls", (k % 2 == 0).then_some((7490.0 + k as f64, 25.0))));
+            log.add_at(2.0 + k as f64 * 0.085, &f(9, "Finish", None));
+        }
+        log.suggest(24_000.0);
+        assert_eq!(log.suggestions.len(), 1, "{:?}", log.suggestions);
+        let s = &log.suggestions[0];
+        assert_eq!((s.op.as_str(), s.chatter_windows, s.windows, s.lobe), ("Rough walls", 10, 20, 7));
+        assert!((s.suggest_rpm - 21_436.0).abs() < 30.0 && (s.feed_scale - s.suggest_rpm / 24_000.0).abs() < 1e-4, "{s:?}");
+        // it goes into the log rCAD reads
+        let back: CutLog = serde_json::from_str(&serde_json::to_string(&log).unwrap()).unwrap();
+        assert_eq!(back.suggestions, log.suggestions);
+    }
 
     #[test]
     fn logs_by_line_and_reads_back() {
