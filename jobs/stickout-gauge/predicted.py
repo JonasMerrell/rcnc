@@ -1,6 +1,7 @@
 """rCAD's predictions for op 1a's passes, from cam.out (rcad run cam.json): writes predicted.json for analyse.py."""
 import json
-outs = [json.loads(l) for l in open("cam.out") if l.startswith("{")]
+import sys
+outs = [json.loads(l) for l in open(sys.argv[1] if len(sys.argv) > 1 else "cam.out") if l.startswith("{")]
 sim = [d for d in outs if d.get("tool") == "simulate_cam"][0]["result"]
 ch = {x["operation"]: x for x in sim["chatter"]}
 pred = {}

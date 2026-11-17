@@ -24,7 +24,7 @@ import statistics
 import sys
 
 RATED_SLIP = 0.04       # rCAD Machine.spindle_rated_slip default
-SPINDLE_IN = 1500.0
+SPINDLE_IN = 1500.0       # rCAD: 1500 W x 0.43 = 645 W, the measured pull-out at 24k
 RATED_RPM = 24000.0
 CHATTER_SCALE = 0.078
 
@@ -63,6 +63,61 @@ def passes(log):
     return out
 
 
+def passes_from_timeline(log, cal):
+    """Per pass from the cut log's timeline (rcnc's listen-guard build): each window sorted to its pass by where
+    the tool was (centre x within 0.5 mm of the pass's line, at its floor), not by the line number."""
+    out = {}
+    for m in log.get("timeline", []):
+        if not m.get("cutting") or m.get("velocity", 0) <= 1:
+            continue
+        x, z = m["pos"][0], m["pos"][2]
+        hit = [c for c in cal if abs(x - c[7]) < 0.5 and abs(z - (32.0 - c[8])) < 0.5]
+        if not hit:
+            continue
+        c = hit[0]
+        name = f"{c[1]} {c[2]}: {c[3]:g} x {c[4]:g} F{c[5]} S{c[6]}"
+        p = out.setdefault(name, {"frames": 0, "heard": 0, "chatter": 0, "droop": [], "droop_max": 0.0, "loud": [], "loud_max": -1e9,
+                                  "tooth": [], "chatter_hz": [], "rpm": c[6], "feed": 0.0, "lines": [], "t": [m["t"], m["t"]]})
+        p["t"][1] = m["t"]
+        p["frames"] += 1
+        p["feed"] = max(p["feed"], m.get("velocity", 0))
+        if m.get("droop") is not None:
+            p["heard"] += 1
+            p["droop"].append((m["droop"], 1))
+            p["droop_max"] = max(p["droop_max"], m["droop"])
+        p["loud"].append((m["loud_db"], 1))
+        p["loud_max"] = max(p["loud_max"], m["loud_db"])
+        if m.get("tooth_db") is not None:
+            p["tooth"].append((m["tooth_db"], 1))
+        if m.get("chatter"):
+            p["chatter"] += 1
+            p["chatter_hz"].append(m["chatter"][0])
+    def wmean(v):
+        n = sum(w for _, w in v)
+        return sum(x * w for x, w in v) / n if n else None
+    for p in out.values():
+        p["droop_mean"] = wmean(p["droop"])
+        p["loud_mean"] = wmean(p["loud"])
+        p["tooth_mean"] = wmean(p["tooth"])
+    return out
+
+
+def last_seconds(log, secs=3.0):
+    """The timeline's last seconds (a run stopped by E-stop or a feed hold)."""
+    tl = log.get("timeline", [])
+    if not tl:
+        return
+    end = tl[-1]["t"]
+    print(f"\nthe last {secs:g} s of the run (ends at {end:.2f} s):")
+    print(f"{'t':>8} {'line':>5} {'cut':>4} {'x':>8} {'y':>8} {'z':>7} {'mm/min':>7} {'droop %':>8} {'tooth dB':>8} {'level dB':>8} {'chatter':>8}")
+    for m in tl:
+        if m["t"] >= end - secs:
+            d = m.get("droop")
+            c = m.get("chatter")
+            print(f"{m['t']:8.2f} {m['line']:5d} {'yes' if m['cutting'] else '':>4} {m['pos'][0]:8.2f} {m['pos'][1]:8.2f} {m['pos'][2]:7.2f} {m.get('velocity', 0):7.0f} "
+                  f"{(d * 100) if d is not None else float('nan'):8.2f} {m.get('tooth_db') if m.get('tooth_db') is not None else float('nan'):8.1f} {m['loud_db']:8.1f} {(c[0] if c else 0):8.0f}")
+
+
 def key(name):
     """'C4 width ladder: ...' -> 'C4'."""
     return name.split()[0]
@@ -72,8 +127,24 @@ def main():
     if len(sys.argv) < 2:
         print(__doc__)
         return
-    cut = passes(json.load(open(sys.argv[1])))
-    air = passes(json.load(open(sys.argv[2]))) if len(sys.argv) > 2 and sys.argv[2].endswith(".json") and "air" in sys.argv[2] else {}
+    log = json.load(open(sys.argv[1]))
+    try:
+        cal = json.load(open("cal_passes.json"))
+    except OSError:
+        cal = []
+    # the timeline sorts windows to passes by position (the line can be wrong on the real board); else by line
+    cut = passes_from_timeline(log, cal) if log.get("timeline") and cal else passes(log)
+    # wall_watts.json (filled in by hand from the meter): {"air": {"24000": W, ...}, "C9": W, ...}
+    wall_path = next((a for a in sys.argv[2:] if a.endswith("wall_watts.json")), "wall_watts.json")
+    try:
+        wall = json.load(open(wall_path))
+    except OSError:
+        wall = {}
+    air_path = next((a for a in sys.argv[2:] if "air" in a and a.endswith("cutlog.json")), None)
+    air = {}
+    if air_path:
+        alog = json.load(open(air_path))
+        air = passes_from_timeline({"timeline": [dict(m, pos=[m["pos"][0], m["pos"][1], m["pos"][2] - 25.0]) for m in alog.get("timeline", [])]}, cal) if alog.get("timeline") and cal else passes(alog)
     pred_path = next((a for a in sys.argv[2:] if a.endswith("predicted.json")), "predicted.json")
     try:
         pred = json.load(open(pred_path))
@@ -81,7 +152,7 @@ def main():
         pred = {}
     air_by = {key(n): p for n, p in air.items()}
     rows, fit = [], []
-    print(f"{'pass':5} {'rpm':>6} {'feed':>5} {'pred %':>6} {'pred W':>6} {'droop %':>7} {'max %':>6} {'tooth dB':>8} {'over air':>8} {'level dB':>8} {'over air':>8} {'chatter':>8} {'Hz':>6} {'pred idx':>8}")
+    print(f"{'pass':5} {'rpm':>6} {'feed':>5} {'pred %':>6} {'pred W':>6} {'wall W':>6} {'cut W':>6} {'droop %':>7} {'max %':>6} {'tooth dB':>8} {'over air':>8} {'level dB':>8} {'over air':>8} {'chatter':>8} {'Hz':>6} {'pred idx':>8}")
     for name, p in sorted(cut.items(), key=lambda kv: int(key(kv[0])[1:])):
         k = key(name)
         pr = pred.get(k, {})
@@ -95,9 +166,12 @@ def main():
         share = p["chatter"] / p["frames"] if p["frames"] else 0.0
         hz = statistics.median(p["chatter_hz"]) if p["chatter_hz"] else None
         f = lambda v, fmt: (fmt % v) if v is not None else "–"
-        print(f"{k:5} {p['rpm']:6.0f} {p['feed']:5.0f} {f(pr.get('pct'), '%6.0f')} {f(pr.get('watts'), '%6.0f')} {f(d_net * 100 if d_net is not None else None, '%7.2f')} "
+        ww = wall.get(k)
+        aw = wall.get("air", {}).get(str(int(p["rpm"])))
+        cut_w = ww - aw if ww is not None and aw is not None else None
+        print(f"{k:5} {p['rpm']:6.0f} {p['feed']:5.0f} {f(pr.get('pct'), '%6.0f')} {f(pr.get('watts'), '%6.0f')} {f(ww, '%6.0f')} {f(cut_w, '%6.0f')} {f(d_net * 100 if d_net is not None else None, '%7.2f')} "
               f"{p['droop_max'] * 100:6.2f} {f(p['tooth_mean'], '%8.1f')} {f(t_over, '%8.1f')} {f(p['loud_mean'], '%8.1f')} {f(l_over, '%8.1f')} {share * 100:7.0f}% {f(hz, '%6.0f')} {f(pr.get('chatter'), '%8.2f')}")
-        rows.append((k, p, pr, d_net, share))
+        rows.append((k, p, pr, d_net, share, cut_w))
         if d_net is not None and pr.get("watts"):
             fit.append((pr["watts"], d_net, p["rpm"]))
 
@@ -121,12 +195,12 @@ def main():
             slope = sxy / sxx
             r = sxy / math.sqrt(sxx * syy)
             print(f"droop vs predicted power: {slope * 1000 * 100:.2f} % per 1000 W, r = {r:.2f}  (r near 1: the model orders the cuts' loads right)")
-            print(f"   at the rated 1170 W of shaft power that line gives {slope * 1170 * 100 + (my - slope * mx) * 100:.2f} % droop (rCAD assumes {RATED_SLIP * 100:.0f} %)")
+            print(f"   at the pull-out (645 W by the model) that line gives {slope * 645 * 100 + (my - slope * mx) * 100:.2f} % droop (rCAD assumes {RATED_SLIP * 100:.0f} %)")
     else:
         print("not enough passes with droop heard to fit the spindle (is the transducer picking up the teeth? see the tooth column)")
 
-    chattered = [(k, pr.get("chatter")) for k, p, pr, d, share in rows if share > 0.3 and pr.get("chatter") is not None]
-    clean = [(k, pr.get("chatter")) for k, p, pr, d, share in rows if share < 0.05 and pr.get("chatter") is not None]
+    chattered = [(k, pr.get("chatter")) for k, p, pr, d, share, cw in rows if share > 0.3 and pr.get("chatter") is not None]
+    clean = [(k, pr.get("chatter")) for k, p, pr, d, share, cw in rows if share < 0.05 and pr.get("chatter") is not None]
     if chattered:
         lo = min(chattered, key=lambda c: c[1])
         scale = CHATTER_SCALE / lo[1]
@@ -138,6 +212,15 @@ def main():
     else:
         top = max(clean, key=lambda c: c[1]) if clean else None
         print("no chatter heard on any pass" + (f": the highest predicted index was {top[0]} at {top[1]:.2f}, so the scale could go up to {CHATTER_SCALE / top[1]:.3f} before predicting chatter there" if top else ""))
+    # the wall meter: what the spindle really drew in the cut (wall minus air at that speed) against the model
+    meas = [(pr.get("watts"), cw, d) for k, p, pr, d, share, cw in rows if cw is not None and pr.get("watts")]
+    if len(meas) >= 2:
+        ratio = statistics.median(c / m for m, c, _ in meas if m)
+        print(f"\nwall meter: the cut drew {ratio:.2f} x the model's watts from the wall (median over {len(meas)} passes):")
+        print("   that ratio is 1 / (motor x VFD efficiency) if the model's watts are right at the tool")
+        for m, c, d in meas:
+            print(f"   model {m:5.0f} W   wall-air {c:5.0f} W   sag {(d or 0) * 100:5.2f} %")
+    last_seconds(log)
     print("\nrCAD can take the log directly too: import_cutlog {cam: 0, path: <this cut log>, apply: false} on gauge-cam.json shows its own fit.")
 
 
