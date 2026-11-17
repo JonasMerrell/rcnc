@@ -27,7 +27,7 @@ Then say so.
 | Travel | X 343, Y 234, Z 150 mm. +Y moves the bed back. |
 | Feeds | Max feed 3000 mm/min, Z rapid 3000. |
 | Tool changes | Manual, ER16. No tool changer yet (the ATC design is in ~/dmc2). |
-| Spindle | VFD, rated 1.5 kW input × 0.78 efficiency ≈ 1.17 kW at the tool, constant torque below its rated 24 000 rpm. Max 24 000 rpm. |
+| Spindle | VFD, 1.5 kW input. **Measured: it pulls out (stalls) at about 645 W of rCAD's model watts at 24 000 rpm** (2026-11-17). Never plan over 550 W; aim at 450–500 W. Constant torque below 24k is assumed, not measured. Max 24 000 rpm. |
 | Coolant | Flood, low pressure. Throws chips poorly out of deep pockets, and thin light chips worst of all **(Jonas)**. |
 | Controller | rcnc (the rCAD post is `rcnc`). Mach3 macros don't apply. |
 | Board | BlueSkyT USB. The probe and the tool setter share input 11, so rcnc refuses M3 with the probe loaded. |
@@ -36,23 +36,37 @@ The rCAD machine block is the `M` dict in a job's `cam.py`:
 
 ```json
 {"name": "DMC2", "model": "DMC2", "travel": [343, 234, 150], "max_feed": 3000, "rapid_z": 3000,
- "tool_changer": false, "spin_up": 4, "spindle_power": 1500, "spindle_efficiency": 0.78, "spindle_rated_rpm": 24000}
+ "tool_changer": false, "spin_up": 4, "spindle_power": 1500, "spindle_efficiency": 0.43, "spindle_rated_rpm": 24000,
+ "spindle_never_exceed": 0.85, "spindle_caution": 0.775}
 ```
 
-Use `"post": "rcnc"` and `"probe": {"z_reference": "Vise"}` with `create_cam`.
+Use `"post": "rcnc"` and `"probe": {"z_reference": "Vise"}` with `create_cam`. With rCAD PR #152, 100% is the
+spindle's pull-out, a cut over 85% (550 W) is a problem and over 77.5% (500 W) a caution (`loads[].power_rating`).
 
-### What the spindle can take
+### What the spindle can take (measured 2026-11-17) **(Jonas)**
 
-These points were measured in 6061 with the 1/4" 3-flute DLC end mill. Calibrate against them:
+The 1/4" 3-flute DLC end mill (T24) at 24 000 rpm, 24 mm stick-out, in 6061. The speed is heard from the
+transducer on the spindle head.
 
-| Cut | Spindle load | Result |
-|---|---|---|
-| 0.6 mm stepover × 12 mm deep, 24 000 rpm, 2500 mm/min | about 56% | fine |
-| 4.65 mm × 3 mm | about 85% | started to bog |
-| Corner, 5 mm wide × 4 mm deep (contour cutting corners) | about 122% | audibly bogged |
+| Cut | MRR cm³/min | Model W | Result |
+|---|---|---|---|
+| 0.6 × 6 at 2400 | 8.6 | 351 | 1.8% sag, steady |
+| 1.0 × 6 at 2400 | 14.4 | 531 | 3.2% sag, steady |
+| 0.6 × 10 at 2500 | 15.0 | about 550 | comfortable (Jonas) |
+| 0.6 × 12 at 2500 | 18.0 | 656 | **on the edge** (Jonas; it was written "comfortable" before, wrongly) |
+| 1.4 × 6 at 2400 | 20.2 | 647 | 7.5% sag and never settled: **pull-out** |
+| **1.8 × 6 at 2400** | 25.9 | 872 | **bogged and broke T24** (stick-out gauge op 1a, 32 tall bar on the 4.7 mm grip) |
 
-From this, keep roughing **at or under about 70%** of the spindle. Jonas wants high-speed-machining style:
-deep and narrow at high feed rather than wide and shallow.
+The planning rules that follow:
+- **Stepover:** about **1 mm or less (≤ 15% of D)** when roughing with the 1/4". Removal comes from depth and
+  feed, not width **(Jonas)**.
+- **Metal removal rate:** aim at **14–15 cm³/min** (about 3% sag). **Never plan over 18**, nor over **550 W**
+  by rCAD; the bulk of a cut sits at 450–500 W.
+- **Beyond a proven cut:** any cut past one that has already run fine needs rcnc's **bog guard** armed. Put
+  `(RCNC REQUIRE_GUARD)` in the program: it holds the feed when the heard speed sags, and Cycle Start refuses
+  without it.
+- **Older points disagree:** the test part's 4.65 × 3 and the phone stand's 1 × 12.5 ran although the model
+  puts them above the measured pull-out. Don't plan on them until that's understood.
 
 ## Tools (all carbide) **(Jonas)**
 
@@ -121,7 +135,7 @@ deep and narrow at high feed rather than wide and shallow.
 - Use **adaptive** (constant engagement) for pockets, around plinths and at corners. Don't let a contour
   plough into corners: that bogged the spindle.
 - Leave **0.3 mm** on walls and **0.2 mm** on floors, more if a re-locate follows (see above).
-- Roughing peak spindle load **≤ ~70%**, by the simulation's `loads[].spindle_power_pct`.
+- Roughing peak spindle power **≤ 550 W (85% of pull-out) and ≤ 18 cm³/min**, bulk 450–500 W. Read it from `loads[].power_w` / `power_rating`.
 - Keep air cutting low (`air[].air_pct`), but not at the cost of overload spikes.
 - rCAD's adaptive still has open bugs: links over "cleared" bands that aren't cleared, and wall bands wider
   than the stepover. Check the worst-load location (`loads[].at`, `width`) every time.
@@ -173,6 +187,7 @@ deep and narrow at high feed rather than wide and shallow.
 - **Say what was only simulated and what was really cut.** Unproven so far: the PR 146 contour seam and
   the finer ball stepover.
 - **Vertical edges:** give outside vertical corners (and slot mouths at an end face) a small radius or chamfer in the CAD so the wall contour breaks them; a chamfer mill can't reach a vertical edge (stick-out gauge, 2026-11-17).
+- **Measure the stock and confirm it with Jonas before any CAM.** Nominal sizes are not measurements: the stick-out gauge was planned for a "1x1" bar, and the bar was 32 × 32. **(Jonas)**
 - **Keep this file current:** when a cut bogs, chatters, packs chips or leaves a mark, add the lesson here.
 
 ## Checks before handing over
