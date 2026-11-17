@@ -60,7 +60,7 @@ S = [{"tool": "open_document", "args": {"path": "gauge.json"}},
 
 # ---- op 1a: Find stock, then the calibration passes (studio 5: the raw bar with a line per pass) ----
 S += [setup("Op 1a calibration", 3, stock={"size": [BAR, BAR_L, BAR], "bottom": 0.0, "material": "6061-T6"})]
-S += [tool(0, 24), tool(0, 99)]
+S += [tool(0, 1), tool(0, 24), tool(0, 99)]   # T1 first in every setup: cam_op's tool takes ids first
 S += [op(0, "probe", "Probe stock top", tool=99, probing={"cycle": "z", "depth": 8, "tolerance": 3.0}),
       op(0, "probe", "Probe stock centre", tool=99, probing={"cycle": "boss", "depth": 8, "tolerance": 3.0})]
 for sid, pid, what, w, d, f, rpm, xc, depth, seam_y in CAL:
@@ -73,10 +73,11 @@ S += [setup("Op 1 top", 3, follows="Op 1a calibration")]
 S += [tool(1, 1), tool(1, 24), tool(1, 11)]
 S += [
     op(1, "face", "Face the top to Z19 (what the calibration left of the band)", tool=24, stepdown=1.0),
-    op(1, "adaptive", "Rough the walls to Z5, the lugs to Z8, the slots and the dish", tool=24, bottom=5.0, stepdown=7.0, stepover=0.1, leave=0.3, leave_floor=0.2, rest=True),
+    op(1, "contour", "Rough the walls to Z5 and the lugs to Z8 (extra passes at 25% of Ø outside the wall)", tool=24, side="outside", bottom=5.0, stepdown=7.0, leave=0.3, finish_lap=0, seam=[-20, 0]),
+    op(1, "clear", "Cut the top slots 6.8 wide to size (1.5 mm levels, slow: a full-width cut)", tool=24, stepdown=1.5, leave=0.0, leave_floor=0.0, rest=True, feed=1000, plunge_feed=250),
+    op(1, "adaptive", "Rough the thumb dish", tool=24, bottom=15.0, stepdown=3.5, stepover=0.1, leave=0.2, leave_floor=0.2, rest=True),
     op(1, "contour", "Finish the walls and end faces Z19 to Z8, one full-height pass (seam mid -X side)", tool=24, side="outside", bottom=8.0, stepdown=12, seam=[-20, 0]),
     op(1, "contour", "Finish the walls Z8 to Z5 (lugs' outsides too)", tool=24, side="outside", top=8.0, bottom=5.0, stepdown=3.5, seam=[-20, 0]),
-    op(1, "clear", "Finish the top slots 6.8 wide (two 3 mm levels, slow: a full-width cut)", tool=24, stepdown=3.0, leave=0.0, leave_floor=0.0, rest=True, feed=1000, plunge_feed=250),
     op(1, "bore", "Two Ø8 bores through the lugs (op 2 finds them)", tool=24, points=[[0, 52], [0, -52]], thread_diameter=8.0, bottom=-0.5),
     op(1, "scallop", "Finish the thumb dish (0.2 stepover = 0.033 D)", tool=11, stepover=0.033, slope_min=3, leave=0.0),
     op(1, "trace", "Engrave the top numbers 0.3 deep", tool=1, sketches=[9], depth=0.3, stepdown=0.3),

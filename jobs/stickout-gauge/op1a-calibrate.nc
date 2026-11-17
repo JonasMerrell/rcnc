@@ -5,7 +5,7 @@
 (retracts use G53 G0 Z0 - home the machine first)
 (T99 YIDOFENG 3D touch probe - touch probe, D2 stylus ball, flute length 12, stickout 40)
 (T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)
-(estimated time 2:54)
+(estimated time 3:00)
 G21 G17 G40 G49 G80 G90 G91.1 G94 G64
 G54
 (RCNC Z_REFERENCE Vise)
@@ -25,120 +25,120 @@ T24 M6
 S24000 M3
 M8
 G0 Z30.4
-X15.275 Y-66
+X15.275 Y-67
 Z27.4
 G1 Z19.4 F330
-Y66 F2400
+Y67 F2400
 G0 Z30.4
 
 (C2 width ladder: 1 x 6 F2400 S24000 - Trace)
-X14.275 Y-66
+X14.275 Y-67
 Z27.4
 G1 Z19.4 F330
-Y66 F2400
+Y67 F2400
 G0 Z30.4
 
 (C3 width ladder: 1.4 x 6 F2400 S24000 - Trace)
-X12.875 Y-66
+X12.875 Y-67
 Z27.4
 G1 Z19.4 F330
-Y66 F2400
+Y67 F2400
 G0 Z30.4
 
 (C4 width ladder: 1.8 x 6 F2400 S24000 - Trace)
-X11.075 Y-66
+X11.075 Y-67
 Z27.4
 G1 Z19.4 F330
-Y66 F2400
+Y67 F2400
 G0 Z30.4
 
 (C5 feed ladder: 1.4 x 6 F1800 S24000 - Trace)
-X9.675 Y-66
+X9.675 Y-67
 Z27.4
 G1 Z19.4 F330
-Y66 F1800
+Y67 F1800
 G0 Z30.4
 
 (C6 feed ladder: 1.4 x 6 F3000 S24000 - Trace)
-X8.275 Y-66
+X8.275 Y-67
 Z27.4
 G1 Z19.4 F330
-Y66 F3000
+Y67 F3000
 G0 Z30.4
 
 (C7 rpm sweep [same chip]: 1 x 6 F1800 S18000 - Trace)
 S18000 M3
-X7.275 Y-66
+X7.275 Y-67
 Z27.4
 G1 Z19.4 F330
-Y66 F1800
+Y67 F1800
 G0 Z30.4
 
 (C8 rpm sweep [same chip]: 1 x 6 F1950 S19500 - Trace)
 S19500 M3
-X6.275 Y-66
+X6.275 Y-67
 Z27.4
 G1 Z19.4 F330
-Y66 F1950
+Y67 F1950
 G0 Z30.4
 
 (C9 rpm sweep [same chip]: 1 x 6 F2100 S21000 - Trace)
 S21000 M3
-X5.275 Y-66
+X5.275 Y-67
 Z27.4
 G1 Z19.4 F330
-Y66 F2100
+Y67 F2100
 G0 Z30.4
 
 (C10 rpm sweep [same chip]: 1 x 6 F2250 S22500 - Trace)
 S22500 M3
-X4.275 Y-66
+X4.275 Y-67
 Z27.4
 G1 Z19.4 F330
-Y66 F2250
+Y67 F2250
 G0 Z30.4
 
 (C11 rpm sweep [same chip]: 1 x 6 F2400 S24000 - Trace)
 S24000 M3
-X3.275 Y-66
+X3.275 Y-67
 Z27.4
 G1 Z19.4 F330
-Y66 F2400
+Y67 F2400
 G0 Z30.4
 
 (C12 repeat of C3 [drift, repeatability]: 1.4 x 6 F2400 S24000 - Trace)
-X1.875 Y-66
+X1.875 Y-67
 Z27.4
 G1 Z19.4 F330
-Y66 F2400
+Y67 F2400
 G0 Z30.4
 
 (C13 depth ladder: 1.4 x 4.5 F2400 S24000 - Trace)
-X0.475 Y-66
+X0.475 Y-67
 Z27.4
 G1 Z20.9 F330
-Y66 F2400
+Y67 F2400
 G0 Z30.4
 
 (C14 depth ladder: 1.4 x 3 F2400 S24000 - Trace)
-X-0.925 Y-66
+X-0.925 Y-67
 Z27.4
 G1 Z22.4 F330
-Y66 F2400
+Y67 F2400
 G0 Z30.4
 
 (C15 side +X, 12 deep: 0.3 x 12 F2400 S24000 - Trace)
-X15.575 Y-66
+X15.575 Y-67
 Z27.4
 G1 Z7.4 F330
-Y66 F2400
+Y67 F2400
 G0 Z30.4
 
 (C16 side +X, 12 deep: Jonas's known 0.6 x 12 at 2500: 0.6 x 12 F2500 S24000 - Trace)
-X14.975 Y-66
+X14.975 Y-67
 Z27.4
 G1 Z7.4 F330
-Y66 F2500
+Y67 F2500
 G0 Z30.4
 
 G53 G0 Z0

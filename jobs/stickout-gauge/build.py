@@ -155,7 +155,7 @@ for pid, what, w, d_, f, rpm, xw, zf in plan.passes:
         continue
     plus = xw > -BAR / 2 + 1e-6      # +X side passes: material on -X, climb runs +Y
     xc = xw + 6.35 / 2 if plus else (xw + w) - 6.35 / 2
-    sid = d.sketch([{"type": "line", "from": [round(xc, 4), -63.0], "to": [round(xc, 4), 63.0]}])
+    sid = d.sketch([{"type": "line", "from": [round(xc, 4), -67.0], "to": [round(xc, 4), 67.0]}])
     CAL.append((sid, pid, what, w, d_, f, rpm, xc, round(BAR - zf, 4), -1000.0 if plus else 1000.0))
 d.S.append({"tool": "set_part", "args": {"body": [2, 0], "name": "Op 1 CAM body", "color": "#c9ced6", "material": "Aluminium 6061"}})
 # 4: the gauge alone in op 1's frame, for op 2 (it follows op 1's stock)

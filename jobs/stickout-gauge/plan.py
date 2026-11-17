@@ -11,7 +11,7 @@ import math
 D, Z_TEETH = 6.35, 3
 KC1, MC = 700.0, 0.25
 P_IN, EFF, RATED = 1500.0, 0.78, 24000.0
-LEN = 126.0
+LEN = 134.0   # y -67 -> +67: the tool's radius + 3.5 past each sawn end (60.35)
 TOP = 25.4
 BAR = 25.4
 
