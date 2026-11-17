@@ -29,7 +29,8 @@ def jaws(w):
 
 
 def op(c, kind, name, **a):
-    a.update({"cam": c, "kind": kind, "name": name})
+    # build: False: don't rebuild the setup's paths (and op 1's whole stock) after every operation; cam_info builds once
+    a.update({"cam": c, "kind": kind, "name": name, "build": False})
     return {"tool": "cam_op", "args": a}
 
 
@@ -53,12 +54,10 @@ S += [
     op(C, "trace", f"Side {'+' if sgn > 0 else '-'}X strip beside the wall, line x {x:+.2f}, z 16 to 12.5 (1 mm under op 1's Z5.5 floor)", tool=24, sketches=[sid], side="both", top=16.0, depth=3.5, stepdown=3.5, seam=[x, 1000.0 * sgn])
     for sid, sgn, x, w in SP["side"]] + [
     op(C, "adaptive", "Rough what is left down to Z5 (0.64 step over)", tool=24, bottom=5.0, stepdown=5.5, stepover=0.1, leave=0.3, leave_floor=0.0, rest=True),
-    op(C, "trace", "Finish the slot walls and the relief stop walls, one full-depth 6 mm pass round their outline", tool=24, sketches=[5], side="inside", top=16.0, depth=6.0, stepdown=6.0, leave=0.0),
+    op(C, "trace", "Finish the slot walls and the relief stop walls, one full-depth 6 mm pass round their outline at F1200 (the relief corners carry more)", tool=24, sketches=[5], side="inside", top=16.0, depth=6.0, stepdown=6.0, leave=0.0, feed=1200),
     op(C, "contour", "Finish the walls and end faces Z16 to Z10.5, one full-height pass (meets op 1's finish; seam mid -X side)", tool=24, side="outside", top=16.0, bottom=10.5, stepdown=7, seam=[-20, 0]),
     op(C, "trace", "Engrave the bottom numbers 0.3 deep", tool=1, sketches=[10], depth=0.3, stepdown=0.3),
     op(C, "chamfer", "Edge break 0.3 on every edge of the bottom face: outline, slots, reliefs", tool=1, chamfer=0.3, side="both", tip_offset=1.0),
-    op(C, "deburr", "Edge break 0.3 on the four vertical corners", tool=1, chamfer=0.3, tip_offset=1.0,
-       edges=[[sx * W / 2, sy * 44.0, 8.0] for sx in (1, -1) for sy in (1, -1)]),
 ]
 S += [{"tool": "cam_info", "args": {"cam": C}},
       {"tool": "simulate_cam", "args": {"cam": C, "path": "op2-bottom-sim.png", "resolution": 900}},
