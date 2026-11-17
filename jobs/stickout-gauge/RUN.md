@@ -20,37 +20,49 @@ the `.air.cutlog.json` naming, and the wait after a spindle speed change.
 
 At each change, use **Tap test** in the tool change window (Settings → Listening on).
 
-## Op 1a: calibration passes (`op1a-calibrate.nc`, about 3:00 plus tool changes)
+## Op 1a v2: calibration passes (`op1a-calibrate-v2.nc`, about 5:30 plus tool changes) — FOR REVIEW
 
-1. Settings → Listening: input on. Check the level during the first air pass: it must not clip.
-2. **Run it once with Air cut on (+25 mm).** This is the no-load baseline of every pass at its own speed
-   and feed. rcnc writes `op1a-calibrate.nc.air.cutlog.json` and `.air.wav`.
-   - Find stock and the tool changes happen for real.
-3. **Air cut off, run it for real.** Writes `op1a-calibrate.nc.cutlog.json` and `.wav`.
+**STOCK 32 × 32 × 120.7** (measured). The first program, `old-do-not-use/op1a-calibrate-v1-…`, broke T24 in its
+C4 (1.8 × 6 at F2400): the spindle stalled.
 
-What the program does:
-- `(RCNC Z_REFERENCE Vise)`, then T99 **Find stock**: `SIZE=25.4,120.7,25.4 DEPTH=8 KEEPZ=1`. It sets G54
-  X/Y; Z stays from the Vise reference (never from the raw top).
-- T24: **16 straight climb passes along Y**, each from y −67 to +67. That's the tool radius plus 3.5 mm past
-  each sawn end, so the plunge and the exit are in air.
-- Passes are named C1–C16 in the program and the cut log. The table is `calibration.md`.
+**Before:**
+- rcnc on the **listen-guard** build. The program has `(RCNC REQUIRE_GUARD)`, so Cycle Start refuses unless
+  Settings → Listening is on, the feed hold is on and the input is live. The status bar must say
+  **"hold armed"**.
+- **A new T24** at stick-out 24. Use Tap test at the change.
+- The wall meter where you can read it.
 
-The rCAD stock simulation of these passes, with rCAD's cutting model:
+**Run:**
+1. Air cut on (+25), once: the no-load baseline. It writes `op1a-calibrate-v2.nc.air.cutlog.json`.
+2. Air cut off, for real.
+   - **Find stock:** jog the probe over the **unstepped** part of the top (x < 10). The +X side has the first
+     run's 4.75 mm step at Z26.
+   - Find stock sets X/Y; Z stays from the Vise reference.
+3. Each pass shows **"Pass N: …"** in the message line, then the spindle runs 3 s in air, then the cut.
+   - Read the meter during the 3 s of air and during the cut, and call out "pass N = W".
+   - Afterwards put them in `wall_watts.json`: `{"air": {"24000": W, "21000": W, …}, "C9": W, …}`.
+4. If the bog guard holds ("FEED HELD: spindle bogging"):
+   - **stop the program** (don't Cycle Start through it);
+   - note the pass. That's the measured limit.
 
-| Passes | Cut | Spindle | Chatter index |
-|---|---|---|---|
-| C1–C4 | width ladder | 35 / 40 / 55 / **75**% | 0.38 / 0.38 / 0.53 / 0.80 |
-| C5, C6 | feed ladder 1800 / 3000 | 45 / 71% | |
-| C7–C11 | rpm sweep 18–24k | 40–45% | 0.34–0.49 |
-| C12 | repeat of C3 | 55% | |
-| C13, C14 | depth 4.5 / 3 | 45 / 28% | |
-| C15, C16 | 12 deep: 0.3, and your 0.6 at 2500 | 38 / 62% | |
+**Passes:** the table is `calibration.md`, with columns for step over, depth, feed, rpm, MRR, model W, proven
+and wall W.
+- Chips stay at the proven 0.033 mm/tooth. Each cut runs twice back to back in the same direction, about 6 s
+  of steady cutting for the meter.
+- Max 472 W by the pull-out model; nothing over 500 W.
+- 1–8: clean the first run's torn C4 end (air except there).
+- 9–10: baseline 0.6 × 6 F2400 (proven, new tool).
+- 11–14: 0.2 and 0.3 × 12.
+- 15–22: rpm sweep, 0.3 × 12 at 21 / 18 / 15 / 12k at the same chip.
+- 23–26: 0.8 × 6 and 0.4 × 12.
+- 27–28: the labelled thin-chip comparison, 0.6 × 12 F1200.
+- 29–32: 1.0 × 6 and 0.45 × 12, guard armed.
 
-- No problems in the sim; chip fill ≤ 0.25.
-- The rcnc simulator runs it to the end: Find stock read the top at Z25.400.
-- The passes only take the top 6 mm band and the 1.2 mm strip outside the +X wall.
+**After:** copy the `.cutlog.json` files (and `.wav`) here and run:
 
-## Op 1: the gauge's top side (`op1-top.nc`, about 24 min plus one chip pause)
+    python3 analyse.py op1a-calibrate-v2.nc.cutlog.json op1a-calibrate-v2.nc.air.cutlog.json predicted.json wall_watts.json
+
+## Op 1: the gauge's top side (NOT YET RE-PLANNED for the 32 mm bar and the pull-out model: do not run) (`op1-top.nc`, about 24 min plus one chip pause)
 
 Run it straight after op 1a, **without unclamping**. It doesn't probe: G54 stays from op 1a. Its stock model
 is what op 1a's passes left.
