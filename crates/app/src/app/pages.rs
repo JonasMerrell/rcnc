@@ -612,6 +612,10 @@ impl App {
                 labelled(ui, "Home pull-off", &mut draft.home_pulloff, 0.1, " mm");
                 labelled(ui, "Slow home speed", &mut draft.home_latch_speed, 0.01, " × seek");
             });
+            ui.add_space(10.0);
+            if let Some(cmd) = home_test_section(ui, &s, &mut self.ht_axis, &mut self.ht_cycles, &mut self.ht_away) {
+                self.machine.send(cmd);
+            }
             ui.add_space(6.0);
             ui.label(
                 RichText::new(format!(
@@ -760,4 +764,66 @@ mod tests {
         assert_eq!(merged.jog_speed, 0.8);
         assert_eq!(merged.probing.fast_feed, 321.0);
     }
+}
+
+/// Homing test: re-home one axis many times and show how far each home
+/// landed from the one before.
+fn home_test_section(
+    ui: &mut egui::Ui,
+    s: &machine::Snapshot,
+    axis: &mut usize,
+    cycles: &mut usize,
+    away: &mut f64,
+) -> Option<Command> {
+    let mut cmd = None;
+    section_title(ui, "Homing test");
+    ui.label(
+        RichText::new(
+            "Homes the axis, moves it away and homes it again. Each re-home shows how far the \
+             switch landed from the last one (switch scatter plus any lost steps); 1 step = 5 µm.",
+        )
+        .size(12.0)
+        .color(MUTED),
+    );
+    let running = s.home_test.as_ref().is_some_and(|t| t.running) && s.mode == Mode::Homing;
+    ui.horizontal_wrapped(|ui| {
+        for (i, _) in s.config.axes.iter().enumerate().filter(|(_, a)| a.enabled && a.home_input.is_some()) {
+            ui.selectable_value(axis, i, AXIS_LETTERS[i].to_string());
+        }
+        ui.label(RichText::new("Re-homes").color(MUTED));
+        ui.add(DragValue::new(cycles).range(1..=200));
+        ui.label(RichText::new("Away").color(MUTED));
+        ui.add(DragValue::new(away).speed(1.0).range(1.0..=400.0).suffix(" mm"));
+        if ui.add_enabled(s.mode == Mode::Idle, Button::new("Run homing test")).clicked() {
+            cmd = Some(Command::HomeTest { axis: *axis, cycles: *cycles, away: *away });
+        }
+    });
+    let Some(t) = &s.home_test else { return cmd };
+    let state = if running {
+        format!("Running: {} of {}", t.shifts.len(), t.cycles)
+    } else if t.running {
+        format!("Stopped after {} of {}", t.shifts.len(), t.cycles)
+    } else {
+        "Finished".to_string()
+    };
+    ui.label(RichText::new(format!("{} axis · {state}", AXIS_LETTERS[t.axis])).strong());
+    if let Some((m, sd, r)) = machine::home_test_stats(&t.shifts) {
+        ui.label(format!(
+            "Shift: mean {:+.1} µm, std dev {:.1} µm, range {:.1} µm",
+            m * 1000.0,
+            sd * 1000.0,
+            r * 1000.0
+        ));
+    }
+    if let Some((m, sd, _)) = machine::home_test_stats(&t.hysteresis) {
+        ui.label(format!("Switch hysteresis: {:.3} mm ± {:.1} µm", m, sd * 1000.0));
+    }
+    if !t.shifts.is_empty() {
+        let list: Vec<String> = t.shifts.iter().map(|d| format!("{:+.0}", d * 1000.0)).collect();
+        ui.label(RichText::new(format!("Each re-home, µm: {}", list.join(" "))).size(12.0).color(MUTED));
+    }
+    if let Some(p) = &t.saved {
+        ui.label(RichText::new(format!("Saved to {p}")).size(12.0).color(MUTED));
+    }
+    cmd
 }

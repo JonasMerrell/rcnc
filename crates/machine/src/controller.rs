@@ -20,8 +20,10 @@ use crate::store::{self, SavedState};
 mod calibrate;
 mod probecal;
 mod findstock;
+mod hometest;
 mod toolchange;
 pub use calibrate::{CalibrateStage, CalibrateView};
+pub use hometest::{stats as home_test_stats, HomeTestView};
 pub use probecal::{ProbeCalShape, ProbeCalStage, ProbeCalTarget, ProbeCalView};
 pub use findstock::{FindStockStage, FindStockView, ProbeRetryView, StockFound, STOCK_REFERENCE};
 pub use toolchange::{ToolChangeStage, ToolChangeView};
@@ -116,6 +118,9 @@ pub enum Command {
     /// Calibrate the Z reference with this index: with the touch probe, or
     /// (`gauge`: its thickness) a measured tool on a gauge block.
     CalibrateZ { reference: usize, gauge: Option<f64> },
+    /// Homing repeatability test: home `axis` `cycles` more times, moving
+    /// `away` mm off the switch in between, and report the scatter.
+    HomeTest { axis: usize, cycles: usize, away: f64 },
     /// Carry on with the calibration: over the surface / on the gauge, or save.
     CalibrateContinue,
     /// Calibrate the touch probe on a known bore, cylinder, pocket, block or Z reference.
@@ -197,6 +202,8 @@ pub struct Snapshot {
     pub probe_runout: Option<[f64; 2]>,
     /// The tool last measured on the setter (it can calibrate the stick-out check).
     pub last_measured_tool: Option<u32>,
+    /// The last homing test, running or finished.
+    pub home_test: Option<HomeTestView>,
     /// The tool in the spindle as far as the controller knows (0: unknown).
     pub loaded_tool: u32,
     /// The loaded tool has been measured on the tool setter since it went in.
@@ -238,6 +245,8 @@ enum HomePhase {
     BackOff,
     /// Away by `home_clearance`; the axis is then at its home position.
     Clear,
+    /// Homing test: away from the switch before homing again.
+    Away,
 }
 
 #[derive(Debug)]
@@ -285,6 +294,11 @@ pub struct Controller {
     exec: Option<Exec>,
     home: VecDeque<usize>,
     home_phase: HomePhase,
+    /// Board position where the slow approach found the switch, and where
+    /// it released, this home.
+    home_latch_at: i64,
+    home_release_at: i64,
+    home_test: Option<HomeTestView>,
     homed: [bool; 6],
     spindle_override: f64,
     board: Option<BoardInfo>,
@@ -324,6 +338,11 @@ pub struct Controller {
     last_probe: Option<String>,
     /// The tool in the spindle has been measured on the setter since it was loaded.
     pub(crate) tool_measured: bool,
+    /// Machine Z of the last setter touch of the tool in the spindle.
+    pub(crate) setter_hit: Option<f64>,
+    /// The Z reference that zeroes each work offset (G54…G59), once a program or Find stock named one: every
+    /// tool measured sets Z in all of them, so one program can cut in two vise stations (G54 and G55).
+    pub(crate) cs_references: [Option<String>; 6],
     /// Mode to go back to when a jog ends (a jog during Find stock).
     jog_return: Option<Mode>,
     /// The top of Z's travel, found by homing Z at its top: nothing may be
@@ -373,6 +392,9 @@ impl Controller {
             exec: None,
             home: VecDeque::new(),
             home_phase: HomePhase::Seek,
+            home_latch_at: 0,
+            home_release_at: 0,
+            home_test: None,
             homed: [false; 6],
             spindle_override: 1.0,
             board: None,
@@ -400,6 +422,8 @@ impl Controller {
             probe_retry: None,
             last_probe: None,
             tool_measured: false,
+            setter_hit: None,
+            cs_references: Default::default(),
             jog_return: None,
             air_cut: None,
             path_blend: None,
@@ -667,7 +691,13 @@ impl Controller {
                 self.jog_continuous = false;
             }
             Command::JogAlive => self.jog_alive = self.clock.now(),
-            Command::Home(axis) => self.start_homing(axis),
+            Command::Home(axis) => {
+                if let Some(t) = &mut self.home_test {
+                    t.running = false;
+                }
+                self.start_homing(axis)
+            }
+            Command::HomeTest { axis, cycles, away } => self.start_home_test(axis, cycles, away),
             Command::Mdi(text) => self.mdi(&text),
             Command::Load { name, text } => {
                 if matches!(self.mode, Mode::Running | Mode::Homing | Mode::Probing) {
@@ -1074,8 +1104,15 @@ impl Controller {
     /// Set the active work offset so machine position `machine` on `axis` reads `work`.
     pub(crate) fn set_work_axis(&mut self, axis: usize, machine: f64, work: f64) {
         let cs = self.interp.state.coord_system;
+        self.set_work_axis_in(cs, axis, machine, work);
+    }
+
+    /// As `set_work_axis`, for work offset `cs` (0 = G54), active or not.
+    pub(crate) fn set_work_axis_in(&mut self, cs: usize, axis: usize, machine: f64, work: f64) {
         let mut coord = self.interp.params.coord_offset(cs);
-        let others = self.interp.program_offset()[axis] - coord[axis];
+        // G92 and the like ride on top of whichever work offset is active
+        let active = self.interp.params.coord_offset(self.interp.state.coord_system);
+        let others = self.interp.program_offset()[axis] - active[axis];
         coord[axis] = machine - work - others;
         self.interp.params.set_coord_offset(cs, coord);
     }
@@ -1084,7 +1121,32 @@ impl Controller {
     /// tool changes (and saved with the settings). Returns the probe settings.
     pub(crate) fn use_z_reference(&mut self, name: &str) -> crate::probing::ProbeSettings {
         self.config.probing.setter.reference = name.to_string();
+        let cs = self.interp.state.coord_system;
+        if cs < 6 {
+            self.cs_references[cs] = Some(name.to_string());
+        }
         self.config.probing.clone()
+    }
+
+    /// The reference a program named for the active work offset, and its setter top.
+    pub(crate) fn offset_reference(&self) -> Option<(Option<String>, f64)> {
+        let name = self.cs_references.get(self.interp.state.coord_system)?.clone()?;
+        let top = self.config.probing.setter.references.iter().find(|r| r.name == name)?.setter_top;
+        Some((Some(name), top))
+    }
+
+    /// After a setter touch at machine Z `hit`: zero Z in every other work offset that has a reference of its
+    /// own (the active one is set by the touch-off itself). Returns the offsets set, as G-numbers.
+    pub(crate) fn zero_other_offsets(&mut self, hit: f64) -> Vec<u32> {
+        let active = self.interp.state.coord_system;
+        let mut set = vec![];
+        for cs in (0..6).filter(|c| *c != active) {
+            let Some(name) = self.cs_references[cs].clone() else { continue };
+            let Some(top) = self.config.probing.setter.references.iter().find(|r| r.name == name).map(|r| r.setter_top) else { continue };
+            self.set_work_axis_in(cs, 2, hit, top);
+            set.push(54 + cs as u32);
+        }
+        set
     }
 
     /// Fill the tool table from the tool list a CAM post writes at the top of
@@ -1372,6 +1434,15 @@ impl Controller {
                 acceleration: a.acceleration * spu,
                 stop_on: None,
             },
+            // At half the axis's top speed, like a rapid across the table.
+            HomePhase::Away => AxisMove {
+                axis,
+                positive: !toward,
+                steps: (self.home_test.as_ref().map_or(0.0, |t| t.away) * spu).round() as u32,
+                velocity: a.max_velocity * 0.5 * self.axis_override() * spu,
+                acceleration: a.acceleration * spu,
+                stop_on: None,
+            },
         };
         if let Err(e) = self.backend.axis_move(&m) {
             self.raise(format!("Homing failed: {e}"));
@@ -1410,6 +1481,7 @@ impl Controller {
                         AXIS_LETTERS[axis]
                     ));
                 }
+                self.home_latch_at = self.status.position[axis];
                 self.home_phase = HomePhase::BackOff;
             }
             HomePhase::BackOff => {
@@ -1419,11 +1491,19 @@ impl Controller {
                         AXIS_LETTERS[axis]
                     ));
                 }
+                self.home_release_at = self.status.position[axis];
                 self.home_phase = HomePhase::Clear;
+            }
+            HomePhase::Away => {
+                self.home_phase = HomePhase::Seek;
             }
             HomePhase::Clear => {
                 let mut steps = self.status.position;
                 steps[axis] = (a.home_position * a.steps_per_unit).round() as i64;
+                // Where the last home would put this one: how far the switch moved.
+                let shift = self.homed[axis]
+                    .then(|| (self.status.position[axis] - steps[axis]) as f64 / a.steps_per_unit);
+                let hysteresis = (self.home_latch_at - self.home_release_at).abs() as f64 / a.steps_per_unit;
                 if let Err(e) = self.backend.set_position(steps) {
                     return self.raise(format!("Homing failed: {e}"));
                 }
@@ -1432,7 +1512,14 @@ impl Controller {
                 if axis == 2 && a.home_positive {
                     self.z_top = Some(a.home_position);
                 }
-                self.info(format!("{} homed", AXIS_LETTERS[axis]));
+                match shift {
+                    Some(d) => self.info(format!("{} homed ({:+.3} mm from the last home)", AXIS_LETTERS[axis], d)),
+                    None => self.info(format!("{} homed", AXIS_LETTERS[axis])),
+                }
+                if self.home_test_record(axis, shift, hysteresis) {
+                    self.home_phase = HomePhase::Away;
+                    return self.home_move();
+                }
                 self.home.pop_front();
                 self.home_phase = HomePhase::Seek;
                 if self.home.is_empty() {
@@ -1974,7 +2061,14 @@ impl Controller {
                 }
                 let name = self.config.probing.setter.references.iter().find(|r| r.name.eq_ignore_ascii_case(&name)).unwrap().name.clone();
                 self.use_z_reference(&name);
-                self.info(format!("Z zero for the tools measured from now on: the {name} reference"));
+                // a tool already measured is zeroed on it now (a second work offset named after the tool change)
+                if let (true, Some(hit)) = (self.tool_measured, self.setter_hit) {
+                    let top = self.config.probing.setter.top();
+                    self.set_work_axis(2, hit, top);
+                    self.info(format!("Z zero for this work offset and the tools measured from now on: the {name} reference"));
+                } else {
+                    self.info(format!("Z zero for the tools measured from now on: the {name} reference"));
+                }
                 Wait::None
             }
             Op::ProbeZ(request) => {
@@ -2161,6 +2255,7 @@ impl Controller {
             probe_cal: self.probe_cal.clone(),
             probe_runout: self.probe_runout,
             last_measured_tool: self.last_setter_hit.map(|h| h.0),
+            home_test: self.home_test.clone(),
             loaded_tool: self.loaded_tool,
             tool_measured: self.tool_measured,
             air_cut: self.air_cut,
@@ -3646,6 +3741,40 @@ mod tests {
     }
 
     #[test]
+    fn homing_test_reports_each_rehome_shift() {
+        let (mut c, clock) = setup();
+        c.handle(Command::Home(Some(0)));
+        run_until_idle(&mut c, &clock, 60.0);
+        // Lose 3 steps: the first re-home must see them.
+        let mut p = c.status.position;
+        p[0] += 3;
+        c.backend.set_position(p).unwrap();
+        c.status.position = p;
+        c.handle(Command::HomeTest { axis: 0, cycles: 4, away: 50.0 });
+        assert_eq!(c.mode(), Mode::Homing);
+        run_until_idle(&mut c, &clock, 240.0);
+        assert_eq!(c.mode(), Mode::Idle, "{:?}", c.snapshot().alarm);
+        let t = c.snapshot().home_test.clone().unwrap();
+        assert!(!t.running);
+        assert_eq!(t.shifts.len(), 4);
+        assert!((t.shifts[0] - 0.015).abs() < 1e-9, "{:?}", t.shifts);
+        assert!(t.shifts[1..].iter().all(|d| d.abs() < 1e-9), "{:?}", t.shifts);
+        assert_eq!(t.hysteresis.len(), 4);
+        assert!((c.snapshot().machine[0] - -8.0).abs() < 1e-9);
+        assert!(c.snapshot().log.iter().any(|l| l.contains("homing test, 4 re-homes")));
+    }
+
+    #[test]
+    fn homing_test_homes_an_unhomed_axis_first() {
+        let (mut c, clock) = setup();
+        c.handle(Command::HomeTest { axis: 1, cycles: 2, away: 30.0 });
+        run_until_idle(&mut c, &clock, 240.0);
+        let t = c.snapshot().home_test.clone().unwrap();
+        assert_eq!(t.shifts.len(), 2, "the first home has nothing to compare with");
+        assert_eq!(t.hysteresis.len(), 3);
+    }
+
+    #[test]
     fn estop_forgets_homing() {
         let (mut c, clock) = setup();
         c.handle(Command::Home(None));
@@ -4586,6 +4715,48 @@ mod tests {
         tick(&mut c, &clock, 400);
         let k = c.snapshot().calibrate.clone().unwrap();
         assert!(close(k.new.unwrap(), -70.05), "{k:?}");
+    }
+
+    /// Two vise stations in one program: G54 zeroed on the vise, G55 on another reference. One measurement
+    /// per tool sets Z in both, and a reference named for G55 after the tool was measured zeroes G55 at once.
+    #[test]
+    fn each_work_offset_keeps_its_z_reference_through_tool_changes() {
+        let clock = Arc::new(ManualClock::default());
+        let config = crate::sim::dmc2_sim_config();
+        let sim = Simulator::new(clock.clone());
+        let mut c = Controller::new(config.clone(), Box::new(sim), clock.clone());
+        c.handle(Command::Connect);
+        c.handle(Command::Reset);
+        c.handle(Command::Home(None));
+        run_until_idle(&mut c, &clock, 600.0);
+        let top = |c: &Controller, name: &str| c.snapshot().config.probing.setter.references.iter().find(|r| r.name == name).unwrap().setter_top;
+        let (vise, table) = (top(&c, "Vise"), top(&c, "Table"));
+        assert!((vise - table).abs() > 1.0, "the two references differ");
+        let mut zs = vec![];
+        for program in ["G54\n(RCNC Z_REFERENCE Vise)\nT24 M6\nG55\n(RCNC Z_REFERENCE Table)\nG54\nM30", "G54\nT1 M6\nM30"] {
+            c.handle(Command::Load { name: "t".into(), text: program.into() });
+            c.handle(Command::CycleStart);
+            for _ in 0..200_000 {
+                clock.advance(0.005);
+                c.update();
+                let s = c.snapshot();
+                if s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading) && c.routine_waiting {
+                    c.handle(Command::ToolChangeContinue { measure: None });
+                }
+                if matches!(s.mode, Mode::Idle | Mode::Alarm) && s.tool_change.is_none() {
+                    break;
+                }
+            }
+            let s = c.snapshot();
+            assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?} {:?}", s.alarm, s.log);
+            zs.push((s.work_offsets[0][2], s.work_offsets[1][2]));
+        }
+        // after T24: G55 was zeroed on the table as soon as it was named
+        assert!(close(zs[0].0 - zs[0].1, table - vise), "{zs:?}");
+        // after T1 (measured with G54 active): both moved by the new tool's length and kept their references
+        assert!(close(zs[1].0 - zs[1].1, table - vise), "{zs:?}");
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Tool touched off") && l.contains("(also G55)")), "{:?}", s.log);
     }
 
     /// The probe (and a gauge block) measure how far the setter's top is above
