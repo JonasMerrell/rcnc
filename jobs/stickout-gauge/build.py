@@ -23,7 +23,7 @@ CH, EB = 0.5, 0.3                  # outer edge chamfer, edge break elsewhere
 TXT_H, TXT_D = 4.0, 0.3            # engraved numbers
 BAR, BAR_L = 32.0, 120.7           # stock: 32 x 32 bar (measured, not the nominal 1"), bandsawn to 120.7
 CARRIER = 3.0                      # stock below the gauge in op 1 (removed in op 2)
-LUG_T, LUG_Y, LUG_BORE = 8.0, 52.0, 8.0   # end lugs: 8 thick in op 1, bore centres at y +-52, Ø8 through
+LUG_T, LUG_Y, LUG_BORE = 8.0, 53.5, 8.0   # end lugs: 8 thick in op 1, bore centres at y +-53.5 (the tool clears the jaw ends at 47.75 by 1.75), Ø8 through
 
 
 class Doc:

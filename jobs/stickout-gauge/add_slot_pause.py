@@ -4,7 +4,7 @@ import sys
 p = sys.argv[1]
 s = open(p).read()
 # op 1: before its wall rough; op 2: before its first lug pass (both straight after the slot rough)
-mark = "(Rough the walls Z8.5 to Z5" if "(Rough the walls Z8.5 to Z5" in s else "(Lug pass 1/"
+mark = "(Rough the walls Z8.5 to Z5.5" if "(Rough the walls Z8.5 to Z5.5" in s else "(Lug pass 1/"
 block = """(CHIP PAUSE: blow the chips out of the slots and their reliefs; delete down to END CHIP PAUSE to skip)
 G53 G0 Z0
 M5

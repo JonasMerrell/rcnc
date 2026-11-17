@@ -70,7 +70,7 @@ and wall W.
 
     python3 analyse.py op1a-calibrate-v2.nc.cutlog.json op1a-calibrate-v2.nc.air.cutlog.json predicted.json wall_watts.json
 
-## Op 1: the gauge's top side (`op1-top.nc`, about 52 min plus one chip pause)
+## Op 1: the gauge's top side (`op1-top.nc`, about 50 min plus one chip pause)
 
 Re-planned for the **32 × 32 bar** and the spindle pull-out model (645 W stall at 24k):
 - every bulk cut is a **straight pass at ≤ 1 mm stepover**;
@@ -93,12 +93,12 @@ Run it straight after op1a v2, **without unclamping**:
 | 7 | T24 | Rough the thumb dish (adaptive, 0.64 stepover, 1 mm levels) | 1 | 7:35 | 299 |
 | 8 | T24 | Rough the slots and reliefs: traced inside, 1 mm levels, F1000, 0.2 left on the walls | 1 | 0:46 | 242 |
 | — | | **CHIP PAUSE**: spindle and coolant stop. Blow the chips out of the two slots and their reliefs, then Cycle Start. | | | |
-| 9 | T24 | Rough the walls z8.5 → 5 beside the jaws (adaptive, 0.64 stepover, 1.2 levels, 0.3 left) | 1 | 10:17 | 205 |
+| 9 | T24 | Rough the walls z8.5 → **5.5** beside the jaws (adaptive, 0.64 stepover, 1.5 levels, 0.3 left) | 1 | 7:14 | 258 |
 | 10 | T24 | **Finish the slot walls and relief stop walls**: one full-depth 6 mm pass at **F1200** (the relief corners carry more) | 1 | 0:15 | 321 |
 | 11 | T24 | **Finish** the walls and end faces z19 → 8, one full-height pass (seam mid −X side) | 1 | 0:47 | 254 |
-| 12 | T24 | Finish the walls z8 → 5 (lugs' outsides too), F1200 | 1 | 0:44 | 270 |
-| 13 | T24 | Two Ø8 bores through the lugs at y ±52 (op 2 finds them) | 1 | 0:28 | 222 |
-| 14 | T11 | Finish the thumb dish: scallop, **0.2 stepover (0.033 D)** | 1 | 8:01 | 4 |
+| 12 | T24 | Finish the walls z8 → **5.5** (lugs' outsides too), F1200 | 1 | 0:43 | 225 |
+| 13 | T24 | Two Ø8 bores through the lugs at **y ±53.5** (op 2 finds them), to Z−0.5 | 1 | 0:28 | 190 |
+| 14 | T11 | Finish the thumb dish: scallop, **0.2 stepover (0.033 D)** | 1 | 8:55 | 5 |
 | 15 | T1 | Engrave the numbers 0.3 deep | 1 | 0:28 | |
 | 16 | T1 | Edge break 0.3 on the two bore mouths | 1 | 0:08 | |
 | 17 | T1 | Edge break 0.3 on every edge of the gauge's top: outline, slots, reliefs, dish rim | 1 | 0:16 | |
@@ -113,13 +113,33 @@ Run it straight after op1a v2, **without unclamping**:
 **Chips:** chip index at most 0.21 on the straight passes. The slot rough is 0.71, so the pause stays after it.
 Bores 0.50.
 
+**Jaw clearance:**
+- The jaws grip the bar's bottom 4.7 (4.13 in the CAD), so nothing in op 1 goes below **Z5.5** within
+  y ±47.75 (the jaws' length) with the tool past x ±12.8. That's checked on the posted G-code.
+- The walls are roughed and finished down to Z5.5 only. Op 2 takes what's left beside them, 1 mm past it.
+- rCAD's fixture clearance is 0.8, so its sim would flag any tool within 0.8 of the jaw tops.
+- **The bores are the only cuts below Z5.5** (to Z−0.5, through the lugs).
+  - They moved to **y ±53.5**: the tool's edge stays at |y| ≥ 49.5, 1.75 past the jaw ends (47.75). At ±52
+    it was 0.25.
+  - Under the lugs there is nothing: they overhang the jaw ends.
+
 Check results:
-- **rCAD simulation:** ok, no problems, peak 432 W (67%).
-  - It flags 792 mm² "unfinished" at the slot/relief convex corner (x +3.6, y −31). The slot finish wraps that
-    corner with an R3.17 arc (`G3 X0.425 Y-32.098 …`), so it's the sim's grid at a sharp corner, as before.
+- **rCAD simulation:** ok, no problems, peak 432 W (67%), 49:52.
 - **rcnc simulator:** op1a v2 then op 1, on the stepped bar (Find stock with the probe at x −2.4), runs to the
-  end in 3108 s. Find stock read 32.000 × 120.700, top Z32. Chip pause and tool changes T99 → T24 → T11 → T1 as
-  planned. The lowest the tool goes is Z0.5 (the bores).
+  end in 3009 s. Find stock read 32.000 × 120.700, top Z32. Chip pause and tool changes T99 → T24 → T11 → T1 as
+  planned.
+
+**"Unfinished" 792 mm²: what it is.** I dumped the cells rCAD counts (part surface with more than 0.1 of stock
+left, seen from above):
+
+| Area | Where | Stock left | What it is |
+|---|---|---|---|
+| 786 mm² | x ±11.5..16, y −44..+44, on part Z3 | 2.5 | The **carrier's top beside the gauge**: the bar from Z3 to Z5.5 stays there on purpose. It's the jaws' grip and not a gauge surface. Op 2's carrier passes and side strips remove it (to op 1's Z6.5). |
+| 5 mm² | the four corners where the lugs meet the side zone, y ±44 | up to 5 | The R3.175 fillet a flat tool leaves in a concave corner on the lug stub (waste). Op 2's lug passes cut it away. |
+| 0.6 mm² | x +3.6, y −31, Z13 | 5.7 | The slot/relief convex corner: grid only. The slot finish wraps it with an R3.17 arc (`G3 X0.425 Y-32.098 …`). |
+
+Every gauge surface op 1 machines is finished by a named step: top (4), slot walls and stops (10), walls and
+end faces Z19 → 8 (11) and Z8 → 5.5 (12), dish (14).
 
 **The slots:**
 - Slots are now **7.2 wide** (the tool cradles in them; 0.2 rough allowance each side).
@@ -141,10 +161,11 @@ Op 2's program also says so before Find bores.
 
 **What op 1 leaves for op 2:**
 - the gauge's top side finished;
-- walls finished down to Z5;
+- walls finished down to Z5.5 (op 2 finishes the rest);
 - end faces finished down to Z8;
 - the 3 mm carrier under the gauge;
-- the end lugs (8 thick) with the two Ø8 bores.
+- the end lugs (8 thick) with the two Ø8 bores at y ±53.5;
+- beside the walls, the bar from Z0 to Z5.5 (the jaws' grip).
 
 ## Op 2: the gauge's bottom side (BEING RE-PLANNED for the 32 mm bar: not posted yet)
 
