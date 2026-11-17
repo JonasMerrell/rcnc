@@ -61,6 +61,9 @@ pub struct Generator {
     position: Axes,
     steps: [i64; 6],
     pub feed_override: f64,
+    /// The adaptive feed (listening: the spindle's sag): a share of the programmed feed, at most 1, on
+    /// feed moves only, on top of `feed_override`.
+    pub adaptive: f64,
     pub rapid_override: f64,
     pub hold: bool,
     /// Path length past which no move can limit the speed now (see `tick`).
@@ -88,6 +91,7 @@ impl Generator {
             position: start,
             steps,
             feed_override: 1.0,
+            adaptive: 1.0,
             rapid_override: 1.0,
             hold: false,
         }
@@ -194,7 +198,7 @@ impl Generator {
         if m.rapid {
             self.rapid_override
         } else {
-            self.feed_override
+            self.feed_override * self.adaptive
         }
     }
 

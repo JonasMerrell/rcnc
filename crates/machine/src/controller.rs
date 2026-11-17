@@ -82,6 +82,8 @@ pub enum Command {
     /// Set the active work offset so this axis reads zero.
     ZeroAxis(usize),
     SetFeedOverride(f64),
+    /// The adaptive feed while a program runs: a share of the programmed feed, 0.3 to 1 (1 = off).
+    SetAdaptiveFeed(f64),
     SetRapidOverride(f64),
     SetSpindleOverride(f64),
     SetJogSpeed(f64),
@@ -173,6 +175,8 @@ pub struct Snapshot {
     pub probe_active: bool,
     pub estop_input: bool,
     pub feed_override: f64,
+    /// The adaptive feed now applied (1 = none).
+    pub adaptive_feed: f64,
     pub rapid_override: f64,
     pub spindle_override: f64,
     pub jog_speed: f64,
@@ -731,6 +735,8 @@ impl Controller {
                     self.hold_axis_move("feed override at 0%");
                 }
             }
+            // only a running program's feed moves: never a jog, a probe or a routine
+            Command::SetAdaptiveFeed(v) => self.generator.adaptive = if self.mode == Mode::Running { v.clamp(0.3, 1.0) } else { 1.0 },
             Command::SetRapidOverride(v) => self.generator.rapid_override = v.clamp(0.0, 1.0),
             Command::SetSpindleOverride(v) => self.spindle_override = v.clamp(0.0, 2.0),
             Command::SetJogSpeed(v) => self.config.jog_speed = v.clamp(0.001, 1.0),
@@ -1706,6 +1712,10 @@ impl Controller {
     /// One controller cycle. Call every few milliseconds.
     pub fn update(&mut self) {
         self.autosave();
+        // the adaptive feed belongs to a running program
+        if self.mode != Mode::Running {
+            self.generator.adaptive = 1.0;
+        }
         if self.mode == Mode::Disconnected {
             return;
         }
@@ -2244,6 +2254,7 @@ impl Controller {
                 .estop
                 .is_some_and(|p| p.is_active(self.status.inputs)),
             feed_override: self.generator.feed_override,
+            adaptive_feed: if self.mode == Mode::Running { self.generator.adaptive } else { 1.0 },
             rapid_override: self.generator.rapid_override,
             spindle_override: self.spindle_override,
             jog_speed: self.config.jog_speed,
@@ -2936,6 +2947,49 @@ mod tests {
         let (dt, dy) = stopped.expect("stopped");
         eprintln!("feed hold: stopped {dt:.3} s and {dy:.2} mm after the command");
         assert!(dt < 0.35 && dy < 12.0, "{dt} {dy}");
+    }
+
+    /// The adaptive feed acts on the segments the controller makes next: the board's queue (240 ms) runs
+    /// out at the old feed first, then the axes slow at their acceleration.
+    #[test]
+    fn the_adaptive_feed_takes_hold_after_the_board_queue() {
+        let (mut c, clock) = setup();
+        c.homed = [true; 6];
+        c.handle(Command::Load { name: "t".into(), text: "G91 G1 Y100 F2400\nM30".into() });
+        c.handle(Command::CycleStart);
+        tick(&mut c, &clock, 200);
+        assert!((c.snapshot().velocity - 2400.0).abs() < 1.0, "{}", c.snapshot().velocity);
+        let t0 = clock.now();
+        c.handle(Command::SetAdaptiveFeed(0.6));
+        assert_eq!(c.snapshot().adaptive_feed, 0.6);
+        // the board's real speed, from where the axes are (over 20 ms: a few 4 ms segments)
+        let (mut starts, mut there) = (None, None);
+        let mut ys = std::collections::VecDeque::from([c.snapshot().machine[1]]);
+        for _ in 0..400 {
+            clock.advance(0.005);
+            c.update();
+            ys.push_back(c.snapshot().machine[1]);
+            if ys.len() > 5 {
+                ys.pop_front();
+            }
+            let v = (ys.back().unwrap() - ys.front().unwrap()) / (0.005 * (ys.len() - 1) as f64) * 60.0;
+            if ys.len() == 5 && v < 2350.0 && starts.is_none() {
+                starts = Some(clock.now() - t0);
+            }
+            if ys.len() == 5 && v <= 1450.0 && there.is_none() {
+                there = Some(clock.now() - t0);
+            }
+        }
+        let (starts, there) = (starts.expect("slows"), there.expect("gets to 60%"));
+        eprintln!("adaptive feed 100% -> 60%: starts slowing {starts:.3} s, at 60% {there:.3} s after the command");
+        assert!(starts > 0.2 && starts < 0.3 && there < 0.4, "{starts} {there}");
+        // and it is gone when the program ends
+        run_until_idle(&mut c, &clock, 30.0);
+        assert_eq!(c.mode(), Mode::Idle);
+        assert_eq!(c.snapshot().adaptive_feed, 1.0);
+        // never outside a program
+        c.handle(Command::SetAdaptiveFeed(0.5));
+        assert_eq!(c.snapshot().adaptive_feed, 1.0);
     }
 
     #[test]
