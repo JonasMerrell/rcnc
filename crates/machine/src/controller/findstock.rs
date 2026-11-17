@@ -324,7 +324,7 @@ impl Controller {
             steps.push(probing::guarded_to(&s, 2, z));
             steps.extend(probing::touch(&s, 0, side > 0.0, 2.0 * fs.clearance));
             steps.push(probing::guarded_to(&s, 2, above));
-            let jaw_work = cx + side * req.size[0] / 2.0;
+            let jaw_work = req.jaw_at.unwrap_or(cx + side * req.size[0] / 2.0);
             steps.push(Step::Then(Box::new(move |c, hits| {
                 let jaw = hits[hits.len() - 1] + side * r + c.ball_offset(0);
                 c.set_work_axis(0, jaw, jaw_work);
@@ -334,7 +334,7 @@ impl Controller {
                     fmt(jaw_work),
                     fmt((face - jaw) * -side)
                 ));
-                Ok(vec![probing::guarded_to(&c.config.probing.clone(), 1, centre[1]), probing::guarded_to(&c.config.probing.clone(), 0, jaw - side * req.size[0] / 2.0)])
+                Ok(vec![probing::guarded_to(&c.config.probing.clone(), 1, centre[1]), probing::guarded_to(&c.config.probing.clone(), 0, jaw + cx - jaw_work)])
             })));
         }
         if req.keep_z {
