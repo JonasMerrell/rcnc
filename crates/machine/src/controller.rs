@@ -2004,6 +2004,11 @@ impl Controller {
                 let was_on = self.outputs.spindle_on;
                 let reversing = was_on && state != Spindle::Off && self.outputs.spindle_ccw != (state == Spindle::Ccw);
                 let rpm = rpm * self.spindle_override;
+                // a new speed while it runs: the VFD ramps to it, so wait the spin-up time scaled by the change
+                // (at least a quarter of it) before cutting at the new speed
+                let speed_change = (rpm - self.outputs.spindle_rpm).abs();
+                let retime = (was_on && state != Spindle::Off && speed_change > 0.01 * rpm.max(1.0))
+                    .then(|| self.config.spindle_spin_up * (speed_change / self.config.spindle_max_rpm.max(1.0)).clamp(0.25, 1.0));
                 self.outputs.spindle_on = state != Spindle::Off;
                 self.outputs.spindle_ccw = state == Spindle::Ccw;
                 self.outputs.spindle_rpm = rpm;
@@ -2014,7 +2019,7 @@ impl Controller {
                     _ if reversing => {
                         Wait::Until(now + self.config.spindle_spin_down + self.config.spindle_spin_up)
                     }
-                    _ => Wait::None,
+                    _ => retime.map(|t| Wait::Until(now + t)).unwrap_or(Wait::None),
                 }
             }
             Op::Coolant { flood, mist } => {
@@ -2873,6 +2878,29 @@ mod tests {
         tick(&mut c, &clock, 5);
         let sent = wire.lock().unwrap().last_poll.unwrap();
         assert!(!sent.enable && !sent.spindle_on, "{sent:?}");
+    }
+
+    /// A new spindle speed while it runs waits for the VFD to get there (the spin-up time scaled by the change).
+    #[test]
+    fn a_speed_change_waits_for_the_spindle() {
+        let start_of_moves = |text: &str| {
+            let (mut c, clock) = setup();
+            c.handle(Command::Load { name: "t".into(), text: text.into() });
+            c.handle(Command::CycleStart);
+            let x0 = c.snapshot().machine[0];
+            for _ in 0..20_000 {
+                clock.advance(0.005);
+                c.update();
+                if (c.snapshot().machine[0] - x0).abs() > 1e-6 {
+                    return (clock.now(), c.config.spindle_spin_up, c.config.spindle_max_rpm);
+                }
+            }
+            panic!("never moved");
+        };
+        let (plain, spin, max) = start_of_moves("M3 S24000\nG91 G1 X1 F600\nM30");
+        let (changed, _, _) = start_of_moves("M3 S24000\nS12000\nG91 G1 X1 F600\nM30");
+        let want = spin * (12000.0 / max).clamp(0.25, 1.0);
+        assert!(spin > 0.0 && (changed - plain - want).abs() < 0.05, "{plain} {changed} {want}");
     }
 
     #[test]

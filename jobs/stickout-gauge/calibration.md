@@ -4,9 +4,6 @@ T24 (1/4" 3-flute DLC carbide, stick-out 24), climb, straight along +Y over the 
 
 | Pass | What | Width ae (mm) | Depth ap (mm) | Feed (mm/min) | rpm | Predicted spindle | Mean cutting force (N) | Mean chip | Steady cut (s) | Where (op 1 frame) |
 |---|---|---|---|---|---|---|---|---|---|---|
-| A0 | air baseline 24k | – | – | 2400 | 24000 | 0 (no load) | – | – | 3.1 | above the stock, z 30.0 |
-| A1 | air baseline 21k | – | – | 2100 | 21000 | 0 (no load) | – | – | 3.6 | above the stock, z 30.0 |
-| A2 | air baseline 18k | – | – | 1800 | 18000 | 0 (no load) | – | – | 4.2 | above the stock, z 30.0 |
 | C1 | width ladder | 0.6 | 6 | 2400 | 24000 | **27%** (318 W) | 40 | 10.1 µm | 3.1 | x +12.10 .. +12.70, z 19.4 |
 | C2 | width ladder | 1 | 6 | 2400 | 24000 | **43%** (499 W) | 63 | 12.9 µm | 3.1 | x +11.10 .. +12.10, z 19.4 |
 | C3 | width ladder | 1.4 | 6 | 2400 | 24000 | **57%** (672 W) | 84 | 15.0 µm | 3.1 | x +9.70 .. +11.10, z 19.4 |
@@ -21,8 +18,7 @@ T24 (1/4" 3-flute DLC carbide, stick-out 24), climb, straight along +Y over the 
 | C12 | repeat of C3 (drift, repeatability) | 1.4 | 6 | 2400 | 24000 | **57%** (672 W) | 84 | 15.0 µm | 3.1 | x -1.30 .. +0.10, z 19.4 |
 | C13 | depth ladder | 1.4 | 4.5 | 2400 | 24000 | **43%** (504 W) | 63 | 15.0 µm | 3.1 | x -2.70 .. -1.30, z 20.9 |
 | C14 | depth ladder | 1.4 | 3 | 2400 | 24000 | **29%** (336 W) | 42 | 15.0 µm | 3.1 | x -4.10 .. -2.70, z 22.4 |
-| C15 | side +X, deep | 0.3 | 12 | 2400 | 24000 | **30%** (346 W) | 43 | 7.2 µm | 3.1 | x +12.40 .. +12.70, z 7.0 |
-| C16 | side +X, deep: Jonas's known 0.6 x 12 at 2500 | 0.6 | 12 | 2500 | 24000 | **56%** (656 W) | 82 | 10.5 µm | 3.0 | x +11.80 .. +12.40, z 7.0 |
-| C17 | side -X, deep: the 0.6 x 12 again, at 2400 (climb along -Y) | 0.6 | 12 | 2400 | 24000 | **54%** (636 W) | 80 | 10.1 µm | 3.1 | x -12.70 .. -12.10, z 7.0 |
+| C15 | side +X, 12 deep | 0.3 | 12 | 2400 | 24000 | **30%** (346 W) | 43 | 7.2 µm | 3.1 | x +12.40 .. +12.70, z 7.4 |
+| C16 | side +X, 12 deep: Jonas's known 0.6 x 12 at 2500 | 0.6 | 12 | 2500 | 24000 | **56%** (656 W) | 82 | 10.5 µm | 3.0 | x +11.80 .. +12.40, z 7.4 |
 
-Total steady cutting about 1.1 min (plus rapids back, about the same again).
+Total steady cutting about 0.9 min (plus rapids back, about the same again).

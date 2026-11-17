@@ -31,8 +31,8 @@ def predict(w, d, f, rpm):
 passes = []   # (id, what, w, d, f, rpm, x_wall_after, z_floor) ; x of the new wall (the pass's -X edge)
 x = BAR / 2
 air_z = TOP + 4.6
-for rpm, f in ((24000, 2400), (21000, 2100), (18000, 1800)):
-    passes.append(("A%d" % len(passes), f"air baseline {rpm // 1000}k", 0.0, 0.0, f, rpm, None, air_z))
+# no air passes: running the program once with rcnc's Air cut on (+25) gives every pass's baseline at its own
+# speed and feed (logged to <program>.air.cutlog.json)
 n = 0
 
 
@@ -56,13 +56,12 @@ for d in (4.5, 3.0):
     cut("depth ladder", 1.4, d, 2400, 24000)
 band_wall = x
 # then the facing takes the rest of the band (x -12.7 .. band_wall and what the depth ladder left) to z 19
-# side strips outside the gauge's walls (x +-11.5 .. +-12.7, below z 19), 12 deep (z 19 -> 7), after the facing;
-# 0.3 of each strip is left for the wall's finishing passes
+# the side strip outside the gauge's +X wall (x 11.5 .. 12.7): the width ladder took it down to z 19.4, these
+# take it 12 deeper (z 7.4); 0.3 is left for the wall's finishing passes. (Not on -X: the band there is still
+# full height until op 1 faces it, so a 12-deep pass would really be 18.)
 x = BAR / 2
-for w, f, what in ((0.3, 2400, "side +X, deep"), (0.6, 2500, "side +X, deep: Jonas's known 0.6 x 12 at 2500")):
-    cut(what, w, 12.0, f, 24000, floor=19.0 - 12.0)
-n += 1
-passes.append((f"C{n}", "side -X, deep: the 0.6 x 12 again, at 2400 (climb along -Y)", 0.6, 12.0, 2400, 24000, -BAR / 2, 19.0 - 12.0))
+for w, f, what in ((0.3, 2400, "side +X, 12 deep"), (0.6, 2500, "side +X, 12 deep: Jonas's known 0.6 x 12 at 2500")):
+    cut(what, w, 12.0, f, 24000, floor=19.4 - 12.0)
 
 rows = []
 total = 0.0
@@ -113,8 +112,6 @@ for pid, what, w, d, f, rpm, xw, zf in passes:
     ax.text(xw + w / 2, zf + d / 2, pid, ha="center", va="center", fontsize=6.5, rotation=90, color="w" if m["pct"] < 50 else "k")
 ax.add_patch(Rectangle((-BAR / 2, 19), band_wall + BAR / 2, 6.4, fc="none", ec="#c33", lw=1, ls="--"))
 ax.text((band_wall - BAR / 2) / 2, 22.2, "faced off\n(adaptive / face)", ha="center", fontsize=8, color="#c33")
-ax.annotate("air baselines A0-A2: z 30, 24k / 21k / 18k", (0, 30), ha="center", fontsize=9)
-ax.axhline(30, color="#6a6", ls=":", lw=1)
 ax.set_xlim(-16, 17)
 ax.set_ylim(-1, 32)
 ax.set_aspect("equal")

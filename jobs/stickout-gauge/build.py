@@ -20,7 +20,7 @@ SLOTS = [("top", 1, 5, 24), ("top", 1, -5, 22), ("top", -1, 5, 21), ("top", -1, 
 DISH_D, DISH_H = 16.0, 3.5         # thumb dish, spherical, top face middle
 CH, EB = 0.5, 0.3                  # outer edge chamfer, edge break elsewhere
 TXT_H, TXT_D = 4.0, 0.3            # engraved numbers
-BAR, BAR_L = 25.4, 120.0           # stock: 1" square bar, bandsawn to 120 (+-1)
+BAR, BAR_L = 25.4, 120.7           # stock: 1" square bar, bandsawn to 120.7 (measured)
 CARRIER = 3.0                      # stock below the gauge in op 1 (removed in op 2)
 LUG_T, LUG_Y, LUG_BORE = 8.0, 52.0, 8.0   # end lugs: 8 thick in op 1, bore centres at y +-52, Ø8 through
 
@@ -134,6 +134,36 @@ sk = d.sketch([{"type": "polygon", "center": [5, z_ax], "radius": 14, "sides": 8
 nut = d.feat("extrude", {"profiles": [{"sketch": sk}], "depth": 17.5, "op": "new"}, "ER16 nut (28 across)")
 d.feat("transform", {"bodies": [{"kind": "body", "body": [nut, 0]}], "mode": "translate", "direction": {"kind": "axis", "axis": 1}, "distance": "-44"}, "Nut face on the gauge's end face")
 d.S.append({"tool": "describe", "args": {}})
+d.S.append({"tool": "save_document", "args": {"path": "/home/jonas/dmc2/gauge/gauge.json"}})
+# 3: op 1's CAM body, in op 1's frame: the gauge 3 up, the carrier slab under it the bar's full length and width,
+# the end lugs 8 tall with their bores (sketch 9: top numbers, 10: bottom numbers, as in studio 0)
+d.studio("Op 1 CAM body")
+gauge(d)
+d.feat("transform", {"bodies": [{"kind": "body", "body": [2, 0]}], "mode": "translate", "direction": {"kind": "axis", "axis": 2}, "distance": str(CARRIER)}, "Gauge 3 up (the carrier under it)")
+sk = d.sketch([rect(-BAR / 2, -BAR_L / 2, BAR / 2, BAR_L / 2)])
+d.extrude(sk, CARRIER, "add", "Carrier slab, the bar's whole length (op 2 faces it off)")
+sk = d.sketch([rect(-BAR / 2, L / 2, BAR / 2, BAR_L / 2), rect(-BAR / 2, -BAR_L / 2, BAR / 2, -L / 2)])
+d.extrude(sk, LUG_T, "add", "End lugs 8 tall")
+sk = d.sketch([{"type": "circle", "center": [0, s_ * LUG_Y], "radius": LUG_BORE / 2} for s_ in (1, -1)])
+d.extrude(sk, LUG_T + 1, "remove", "Ø8 through bores in the lugs")
+import contextlib, io
+with contextlib.redirect_stdout(io.StringIO()):
+    import plan
+CAL = []   # (sketch id, pass id, what, w, d, f, rpm, centre x, depth below 25.4, seam y): a line per calibration pass
+for pid, what, w, d_, f, rpm, xw, zf in plan.passes:
+    if w == 0:
+        continue
+    plus = xw > -BAR / 2 + 1e-6      # +X side passes: material on -X, climb runs +Y
+    xc = xw + 6.35 / 2 if plus else (xw + w) - 6.35 / 2
+    sid = d.sketch([{"type": "line", "from": [round(xc, 4), -63.0], "to": [round(xc, 4), 63.0]}])
+    CAL.append((sid, pid, what, w, d_, f, rpm, xc, round(BAR - zf, 4), -1000.0 if plus else 1000.0))
+d.S.append({"tool": "set_part", "args": {"body": [2, 0], "name": "Op 1 CAM body", "color": "#c9ced6", "material": "Aluminium 6061"}})
+# 4: the gauge alone in op 1's frame, for op 2 (it follows op 1's stock)
+d.studio("Op 2 CAM body")
+gauge(d)
+d.feat("transform", {"bodies": [{"kind": "body", "body": [2, 0]}], "mode": "translate", "direction": {"kind": "axis", "axis": 2}, "distance": str(CARRIER)}, "Gauge 3 up")
+d.S.append({"tool": "set_part", "args": {"body": [2, 0], "name": "Stick-out gauge", "color": "#c9ced6", "material": "Aluminium 6061"}})
+json.dump(CAL, open("/home/jonas/dmc2/gauge/cal_passes.json", "w"), indent=1)
 d.S.append({"tool": "save_document", "args": {"path": "/home/jonas/dmc2/gauge/gauge.json"}})
 R = lambda view, path, w=1400, h=1000: {"tool": "render", "args": {"view": view, "path": path, "width": w, "height": h, "sketches": "unused"}}
 SW_ = lambda i: {"tool": "switch_part_studio", "args": {"index": i}}
