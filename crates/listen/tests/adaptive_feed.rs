@@ -51,11 +51,17 @@ struct Run {
     stalled_at: Option<f64>,
     held_at: Option<f64>,
     lowest_feed: f64,
+    peak_load: f64,
 }
 
 /// A pass of `secs` s at `p100` W (at the programmed feed), from air: with the limiter (`settings`) or without
 /// (None), the bog guard behind it as now. The queue delay and the gains can be scaled for the stability runs.
 fn run(p100: f64, secs: f64, settings: Option<LimiterSettings>, queue: f64, guard_stops: bool) -> Run {
+    run_from_air(0.0, p100, secs, settings, queue, guard_stops)
+}
+
+/// As `run`, with `air` s of moving in air (no load) before the tool meets the work.
+fn run_from_air(air: f64, p100: f64, secs: f64, settings: Option<LimiterSettings>, queue: f64, guard_stops: bool) -> Run {
     let mut sp = Spindle { lag: 0.0, behind: 0.0 };
     let mut lim = settings.map(Limiter::new);
     let mut guard = Guard::new(GuardSettings::default());
@@ -63,11 +69,16 @@ fn run(p100: f64, secs: f64, settings: Option<LimiterSettings>, queue: f64, guar
     // the guard learns the no-load sag first (2 s settle after the spindle starts, then air)
     let ctx = |cutting| Context { rpm: 24_000.0, teeth: 3, cutting, ..Default::default() };
     for k in 0..40 {
-        guard.update(k as f64 * HOP, &Frame { ctx: ctx(false), droop: Some(AIR), ..Default::default() });
+        let f = Frame { ctx: ctx(false), droop: Some(AIR), tooth_db: Some(-64.0), ..Default::default() };
+        guard.update(k as f64 * HOP, &f);
+        if let Some(l) = lim.as_mut() {
+            l.update(k as f64 * HOP, &f, guard.excess(&f));
+        }
     }
     let t0 = 40.0 * HOP;
     let mut asked: Vec<(f64, f64)> = vec![(0.0, 1.0)];
     let mut sag_hist: Vec<(f64, f64)> = vec![];
+    let mut load_hist: Vec<(f64, f64)> = vec![];
     let (mut next_frame, mut next_poll, mut pending) = (WINDOW, POLL, vec![]);
     let mut t = 0.0;
     let mut heard = 0.0;
@@ -75,11 +86,13 @@ fn run(p100: f64, secs: f64, settings: Option<LimiterSettings>, queue: f64, guar
         t += DT;
         // the feed at the cut: what was asked `queue` s ago
         let feed_now = asked.iter().rev().find(|(ta, _)| *ta <= t - queue).map(|a| a.1).unwrap_or(1.0);
-        let p = p100 * feed_now.powf(0.75);
+        let p = if t < air { 0.0 } else { p100 * feed_now.powf(0.75) };
+        r.peak_load = r.peak_load.max(p);
         let stopped = r.stalled_at.is_some() || (guard_stops && r.held_at.is_some());
         let cut = if stopped { 0.0 } else { sp.step(p) };
         let e = cut;
         sag_hist.push((t, e));
+        load_hist.push((t, p));
         r.peak = r.peak.max(e);
         if cut > 0.15 && r.stalled_at.is_none() {
             r.stalled_at = Some(t);
@@ -87,13 +100,17 @@ fn run(p100: f64, secs: f64, settings: Option<LimiterSettings>, queue: f64, guar
         if t >= next_frame {
             let m: Vec<f64> = sag_hist.iter().filter(|(ts, _)| *ts > t - WINDOW).map(|x| x.1).collect();
             let mean = m.iter().sum::<f64>() / m.len() as f64;
-            pending.push((t, mean));
+            // the teeth's beat: quiet in air, louder with the load (C1 about -50 dB)
+            let lm: Vec<f64> = load_hist.iter().filter(|(ts, _)| *ts > t - WINDOW).map(|x| x.1).collect();
+            let load = lm.iter().sum::<f64>() / lm.len().max(1) as f64;
+            let tooth = if load > 1.0 { -50.0 + 25.0 * (load / 318.0).log10() } else { -78.0 };
+            pending.push((t, mean, tooth));
             heard = mean;
             next_frame += HOP;
         }
         if t >= next_poll {
-            for (tf, mean) in pending.drain(..) {
-                let f = Frame { ctx: ctx(true), droop: Some(AIR + mean), ..Default::default() };
+            for (tf, mean, tooth) in pending.drain(..) {
+                let f = Frame { ctx: ctx(true), droop: Some(AIR + mean), tooth_db: Some(tooth), ..Default::default() };
                 if r.held_at.is_none() && guard.update(t0 + tf, &f).is_some() {
                     r.held_at = Some(t);
                 }
@@ -188,4 +205,27 @@ fn it_is_stable_across_loads_and_slower_reactions() {
             }
         }
     }
+}
+
+/// Stage 2: a 430 W pass (the gauge's bulk) entered from 2 s of air with MAX=120: the feed is up at 120% in the
+/// air, enters the work at it for the reaction time, and is back to the programmed feed (or under) at the cut
+/// about 0.4 s in; the sag stays under the guard's 6% and the load at entry under 500 W.
+#[test]
+fn in_air_it_speeds_up_and_enters_the_cut_safely() {
+    let s = LimiterSettings { max: 1.2, ..Default::default() };
+    let r = run_from_air(2.0, 430.0, 5.0, Some(s), QUEUE, true);
+    let feed_at = |t: f64| r.trace.iter().find(|x| x.0 >= t).unwrap().3;
+    let back = r.trace.iter().find(|x| x.0 >= 2.0 && x.3 <= 1.0 + 1e-9).map(|x| x.0 - 2.0).unwrap();
+    eprintln!(
+        "air then a 430 W pass, MAX=120: feed in air {:.0}% (at 1.9 s), at the cut back to 100% {back:.2} s after the tool meets the work; peak load {:.0} W, peak sag {:.1}%, guard hold {:?}",
+        feed_at(1.9) * 100.0,
+        r.peak_load,
+        r.peak * 100.0,
+        r.held_at
+    );
+    assert!(feed_at(1.9) > 1.15, "{}", feed_at(1.9));
+    assert!(back < 0.5, "{back}");
+    assert!(r.peak_load < 500.0 && r.peak < 0.06 && r.held_at.is_none(), "{} {} {:?}", r.peak_load, r.peak, r.held_at);
+    // the cut itself at the programmed feed
+    assert!((feed_at(4.5) - 1.0).abs() < 1e-9, "{}", feed_at(4.5));
 }

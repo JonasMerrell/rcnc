@@ -300,11 +300,18 @@ impl Ears {
             ui.label(RichText::new("FEED HELD: spindle bogging").size(13.0).color(RED).strong()).on_hover_text(why);
         }
         if let Some(set) = self.adaptive.1 {
-            let (t, c) = if self.adaptive_sent < 0.995 { (format!("feed {:.0}% (adaptive)", self.adaptive_sent * 100.0), AMBER) } else { ("adaptive feed".to_string(), MUTED) };
+            let (t, c) = if self.adaptive_sent < 0.995 {
+                (format!("feed {:.0}% (adaptive)", self.adaptive_sent * 100.0), AMBER)
+            } else if self.adaptive_sent > 1.005 {
+                (format!("feed {:.0}% (air)", self.adaptive_sent * 100.0), GREEN)
+            } else {
+                ("adaptive feed".to_string(), MUTED)
+            };
             ui.label(RichText::new(t).size(12.0).color(c)).on_hover_text(format!(
-                "The program asked for the adaptive feed: it lowers the feed (to {:.0}% at the least, never over the programmed feed) to keep the spindle's sag near {:.1}% over its no-load sag",
+                "The program asked for the adaptive feed: it lowers the feed (to {:.0}% at the least) to keep the spindle's sag near {:.1}% over its no-load sag; in air it goes up to {:.0}%",
                 set.min * 100.0,
-                set.target * 100.0
+                set.target * 100.0,
+                set.max * 100.0
             ));
         }
         let (gtext, gcolor) = match self.guard_ready() {
@@ -437,8 +444,9 @@ pub fn requires_guard(program: &str) -> bool {
     program.lines().any(|l| l.trim().to_ascii_uppercase().starts_with("(RCNC REQUIRE_GUARD"))
 }
 
-/// A program turns the adaptive feed on with `(RCNC ADAPTIVE_FEED TARGET=2 MIN=60)` (sag over no-load, %; the
-/// lowest feed, % of the programmed; both optional, else the Settings page's), and off and on again for
+/// A program turns the adaptive feed on with `(RCNC ADAPTIVE_FEED TARGET=3 MIN=60 MAX=120)` (sag over no-load,
+/// %; the lowest feed and, in air, the highest, % of the programmed; all optional, else the Settings page's;
+/// MAX defaults to 100: no speed-up), and off and on again for
 /// operations with `(RCNC ADAPTIVE_FEED OFF)` / `(RCNC ADAPTIVE_FEED ON)`: on from its first such line. Its
 /// settings (None: not asked for) and, per line, whether it's on there.
 pub fn adaptive_lines(program: &str, base: LimiterSettings) -> (Option<LimiterSettings>, Vec<bool>) {
@@ -463,6 +471,10 @@ pub fn adaptive_lines(program: &str, base: LimiterSettings) -> (Option<LimiterSe
                         }
                         if let Some(v) = num("MIN=") {
                             s.min = (v / 100.0).clamp(0.3, 1.0);
+                        }
+                        // speeding up in air: off unless asked, at most 150%
+                        if let Some(v) = num("MAX=") {
+                            s.max = (v / 100.0).clamp(1.0, 1.5);
                         }
                     }
                 }
@@ -489,8 +501,10 @@ mod tests {
         assert_eq!(on, vec![false, true, true, false, false, true, true]);
         assert_eq!(super::adaptive_lines("G21\nG1 X1\nM30", base), (None, vec![false, false, false]));
         // nonsense is held to sane bounds
-        let (set, _) = super::adaptive_lines("(RCNC ADAPTIVE_FEED TARGET=40 MIN=5)", base);
-        assert_eq!((set.unwrap().target, set.unwrap().min), (0.05, 0.3));
+        let (set, _) = super::adaptive_lines("(RCNC ADAPTIVE_FEED TARGET=40 MIN=5 MAX=300)", base);
+        assert_eq!((set.unwrap().target, set.unwrap().min, set.unwrap().max), (0.05, 0.3, 1.5));
+        // no MAX: no speed-up in air
+        assert_eq!(super::adaptive_lines("(RCNC ADAPTIVE_FEED)", base).0.unwrap().max, 1.0);
     }
 
     #[test]

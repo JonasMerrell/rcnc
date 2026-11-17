@@ -82,7 +82,8 @@ pub enum Command {
     /// Set the active work offset so this axis reads zero.
     ZeroAxis(usize),
     SetFeedOverride(f64),
-    /// The adaptive feed while a program runs: a share of the programmed feed, 0.3 to 1 (1 = off).
+    /// The adaptive feed while a program runs: a share of the programmed feed, 0.3 to 2 (1 = off; over 1 only
+    /// in air, never on a move going down).
     SetAdaptiveFeed(f64),
     SetRapidOverride(f64),
     SetSpindleOverride(f64),
@@ -736,7 +737,7 @@ impl Controller {
                 }
             }
             // only a running program's feed moves: never a jog, a probe or a routine
-            Command::SetAdaptiveFeed(v) => self.generator.adaptive = if self.mode == Mode::Running { v.clamp(0.3, 1.0) } else { 1.0 },
+            Command::SetAdaptiveFeed(v) => self.generator.adaptive = if self.mode == Mode::Running { v.clamp(0.3, 2.0) } else { 1.0 },
             Command::SetRapidOverride(v) => self.generator.rapid_override = v.clamp(0.0, 1.0),
             Command::SetSpindleOverride(v) => self.spindle_override = v.clamp(0.0, 2.0),
             Command::SetJogSpeed(v) => self.config.jog_speed = v.clamp(0.001, 1.0),
@@ -2990,6 +2991,33 @@ mod tests {
         // never outside a program
         c.handle(Command::SetAdaptiveFeed(0.5));
         assert_eq!(c.snapshot().adaptive_feed, 1.0);
+    }
+
+    /// Over 100% (in air) on moves along the work, never on a move going down.
+    #[test]
+    fn the_adaptive_feed_never_speeds_up_a_plunge() {
+        let (mut c, clock) = setup();
+        c.homed = [true; 6];
+        c.handle(Command::Load { name: "t".into(), text: "G91 G1 Y40 F1200\nG1 Z-20 F600\nM30".into() });
+        c.handle(Command::CycleStart);
+        tick(&mut c, &clock, 20);
+        c.handle(Command::SetAdaptiveFeed(1.3));
+        // the board's speed over 40 ms (positions come back a few segments at a time)
+        let (mut fastest_y, mut fastest_z) = (0.0f64, 0.0f64);
+        let mut ms = std::collections::VecDeque::from([c.snapshot().machine]);
+        for _ in 0..2000 {
+            clock.advance(0.005);
+            c.update();
+            ms.push_back(c.snapshot().machine);
+            if ms.len() > 9 {
+                ms.pop_front();
+                let (a, b) = (ms.front().unwrap(), ms.back().unwrap());
+                fastest_y = fastest_y.max((b[1] - a[1]).abs() / 0.04 * 60.0);
+                fastest_z = fastest_z.max((b[2] - a[2]).abs() / 0.04 * 60.0);
+            }
+        }
+        assert!(fastest_y > 1500.0 && fastest_y < 1600.0, "Y {fastest_y}");
+        assert!(fastest_z < 610.0, "Z {fastest_z}");
     }
 
     #[test]
