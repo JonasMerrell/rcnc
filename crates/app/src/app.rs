@@ -83,6 +83,10 @@ pub struct App {
     air_lift: f64,
     /// Gauge block thickness for calibrating a Z reference without the probe, mm.
     cal_gauge: f64,
+    /// Homing test: axis, re-homes, distance away between homes (mm).
+    ht_axis: usize,
+    ht_cycles: usize,
+    ht_away: f64,
     /// The tool change window's photo: tool, its image setting, the file found.
     tc_photo: Option<(u32, String, Option<std::path::PathBuf>)>,
     view: View,
@@ -138,6 +142,9 @@ impl App {
             fs_size: [39.0, 20.0, 77.0],
             air_lift: 25.0,
             cal_gauge: 10.0,
+            ht_axis: 0,
+            ht_cycles: 20,
+            ht_away: 100.0,
             tc_photo: None,
             view: View::Toolpath,
             sheets,
