@@ -1,6 +1,7 @@
 (Op 2 bottom - made by rCAD)
 (STOCK 32 x 32 x 120.7 - 6061 bar as measured 2026-11-17, after op1a v2-v7 [the ladders]; NOT for a fresh bar)
 (RCNC REQUIRE_GUARD: the bog guard [Settings -> Listening, feed hold on] must be armed: rcnc refuses Cycle Start without it)
+(SIM OK: 0 problems in rCAD's stock simulation of these toolpaths, hash 20a8d53edb0f63d7)
 (work zero: part bottom, stock centre [on the vise])
 (carries on from Op 1 top: clamp the part it left with its bottom side up)
 (fixture fixed jaw [centre block, -X]: X-24.2 to -11.5, Y-47.75 to 47.75, Z0 to 4.7 [work])
