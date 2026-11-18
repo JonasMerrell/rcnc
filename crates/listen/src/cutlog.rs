@@ -61,7 +61,7 @@ pub struct Moment {
     /// Work X, Y, Z and the real speed along the path, mm/min.
     pub pos: [f64; 3],
     pub velocity: f64,
-    /// Programmed and heard spindle speed, droop (share).
+    /// Programmed and heard spindle speed, droop under the programmed speed (share).
     pub rpm: f64,
     pub heard_rpm: Option<f64>,
     pub droop: Option<f64>,
@@ -72,6 +72,10 @@ pub struct Moment {
     /// The adaptive feed asked for after this window, share of the programmed feed (None: not in use).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adaptive_feed: Option<f64>,
+    /// The sag the bog guard judges: under the no-load speed it learned at this speed (`droop` is under the
+    /// programmed speed, so it also carries the VFD's own no-load slip, about 1.2% at 24k on the DMC2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub over_no_load: Option<f64>,
 }
 
 /// One program line: what it asked for and what was heard while it ran.
@@ -124,6 +128,7 @@ impl CutLog {
             tooth_db: f.tooth_db,
             chatter: f.chatter,
             adaptive_feed: None,
+            over_no_load: None,
         });
         self.add(f);
     }

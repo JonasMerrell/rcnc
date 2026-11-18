@@ -170,9 +170,12 @@ impl Ears {
             self.limiter = Limiter::new(set.unwrap_or(self.settings.limiter));
         }
         let mut asked = vec![None; n];
+        let mut over = vec![None; n];
         for (i, f) in frames.iter().enumerate() {
             let t = gt - (n - 1 - i) as f64 * step;
-            if let Some(why) = self.guard.update(t, f) {
+            let held = self.guard.update(t, f);
+            over[i] = self.guard.excess(f);
+            if let Some(why) = held {
                 if matches!(s.mode, Mode::Running) && !s.hold {
                     machine.send(Command::FeedHold);
                     machine.send(Command::Note(why.clone()));
@@ -214,6 +217,7 @@ impl Ears {
                 log.add_at(now - (n - 1 - i) as f64 * step, f);
                 if let Some(m) = log.timeline.last_mut() {
                     m.adaptive_feed = asked[i];
+                    m.over_no_load = over[i];
                 }
             }
         }

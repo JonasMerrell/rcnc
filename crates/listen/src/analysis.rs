@@ -39,6 +39,10 @@ pub struct Frame {
     /// Level of the teeth's beat (the tooth-passing frequency at the heard speed), dB on the spectrum's scale:
     /// in a cut it rises with the load, so it's a cleaner load measure than the whole window's level.
     pub tooth_db: Option<f64>,
+    /// With the spindle on and the machine standing: the speed under the programmed speed measured over the
+    /// last 0.68 s (a longer window than `droop`'s, sharp enough to tell the rotation's comb from the machine's
+    /// fixed lines in air). The no-load reference the bog guard learns.
+    pub air_droop: Option<f64>,
 }
 
 pub struct Analyzer {
@@ -53,6 +57,15 @@ pub struct Analyzer {
     /// and loudest level, dB. A pickup on the spindle head hears its bearings, the VFD's carrier and the
     /// motor's slot lines too; in a cut a peak there is chatter only if it stands well over its air level.
     air: std::collections::HashMap<i64, Vec<(f64, f64)>>,
+    /// The long window for the no-load speed: its FFT and taper, the samples heard standing at `air_rpm`, how
+    /// many came in since the last estimate, and that estimate.
+    long_n: usize,
+    long_fft: Arc<dyn Fft<f32>>,
+    long_window: Vec<f32>,
+    air_buf: Vec<f32>,
+    air_rpm: f64,
+    air_new: usize,
+    air_droop: Option<f64>,
 }
 
 /// In a cut, a peak at one of the spindle's own (air) lines counts as chatter only this far over its air level, dB.
@@ -75,12 +88,56 @@ impl Analyzer {
         let n = if rate >= 32_000 { 8192 } else { 4096 };
         let fft = FftPlanner::new().plan_fft_forward(n);
         let window = (0..n).map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / n as f32).cos()).collect();
-        Analyzer { rate: rate as f32, n, fft, window, buf: vec![], hop: n / 2, air: Default::default() }
+        let long_n = 4 * n;
+        let long_fft = FftPlanner::new().plan_fft_forward(long_n);
+        let long_window = (0..long_n).map(|i| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / long_n as f32).cos()).collect();
+        Analyzer {
+            rate: rate as f32,
+            n,
+            fft,
+            window,
+            buf: vec![],
+            hop: n / 2,
+            air: Default::default(),
+            long_n,
+            long_fft,
+            long_window,
+            air_buf: vec![],
+            air_rpm: 0.0,
+            air_new: 0,
+            air_droop: None,
+        }
     }
 
     /// Add samples; a frame for each full window, with `ctx` as what was going on.
     pub fn push(&mut self, samples: &[f32], ctx: &Context) -> Vec<Frame> {
         self.buf.extend_from_slice(samples);
+        // standing with the spindle on: the no-load speed over the long window, every quarter window
+        if ctx.rpm > 0.0 && !ctx.cutting {
+            if ctx.rpm != self.air_rpm {
+                self.air_buf.clear();
+                self.air_rpm = ctx.rpm;
+                self.air_droop = None;
+            }
+            self.air_buf.extend_from_slice(samples);
+            self.air_new += samples.len();
+            if self.air_buf.len() > self.long_n {
+                let extra = self.air_buf.len() - self.long_n;
+                self.air_buf.drain(..extra);
+            }
+            if self.air_buf.len() == self.long_n && self.air_new >= self.long_n / 4 {
+                self.air_new = 0;
+                let mut c: Vec<Complex<f32>> = self.air_buf.iter().zip(&self.long_window).map(|(s, w)| Complex::new(s * w, 0.0)).collect();
+                self.long_fft.process(&mut c);
+                let db: Vec<f64> = c[..self.long_n / 2].iter().map(|v| 20.0 * ((v.norm() as f64) / self.long_n as f64 + 1e-12).log10()).collect();
+                let rot = ctx.rpm / 60.0;
+                self.air_droop = Self::heard_rot(&db, self.rate as f64 / self.long_n as f64, rot, self.rate as f64).map(|h| 1.0 - h / rot);
+            }
+        } else {
+            self.air_buf.clear();
+            self.air_rpm = 0.0;
+            self.air_droop = None;
+        }
         let mut out = vec![];
         while self.buf.len() >= self.n {
             let x = self.buf[..self.n].to_vec();
@@ -96,6 +153,8 @@ impl Analyzer {
                     }
                 }
             }
+            let mut f = f;
+            f.air_droop = if ctx.rpm > 0.0 && !ctx.cutting { self.air_droop } else { None };
             out.push(f);
             self.buf.drain(..self.hop);
         }
@@ -138,70 +197,7 @@ impl Analyzer {
         // rotation, the teeth's beat and theirs), searched from MAX_DROOP slow to 2% fast; so a wrong tooth
         // count in the tool table doesn't matter
         let _ = (teeth, base);
-        let lin: Vec<f64> = db.iter().map(|d| 10f64.powf(d / 20.0)).collect();
-        let at = |hz: f64| {
-            let i = (hz / bin).round() as usize;
-            if i + 1 >= lin.len() || i == 0 {
-                0.0
-            } else {
-                lin[i - 1].max(lin[i]).max(lin[i + 1])
-            }
-        };
-        let harmonics = 12usize.min(((self.rate as f64 / 2.0 * 0.9) / rot) as usize).max(1);
-        // each harmonic counts by how far it stands over the spectrum's median, dB, at most 30: summing raw
-        // amplitudes let one loud fixed line (the DMC2 has one at 3122 Hz, 130 dB) pull the comb onto it as an
-        // 8th harmonic, reading 2.45% slow in air where the spindle ran 397.0 Hz on every real harmonic
-        let floor = {
-            let mut d: Vec<f64> = db[(300.0 / bin) as usize..((self.rate as f64 / 2.0 * 0.9) / bin) as usize].to_vec();
-            d.sort_by(|a, b| a.total_cmp(b));
-            d.get(d.len() / 2).copied().unwrap_or(-120.0)
-        };
-        let at_db = |hz: f64| {
-            let i = (hz / bin).round() as usize;
-            if i + 1 >= db.len() || i == 0 {
-                0.0
-            } else {
-                (db[i - 1].max(db[i]).max(db[i + 1]) - floor).clamp(0.0, 30.0)
-            }
-        };
-        let score = |f: f64| (1..=harmonics).map(|k| at_db(k as f64 * f)).sum::<f64>();
-        let (lo_f, hi_f) = (rot * (1.0 - MAX_DROOP), rot * 1.02);
-        let step = bin / (2.0 * harmonics as f64);
-        let mut best = (f64::NEG_INFINITY, rot);
-        let mut f0 = lo_f;
-        while f0 <= hi_f {
-            let sc = score(f0);
-            if sc > best.0 {
-                best = (sc, f0);
-            }
-            f0 += step;
-        }
-        // it must stand out from the harmonics of a frequency well off it
-        let off = score(best.1 * 1.37).max(score(best.1 * 0.71));
-        if best.0 > 2.0 * off {
-            // finer: the strongest few harmonics from the 2nd up to the 24th, each peak interpolated between bins
-            // and over its number, weighted by that number. One harmonic alone misreads: the fundamental (a bin
-            // is 1.5% of 397 Hz) let a neighbouring line pull it a bin off near the work (coolant), reading 2.45%
-            // slow where the spindle ran its no-load 0.8%
-            let top = 24usize.min(((self.rate as f64 / 2.0 * 0.9) / best.1) as usize).max(1);
-            let mut ks: Vec<(usize, f64)> = (2.min(top)..=top).map(|k| (k, at(k as f64 * best.1))).collect();
-            ks.sort_by(|a, b| b.1.total_cmp(&a.1));
-            let strongest = ks.first().map(|k| k.1).unwrap_or(0.0);
-            let (mut sum, mut weight) = (0.0, 0.0);
-            for (k, a) in ks.iter().take(4) {
-                // within 12 dB of the strongest
-                if *a < strongest * 0.25 {
-                    continue;
-                }
-                let i = (*k as f64 * best.1 / bin).round() as usize;
-                if i + 2 >= db.len() || i < 2 {
-                    continue;
-                }
-                let i = (i - 1..=i + 1).max_by(|a, b| db[*a].total_cmp(&db[*b])).unwrap_or(i);
-                sum += self.interp(&db, i) / *k as f64 * *k as f64;
-                weight += *k as f64;
-            }
-            let fine = if weight > 0.0 { sum / weight } else { best.1 };
+        if let Some(fine) = Self::heard_rot(&db, bin, rot, self.rate as f64) {
             let rpm = fine / rot * ctx.rpm;
             f.rpm = Some(rpm);
             f.droop = Some(1.0 - rpm / ctx.rpm);
@@ -252,6 +248,79 @@ impl Analyzer {
         (f, peaks)
     }
 
+    /// The spindle's rotation heard in a spectrum (dB, `bin` Hz a bin), searched from MAX_DROOP under `rot` to 2%
+    /// over it: the rotation that best explains the peaks at its harmonics. None if no comb stands out.
+    fn heard_rot(db: &[f64], bin: f64, rot: f64, rate: f64) -> Option<f64> {
+        let harmonics = 24usize.min(((rate / 2.0 * 0.9) / rot) as usize).max(1);
+        // each harmonic counts by how far it stands over the spectrum right around it (the median of 31 bins), dB,
+        // at most 25. Raw amplitudes let one loud fixed line (the DMC2 has one at 3106-3122 Hz) pull the comb
+        // onto it as an 8th harmonic; a median over the whole spectrum let the DMC2's dense 7-8.5 kHz band and a
+        // loud input (the transducer on the head, about -15 dB in a cut) make every comb score alike, so the
+        // speed was found in only a quarter of the windows at 24k and fewer at 12-18k (v2 run 1)
+        let half = 15usize;
+        let prom: Vec<f64> = {
+            let mut out = vec![0.0; db.len()];
+            let mut w: Vec<f64> = Vec::with_capacity(2 * half + 1);
+            for i in half..db.len().saturating_sub(half) {
+                w.clear();
+                w.extend_from_slice(&db[i - half..=i + half]);
+                w.sort_by(|a, b| a.total_cmp(b));
+                // what's over 6 dB (noise bins don't add up across 24 harmonics), capped at 25, plus a little of
+                // the rest up to 60 so a capped line's peak still leads its lobe
+                let p = (db[i] - w[half] - 6.0).max(0.0);
+                out[i] = p.min(25.0) + 0.05 * p.min(60.0);
+            }
+            out
+        };
+        let at_db = |hz: f64| {
+            let i = (hz / bin).round() as usize;
+            if i + 1 >= prom.len() || i == 0 {
+                0.0
+            } else {
+                prom[i - 1].max(prom[i]).max(prom[i + 1])
+            }
+        };
+        let score = |f: f64| (1..=harmonics).map(|k| at_db(k as f64 * f)).sum::<f64>();
+        let (lo_f, hi_f) = (rot * (1.0 - MAX_DROOP), rot * 1.02);
+        let step = bin / (2.0 * harmonics as f64);
+        let mut scores = vec![];
+        let mut f0 = lo_f;
+        while f0 <= hi_f {
+            scores.push((score(f0), f0));
+            f0 += step;
+        }
+        let top_i = (0..scores.len()).max_by(|a, b| scores[*a].0.total_cmp(&scores[*b].0)).unwrap_or(0);
+        let best = scores.get(top_i).copied().unwrap_or((f64::NEG_INFINITY, rot));
+        // it must stand out from the combs of frequencies a little and well off it: 30 dB in all over their mean
+        let off = [0.93, 1.07, 1.37, 0.71].iter().map(|m| score(best.1 * m)).sum::<f64>() / 4.0;
+        if best.0 > off + 30.0 {
+            // finer: the strongest few harmonics from the 2nd up to the 24th, each peak interpolated between bins
+            // and over its number, weighted by that number. One harmonic alone misreads: the fundamental (a bin
+            // is 1.5% of 397 Hz) let a neighbouring line pull it a bin off near the work (coolant), reading 2.45%
+            // slow where the spindle ran its no-load 0.8%
+            let top = 24usize.min(((rate / 2.0 * 0.9) / best.1) as usize).max(1);
+            let mut ks: Vec<(usize, f64)> = (2.min(top)..=top).map(|k| (k, at_db(k as f64 * best.1))).collect();
+            ks.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let strongest = ks.first().map(|k| k.1).unwrap_or(0.0);
+            let (mut sum, mut weight) = (0.0, 0.0);
+            for (k, a) in ks.iter().take(6) {
+                // a real line: within about 6 dB of the strongest, 10 dB over its surroundings
+                if *a < strongest - 7.5 || *a < 4.0 {
+                    continue;
+                }
+                let i = (*k as f64 * best.1 / bin).round() as usize;
+                if i + 2 >= db.len() || i < 2 {
+                    continue;
+                }
+                let i = (i.saturating_sub(2).max(1)..=(i + 2).min(db.len() - 2)).max_by(|a, b| db[*a].total_cmp(&db[*b])).unwrap_or(i);
+                sum += interp_at(db, i, bin) / *k as f64 * *k as f64;
+                weight += *k as f64;
+            }
+            return Some(if weight > 0.0 { sum / weight } else { best.1 });
+        }
+        None
+    }
+
     /// The strongest peak between `lo` and `hi` Hz, interpolated between bins.
     fn peak_near(&self, db: &[f64], lo: f64, hi: f64) -> Option<f64> {
         let bin = self.rate as f64 / self.n as f64;
@@ -266,15 +335,19 @@ impl Analyzer {
     }
 
     fn interp(&self, db: &[f64], i: usize) -> f64 {
-        let bin = self.rate as f64 / self.n as f64;
-        if i == 0 || i + 1 >= db.len() {
-            return i as f64 * bin;
-        }
-        let (a, b, c) = (db[i - 1], db[i], db[i + 1]);
-        let d = a - 2.0 * b + c;
-        let off = if d.abs() > 1e-12 { 0.5 * (a - c) / d } else { 0.0 };
-        (i as f64 + off.clamp(-0.5, 0.5)) * bin
+        interp_at(db, i, self.rate as f64 / self.n as f64)
     }
+}
+
+/// A peak's frequency at bin `i`, interpolated between its neighbours (parabolic).
+fn interp_at(db: &[f64], i: usize, bin: f64) -> f64 {
+    if i == 0 || i + 1 >= db.len() {
+        return i as f64 * bin;
+    }
+    let (a, b, c) = (db[i - 1], db[i], db[i + 1]);
+    let d = a - 2.0 * b + c;
+    let off = if d.abs() > 1e-12 { 0.5 * (a - c) / d } else { 0.0 };
+    (i as f64 + off.clamp(-0.5, 0.5)) * bin
 }
 
 #[cfg(test)]

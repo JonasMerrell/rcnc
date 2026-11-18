@@ -80,23 +80,30 @@ impl Guard {
             return None;
         }
         let key = (rpm / 250.0).round() as i64;
-        let d = match f.droop {
-            Some(d) => d,
-            // speed lost while cutting right after a big droop: it ran away past what the analysis searches
-            None if f.ctx.cutting && self.last_excess > self.settings.limit => self.last_excess + self.air.get(&key).copied().unwrap_or(0.0),
-            None => return None,
-        };
+        // standing: its own no-load sag, the fastest it runs here, rising only slowly (a slow end of spin-up or a
+        // stray window can't make the reference slow). The long window's reading (`air_droop`) counts too: in air
+        // the short window can mistake the machine's fixed lines for the rotation (v2 run 1: 2.9% for a real 1.2%)
         if !f.ctx.cutting {
-            // no load: its own droop. The fastest it runs here, rising only slowly, so a slow end of spin-up
-            // or a stray window can't make the reference slow
-            let a = self.air.entry(key).or_insert(d);
-            *a = if d < *a { d } else { *a + 0.02 * (d - *a) };
+            let reading = match (f.air_droop, f.droop) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+            if let Some(d) = reading {
+                let a = self.air.entry(key).or_insert(d);
+                *a = if d < *a { d } else { *a + 0.02 * (d - *a) };
+            }
             self.over_since = None;
             self.tripped = false;
             self.recent.clear();
             self.last_excess = 0.0;
             return None;
         }
+        let d = match f.droop {
+            Some(d) => d,
+            // speed lost while cutting right after a big droop: it ran away past what the analysis searches
+            None if f.ctx.cutting && self.last_excess > self.settings.limit => self.last_excess + self.air.get(&key).copied().unwrap_or(0.0),
+            None => return None,
+        };
         let excess = d - self.air.get(&key).copied().unwrap_or(0.0);
         self.last_excess = excess;
         self.recent.push_back((t, excess));
