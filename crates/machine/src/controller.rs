@@ -4358,6 +4358,8 @@ mod tests {
         let top = crate::sim::homed_position(&config, &world, 2, high as f64 / spu(2));
         // RCNC_LOCATE_X: where across the stock (mm from its middle) the operator puts the probe for Find stock
         let locate_x: f64 = std::env::var("RCNC_LOCATE_X").ok().and_then(|v| v.parse().ok()).unwrap_or(2.5);
+        // RCNC_LOCATE_Y: and along it
+        let locate_y: f64 = std::env::var("RCNC_LOCATE_Y").ok().and_then(|v| v.parse().ok()).unwrap_or(-3.0);
         if let Some(l) = std::env::var("RCNC_AIR_CUT").ok().filter(|l| !l.is_empty()) {
             c.handle(Command::SetAirCut(Some(l.parse().unwrap())));
         }
@@ -4398,7 +4400,7 @@ mod tests {
                 };
                 go(&mut c, 2, s.machine[2].max(top + 30.0));
                 go(&mut c, 0, middle(0) + locate_x);
-                go(&mut c, 1, middle(1) - 3.0);
+                go(&mut c, 1, middle(1) + locate_y);
                 go(&mut c, 2, top - 5.0);
                 go(&mut c, 2, top + 5.0);
                 c.handle(Command::FindStockContinue);

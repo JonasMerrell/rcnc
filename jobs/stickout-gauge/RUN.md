@@ -288,7 +288,7 @@ end faces Z19 → 8 (11) and Z8 → 5.5 (12), dish (14).
 - deburr their **bottom ends** by hand (a deburring tool or countersink, lightly). That's where the bores
   broke through in op 1, and it's the side op 2 probes from.
 
-Op 2's program also says so before Find bores.
+Op 2's program also says so before probing.
 
 **What op 1 leaves for op 2:**
 - the gauge's top side finished;
@@ -298,20 +298,25 @@ Op 2's program also says so before Find bores.
 - the end lugs (8 thick) with the two Ø8 bores at y ±53.5;
 - beside the walls, the bar from Z0 to Z5.5 (the jaws' grip).
 
-## Op 2: the gauge's bottom side (`op2-bottom.nc`, about 6:00 plus three stops) — FOR REVIEW
+## Op 2: the gauge's bottom side (`op2-bottom.nc`, about 6:05 plus three stops) — FOR REVIEW
 
 Re-planned 2026-11-18 for the VFD at **F004 = 150**: the carrier at **S12000** (the top surface: chips fling better
 than at 9k, Jonas), the lugs and side strips at **S9000**, all shallow (2.8-5.5 deep), straight passes **both
 ways** (every other one conventional: roughing). rCAD's new linking (`stay_down`) keeps the tool down between
 strips where the way is clear (off the bar's ends, beside it) and lifts only as high as the stock still there needs.
 Since 2026-11-18 06:00 it also finishes one region before moving on (`order_by_region`): the rest rough no longer
-bounces end to end (49 s with 48 s of it air and 34 links over 20 mm, now 16 s, 17 s air, 4 long links).
+bounces end to end (49 s with 48 s of it air and 34 links over 20 mm, now 20 s, 19.5 s air, 4 long links).
 
 1. **Unclamp and flip** the part: op 1's finished top goes down on the ledges. Turn it over about X. Close the jaws
    on the **23 mm finished walls**, gripping 4.7. The lugs stand up past the jaw ends.
 2. Cycle Start. **The program stops first**: blow the chips out of both lug bores and deburr their upper ends.
-3. `(RCNC Z_REFERENCE Vise)`, then T99 **Find bores**: `A=0,-53.5 B=0,53.5 D=8 TOP=19 DEPTH=4 TOL=0.1 ROT=0.2`.
-4. T24, then T1. Stops: a **chip pause** after the slot rough, and a **chip pause before the finishing** (blow the
+3. `(RCNC Z_REFERENCE Vise)`, then T99 **Find stock** (Jonas: op 2 starts with it; op 1's G54 doesn't hold for the
+   flipped part): jog the probe over the middle of the part (within about 8 mm), a few mm above it. It touches the
+   top, then the bar's outline that op 1 left above the jaws (the full bar, 31.9 x 120.45, from Z13.5 to Z19: op 1
+   cut beside the gauge only down to its Z5.5 and kept the carrier and lugs full width) at Z16, and sets a coarse
+   X/Y: `SIZE=31.9,120.45,19 AT=0,0,19 DEPTH=3 TOL=1 KEEPZ=1`. Z stays on the Vise reference.
+4. Then **Find bores** in the lugs for the exact X/Y: `A=0,-53.5 B=0,53.5 D=8 TOP=19 DEPTH=4 TOL=0.1 ROT=0.2`.
+5. T24, then T1. Stops: a **chip pause** after the slot rough, and a **chip pause before the finishing** (blow the
    slots, the reliefs and the top clear), then the finishing.
 
 **Before:** F004 = 150. rcnc on guard-slip; Settings -> Listening **1400 rpm / 7%**.
@@ -325,17 +330,17 @@ bounces end to end (49 s with 48 s of it air and 34 links over 20 mm, now 16 s, 
 | Rough the bottom slots and their end reliefs | 1 | 0:42 | 4 s (was 5) | 242 |
 | Lug passes: 36 lines across X, 0.89 x 5.5, F3000 S9000, both ways | 36 | 0:40 | 18 s (was 86) | 364 |
 | Side strips z16->12.5: 10 lines 0.84 x 3.5, F3000 S9000, both ways | 10 | 0:33 | 15 s (was 32) | 182 |
-| Rough what is left down to Z5, region by region | 1 | 0:16 | 17 s (was 46, and 58 with the old links; long links 4, was 34) | 105 |
+| Rough what is left down to Z5, region by region | 1 | 0:20 | 19.5 s (was 46, and 58 with the old links; long links 4, was 34) | 105 |
 | Finish the slot walls and the relief stop walls | 1 | 0:10 | 4 s (was 5) | 321 |
 | Finish the walls and end faces Z16 to Z10.5 | 1 | 0:25 | 20 s (was 19) | 165 |
 | Engrave the bottom numbers 0.3 deep | 1 | 0:07 | 4 s (was 10) | 0 |
 | Edge break 0.3 on every edge of the bottom face: outline | 1 | 0:13 | 2 s (was 1) | 0 |
 
-- **6:00 in all** by rCAD (6:33 before the region ordering, 9:07 with the old linking, and 11:16 before the
-  re-plan); the rcnc simulator runs it in 10:59 with probing and the three stops (was 11:14).
+- **6:04 in all** by rCAD (6:33 before the region ordering, 9:07 with the old linking, and 11:16 before the
+  re-plan); the rcnc simulator runs it in 10:56 with Find stock, Find bores and the three stops (was 11:14).
 - Peak **364 W** (a lug pass). The S12000 carrier is 246 W, under 12k's 684 W caution.
 - rCAD simulation: ok, no problems (no rapid into the stock, the part or a fixture); unfinished 1 mm² (the
-  slot/relief corner grid). rcnc simulator: Find bores, started 0.4 / 0.3 mm off, reads both bores 107.000 apart.
+  slot/relief corner grid). rcnc simulator: Find stock from the probe jogged 5 / 8 mm off the middle (and -5 / -8, -8 / +8, 0 / 0) reads 31.900 x 120.450; Find bores, the bores 0.4 / 0.3 mm off, reads them 107.000 apart. Started more than about 8 mm off along an axis, Find stock misses that side and holds (nothing set: Probe again).
 
 **Nothing comes loose:**
 - The carrier goes as chips, strip by strip.
