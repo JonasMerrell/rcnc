@@ -22,31 +22,45 @@ REQUIRE_GUARD) and (RCNC RECORD_AUDIO).
 
 At each change, use **Tap test** in the tool change window (Settings → Listening on).
 
-## Op 1a v3: the rest of v2 (`op1a-calibrate-v3.nc`, about 3:00 plus a tool change)
+## Op 1a v4: the VFD before/after test, then the rest of v2 (`op1a-calibrate-v4.nc`, about 3:00 plus a tool change)
 
-v2 run 1 (2026-11-18) ran passes 1-20. The bog guard held in pass 21, the rpm sweep's 12k step (0.3 x 12 at
-F1200 S12000), at 8% sag: the spindle can't carry that torque at 12k (the pull-out torque falls at low speed).
-v3 finishes the job at 24k only:
-- **passes 21/22: the 12k strip again at 24k**, 0.3 x 12 F2400, the cut passes 13/14 proved (2.7% sag). Pass 21
-  runs in air down to Y-8.1, where run 1 stopped, then cuts.
-- **passes 23-32 as planned**: 0.8 x 6, 0.4 x 12, the thin-chip comparison 0.6 x 12 at F1200, 1.0 x 6, 0.45 x 12.
-  Peak 499 W by the model (1.0 x 6), rCAD's sim 472 W.
-That leaves the bar exactly as op 1 (`op1-top.nc`) was planned for.
+v2 run 1 (2026-11-18) ran passes 1-20; the bog guard held in pass 21, 0.3 x 12 at F1200 **S12000**, at 8% sag
+(about 700 rpm of slip on an air speed of about 11 640). The VFD (H100) was then found to give the spindle half
+its flux: **F004 (reference frequency) 400 -> 200** since then (in air: 12k now 200 Hz 108 V 1.6 A, was 55 V
+0.63 A; 24k unchanged, the drive can't give more than 110 V). v4 repeats the cut that bogged, unchanged, then
+finishes the bar at 24k:
+- **passes 21/22 exactly as in v2**: 0.3 x 12 F1200 at S12000. Pass 21 runs in air down to Y-8.1, where run 1
+  stopped, then cuts;
+- **passes 23-32 as planned, at 24k** (0.8 x 6, 0.4 x 12, the thin-chip 0.6 x 12 at F1200, 1.0 x 6, 0.45 x 12;
+  peak 499 W by the model, rCAD's sim 472 W): the bar ends as op 1 (`op1-top.nc`) expects, and they show whether
+  24k really is unchanged (set 29/30 and 31/32 against run 1's 13/14: 0.3 x 12 sagged 2.7% at 24k).
+- Every speed change is followed by 3 s in air (each pass's "Pass N" message and G4 P3): the bog guard learns each
+  speed's no-load speed there.
+
+**What to expect in 21/22:**
+- **if the fix works:** the motor at full flux slips about a quarter as much for the same torque: about 175 rpm,
+  **about 1.5% sag**, steady. No hold.
+- **if it doesn't:** about 8% and still falling, as in run 1: the hold trips (6% for 0.3 s, or over 4% and still
+  falling for 0.5 s). Then stop the program and send the logs; don't Cycle Start through it.
 
 **Before:**
-- **Don't unclamp the bar.** v3 has no Find stock (the bar's -X side is cut down to Z20, so it can't measure the
+- **The VFD must have F004 = 200** for this run (check on the drive before starting; it was 400 in run 1).
+- **Don't unclamp the bar.** v4 has no Find stock (the bar's -X side is cut down to Z20, so it can't measure the
   32 width any more): it uses v2's G54. rcnc keeps work offsets in its data folder (state.json) across restarts
   and rebuilds; they are machine coordinates, good again once the machine is homed.
 - Home the machine, then check **G54 X/Y = machine X120.472 Y387.240** (what v2 run 1's Find stock set,
   2026-11-18 01:06; Z from the Vise reference). If it isn't, or the bar has been unclamped, stop and ask for a
   re-plan.
-- rcnc on the build with the listening fixes (fix/guard-arm 5f03e41 or later): it hears the spindle at every
-  speed now; status "hold ready", then "hold armed" once the spindle has run in air.
+- rcnc on fix/guard-arm (this build): it hears the spindle at every speed; status "hold ready", then "hold armed"
+  once the spindle has run in air.
 - T24 stays the same tool (re-measured at the tool change).
+- If you can: reset the wall meter's max just before pass 29 (the 1.0 x 6), and note it at the end.
 
-**Run:** as v2: each pass shows "Pass N: ...", 3 s in air, then the cut. If the hold trips, stop and note the pass.
+**Run:** each pass shows "Pass N: ...", 3 s in air, then the cut. If the hold trips, stop and note the pass.
 
-**After:** copy `op1a-calibrate-v3.nc.cutlog.json` and `.wav` from beside the program.
+**After:** copy `op1a-calibrate-v4.nc.cutlog.json` and `.wav` from beside the program.
+
+## Op 1a v3 (superseded by v4, not run; in old-do-not-use/)
 
 ## Op 1a v2 (RAN 2026-11-18, passes 1-20; now in old-do-not-use/): calibration passes
 
