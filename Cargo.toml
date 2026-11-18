@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/gcode", "crates/machine", "crates/blueskyt", "crates/listen", "crates/app"]
+members = ["crates/gcode", "crates/machine", "crates/blueskyt", "crates/listen", "crates/vfd", "crates/app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,7 @@ gcode = { path = "crates/gcode", package = "cnc-gcode" }
 machine = { path = "crates/machine", package = "cnc-machine" }
 blueskyt = { path = "crates/blueskyt", package = "cnc-blueskyt" }
 listen = { path = "crates/listen", package = "cnc-listen" }
+vfd = { path = "crates/vfd", package = "cnc-vfd" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
