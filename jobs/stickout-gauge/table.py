@@ -20,4 +20,4 @@ for L in res['loads']:
 for k, e in g.items():
     print(f"{k[:75]:75s} n{e['n']:3d} {e['p']:4.0f}W {e['pct']:3.0f}% w{e['w']:.2f} mrr{e['mrr']:5.1f} t{e['t']:6.0f} chip{e['chip']:.2f}")
 print('cycle', info['cycle_time_s'], 's; ok', res['ok'], 'problems', res['problems'][:5])
-print('unfinished', res['unfinished'])
+print('unfinished', res.get('unfinished'))

@@ -27,7 +27,7 @@ Then say so.
 | Travel | X 343, Y 234, Z 150 mm. +Y moves the bed back. |
 | Feeds | Max feed 3000 mm/min, Z rapid 3000. |
 | Tool changes | Manual, ER16. No tool changer yet (the ATC design is in ~/dmc2). |
-| Spindle | VFD, 1.5 kW input. **Measured: it pulls out (stalls) at about 645 W of rCAD's model watts at 24 000 rpm** (2026-11-17). Never plan over 550 W; aim at 450–500 W. Constant torque below 24k is assumed, not measured. Max 24 000 rpm. |
+| Spindle | 2.2 kW 220 V spindle (2-pole, 400 Hz at 24k) on an H100 VFD that outputs only 110 V. **The VFD's F004 (reference frequency) is 150**: full torque up to 9000 rpm, weaker above (the 110 V ceiling). **9k is the strong speed** (2026-11-18): see the table below. At 24k it carries only about 450 W. Max 24 000 rpm. |
 | Coolant | Flood, low pressure. Throws chips poorly out of deep pockets, and thin light chips worst of all **(Jonas)**. |
 | Controller | rcnc (the rCAD post is `rcnc`). Mach3 macros don't apply. |
 | Board | BlueSkyT USB. The probe and the tool setter share input 11, so rcnc refuses M3 with the probe loaded. |
@@ -36,14 +36,32 @@ The rCAD machine block is the `M` dict in a job's `cam.py`:
 
 ```json
 {"name": "DMC2", "model": "DMC2", "travel": [343, 234, 150], "max_feed": 3000, "rapid_z": 3000,
- "tool_changer": false, "spin_up": 4, "spindle_power": 1500, "spindle_efficiency": 0.43, "spindle_rated_rpm": 24000,
- "spindle_never_exceed": 0.85, "spindle_caution": 0.775}
+ "tool_changer": false, "spin_up": 4, "spindle_power": 2600, "spindle_efficiency": 0.43, "spindle_rated_rpm": 9000,
+ "spindle_above_rated": 0.76, "spindle_never_exceed": 0.85, "spindle_caution": 0.76}
 ```
 
-Use `"post": "rcnc"` and `"probe": {"z_reference": "Vise"}` with `create_cam`. With rCAD PR #152, 100% is the
-spindle's pull-out, a cut over 85% (550 W) is a problem and over 77.5% (500 W) a caution (`loads[].power_rating`).
+Use `"post": "rcnc"` and `"probe": {"z_reference": "Vise"}` with `create_cam`, and `"stay_down": true` (rCAD
+`tighten_links`) on the setup before posting. With rCAD PR #152/#154 the power the spindle has falls above 9000
+rpm as (9000 / rpm)^0.76: never-exceed **950 W at 9k, about 765 at 12k, 450 at 24k**; caution **850 / 684 / 403 W**
+(`loads[].power_rating`).
 
-### What the spindle can take (measured 2026-11-17) **(Jonas)**
+### What the spindle can take (measured 2026-11-17/18) **(Jonas)**
+
+**Since 2026-11-18 the VFD is at F004 = 150** (it was 400: the spindle got half its flux at every speed). The
+1/4" 3-flute (T24, 24 out), 12 deep, F004 = 150, sag over the no-load speed:
+
+| rpm | Model W -> sag |
+|---|---|
+| **9000** | 484 3.2%, 589 3.6%, 676 4.2%, 759 5.0%, 850 6.5%, 949 6.6%, 1049 9.0%: **all steady** |
+| 12000 | 590 5.2%, 676 5.7%, 759 7%, 839 9% (no runaway) |
+| 24000 | 446 4.3-4.7% settled; 494-499 crept: the edge |
+
+- **Rough at S9000** with the 1/4", up to about **650-700 W** (caution 850, never-exceed 950). 24k is for light
+  finishing only (≤ 400 W).
+- **Top-surface roughing at S12000** where the load fits (≤ 684 W): the chips fling better than at 9k **(Jonas)**.
+- After the first long 9k job, feel the spindle body: F004 = 150 over-fluxes it a little under 9k (no-load 2.7 A).
+
+The older table below is for F004 = 400 (before 2026-11-18): 24k only.
 
 The 1/4" 3-flute DLC end mill (T24) at 24 000 rpm, 24 mm stick-out, in 6061. The speed is heard from the
 transducer on the spindle head.
@@ -106,6 +124,19 @@ The planning rules that follow:
   face breaks the Z rule below. Otherwise add the shim's thickness to the Vise reference.
 - **Fixtures in rCAD:** put the jaws in `create_cam` as `fixtures` boxes so the simulation checks them.
   Give the vise its `on_table` position.
+- **Two-op parts: the whole outside profile in op 1 (Jonas, 2026-11-18).** The stick-out gauge's walls were
+  finished partly in op 1 and partly in op 2; the blend between them was very good but still just felt with a
+  fingernail. Don't split a wall between ops:
+  - Op 1 finishes the part's **entire outside profile, full height**, the walls running on past the part's
+    bottom into the carrier stock below it. Op 2 then only takes the carrier off, faces the bottom and cuts
+    the bottom-side features: no wall seam between ops.
+  - That needs the stock held **below the part's bottom**: a carrier taller than the vise's 4.7 grip plus
+    the 5.0 jaw clearance (e.g. a 16 mm part needs about 16 + 1 overrun + 5 = 22 mm above the parallels), or
+    the part held some other way that leaves the full wall reachable.
+  - The flute must cover the wall plus the overrun: a 16 mm wall + 1 mm with the 19.05 mm flute of T24 is
+    fine, deeper walls need a longer tool or a stepped finish (and then the seam is in op 1, on one setup).
+  - Op 2 grips the finished walls: soft jaws or protected jaws, and the walls are its X/Y reference
+    (probe them or bores op 1 made) — don't re-cut them.
 
 ## Locating each setup
 
@@ -114,6 +145,25 @@ The planning rules that follow:
   - Find stock touches the top and both sides at DEPTH below the top. DEPTH must be within what the stylus
     can reach: 10 mm, not 20.
   - `JAWX=-1 JAWZ=` takes X from the fixed jaw, but only when the stock is shorter than the jaws.
+- **Op 2 starts with Find stock, then the precise feature probe (Jonas, 2026-11-18).** After the flip the
+  op 1 work offset no longer fits (the gauge sat 4.5 mm over in X and 5.8 mm in Y), and Find bores alone came
+  down on the top beside the bore. So: `FIND_STOCK ... KEEPZ=1` for a coarse X/Y, then `FIND_BORES` (or the
+  notch probe) for the exact one. The header comment tells Jonas to jog the probe over the middle of the part;
+  Find stock finds the sides only if it starts within about 8 mm of centre.
+  - **The Find stock SIZE is what op 1 really left at the height the probe touches**, not the nominal bar:
+    the gauge's bar measured 119.04 long there against 120.45 in the job (one sawn end was 1.25 mm out over the
+    height) and Find stock refused twice. rCAD (PR 156) now takes the size from op 1's simulated stock; sawn
+    ends still are not square, so ask Jonas for a measurement at that height or give TOL 1.5.
+  - **Rotation:** Find bores reports the part's turn but rcnc so far only shifts X/Y. The gauge sat -0.094 deg
+    (about 0.16 mm per 100 mm, probably the vise's squareness to Y), which put about 0.07 mm of step at the
+    ends of the walls. rcnc PR 18 (work-rotation) compensates it: after Find bores the program's X/Y turn
+    with the part about the work origin for the rest of that program (`ROTATE=1`, the default when `ROT=` is
+    given; `ROTATE=0` only checks). `ROT=` stays the most allowed. It shows as "Rotated x°" beside G54, is
+    logged as "rotation applied", goes in the cut log, and clears at M30, Stop, a new program or new probing.
+    G53 moves are never turned; G92 / G10 L20 X/Y are refused while turned. Until PR 18 is built on the mill
+    PC, expect that error on anything op 2 cuts that must meet op 1.
+  - The probe reads bores about 0.05 mm large (8.045 / 8.055 for 8.000): uncalibrated trigger travel, not the
+    bore. Don't use probed diameters as measurements yet.
 - **Op 2: locate from a feature op 1 cut, before roughing.**
   - **(Jonas)** Prefer a small **notch op 1 cuts into the carrier** (stock op 2 removes) over bores or other
     features in the finished part.
@@ -134,8 +184,30 @@ The planning rules that follow:
 
 - Use **adaptive** (constant engagement) for pockets, around plinths and at corners. Don't let a contour
   plough into corners: that bogged the spindle.
+- **Climb only, in laps all the way round the part (Jonas, 2026-11-18).** Adaptive clearing and contours cut
+  climb, never conventional, and outside roughing goes as full laps round the part stepping inward (contour
+  offset loops, or adaptive that follows the outline), not as separate straight strips per side built from
+  trace ops on sketch lines (that is what the gauge's jobs did).
+  - With M3 (clockwise) climb means the material is on the RIGHT of the direction of travel: clockwise round an
+    outside profile, counter-clockwise round the inside of a pocket. rCAD's adaptive had this backwards until
+    2026-11-18 (branch climb-loops): the gauge's adaptive roughing all ran conventional. rCAD now has a test
+    that checks the side of the material for contour, adaptive and pocket; check the direction in the render
+    anyway.
+  - In rCAD: a `contour` op (side outside) with `stepdown` and `max_engagement` (fraction of Ø) roughs the
+    whole band round the part in laps: offset loops from the outermost material in, each clipped to where
+    material is (so the square stock's corners get their own short laps), climbing, linked at depth with
+    `stay_down`. Its `stepover` is a fraction of Ø too (0.132 = 0.84 mm on T24).
+  - **Corners:** roll round outside corners on an arc (no stop and turn). Where a lap would take more than the
+    load check allows (square stock corners over a rounded part corner, inside corners), add corner-clearing
+    laps or relief passes so the engagement stays bounded; never a full-width bite. Check the worst-load
+    location after any change of direction or corner handling.
 - Leave **0.3 mm** on walls and **0.2 mm** on floors, more if a re-locate follows (see above).
-- Roughing peak spindle power **≤ 550 W (85% of pull-out) and ≤ 18 cm³/min**, bulk 450–500 W. Read it from `loads[].power_w` / `power_rating`.
+- Roughing peak spindle power: **under the caution at its speed** (F004 = 150: 850 W at 9k, 684 at 12k, 403 at 24k),
+  never over the never-exceed. Read it from `loads[].power_w` / `power_rating`.
+- **Depth at 9k: moderate, 5-7 mm**, with a wider step over for the same watts **(Jonas)**: 11-13 deep strips at
+  9k packed chips on top of the bar, and at 9k the chips "don't really get flung at all". Prefer thick short chips.
+- Every S change is followed by **3 s in air** (G4 P3) before the tool goes near the work: the bog guard learns
+  that speed's no-load speed there (`add_dwell.py` in jobs/stickout-gauge).
 - Keep air cutting low (`air[].air_pct`), but not at the cost of overload spikes.
 - rCAD's adaptive still has open bugs: links over "cleared" bands that aren't cleared, and wall bands wider
   than the stepover. Check the worst-load location (`loads[].at`, `width`) every time.
@@ -154,10 +226,20 @@ The planning rules that follow:
 - **Deburr every edge.** Use the chamfer mill (deburr or chamfer ops, with a tip offset), or a ~0.2 mm edge
   break with the ball where the chamfer mill can't reach. This includes bore and pocket mouths and the edges
   op 2 creates.
+  - **The chamfer mill only where the face beside the edge falls away at least as steeply as its cone**
+    (45° for a 90° mill): walls, holes, steps. Next to a shallower face (a dish's rim, a gentle slope) the cone
+    and the tip offset cut into that face all along the edge: op 1 of the stick-out gauge (2026-11-18) gouged
+    its thumb dish round the rim this way. Break those edges with the ball. rCAD's chamfer op now leaves such
+    an edge out with a warning ("left out the edge near …"); read the warnings.
+- **No ramp entries on finish contours (Jonas, 2026-11-18).** Enter in space that's already cleared (straight
+  down there, then the arc lead-in at full depth) or from outside the stock; ramp or helix only where the
+  entry really has to go into material, and then rather start off the part's or the stock's edge. Same for
+  lead-outs. Op 2's wall finish ramped down 5.5 mm in ~36 small arcs where the roughing had already cleared.
 
 ### Chips
 
 - Deep, narrow pockets and grooves pack chips (low-pressure flood, thin chips).
+- **A chip-clearing M0 pause (with a MSG) before any finishing pass that follows 9k roughing** **(Jonas)**.
 - Check the simulation's `chips[]` (`chip_fill`). Where the chip model cautions, add a **chip pause** after
   the rough: G53 Z0, M5, M9, an `(MSG,…)` saying what to blow out, M0, restart the spindle and coolant, and
   dwell (see `jobs/phone-stand/add_chip_pause.py`). Re-run the pause script after every re-post.
@@ -188,10 +270,57 @@ The planning rules that follow:
   the finer ball stepover.
 - **Vertical edges:** give outside vertical corners (and slot mouths at an end face) a small radius or chamfer in the CAD so the wall contour breaks them; a chamfer mill can't reach a vertical edge (stick-out gauge, 2026-11-17).
 - **Measure the stock and confirm it with Jonas before any CAM.** Nominal sizes are not measurements: the stick-out gauge was planned for a "1x1" bar, and the bar was 32 × 32. **(Jonas)**
+- **No file dialogs while a program runs or is paused (2026-11-17).** rcnc crashed 6 minutes into the ball
+  finish of the gauge's op 1 with a Windows file dialog open: a shell plug-in (OneDrive's) inside the dialog
+  took the whole program down, and the run's cut log and recording were lost because they were written only at
+  the end. Fix: rcnc PR 17 (dialogs in a helper process, cut log saved every 10 s); OneDrive is being removed
+  from the mill PC. rcnc lives in `C:\src\rcnc` there, not in OneDrive.
+- **After a crash or an rcnc restart:** home first, then check G54 on screen against the logged value before
+  judging it wrong, and prove it over a known feature (MDI to a bore centre) before cutting. Restart from the
+  tool change of the tool that was cutting; re-cutting a finished surface at the same depth is harmless.
+- **A tool being "well above the part" does not show its section finished:** 3D finishing lifts to the
+  clearance height after every pass. Look at the surface.
 - **Keep this file current:** when a cut bogs, chatters, packs chips or leaves a mark, add the lesson here.
+
+### Travel between cuts **(Jonas)**
+
+- Don't waste time in air: op1-top (2026-11-17) spent about 10 of its 40 min feeding down through air from Z34
+  and returning over the full 134 mm between one-way strips.
+- Set `"stay_down": true` on the setup (rCAD `tighten_links`): with the stock simulated, the tool travels between
+  cuts only as high as the stock still there needs (+1 mm), stays down at depth through cleared space or past
+  the stock's end, and rapids down to 1 mm over the stock before an entry, feeding only the rest. Tool changes
+  and speed changes keep the full retract.
+- **Climb by default; two-way only for open-slab straight roughing (Jonas, 2026-11-18).** Every pass is climb
+  by default and always for finishing; laps round the part are climb only (they have no air return to save).
+  Two-way (every other pass conventional) is allowed ONLY for roughing an open slab with straight passes (e.g.
+  taking the top off the bar), where the plan shows it saves time over one-way passes with stay-down returns,
+  and with stock left for a climb finish. Report the time of both and which was picked.
+- **Rough from the power budget (rCAD `power_target`, branch power-target).** Give adaptive roughing a target
+  (default 650 W at 9k, caution 850 W; 12k: 565 W, caution 684 W) and a cap (`power_cap`, the caution): rCAD
+  picks the stepover so the steady cut takes the target at the feed, and lowers the feed only where the
+  engagement rises (corners, entries), instead of narrowing the whole op. Use F3000 (the machine's max) and
+  chip thinning for the feed; depth per level stays 5–7 mm at 9k (chip packing, Jonas), not the full flute.
+  Climb by itself doesn't raise the removal rate (power per mm³ is about the same either way): the gain is in
+  using the budget and in cutting less air.
+- Report the air time per operation in the review (rapids and feed moves not in material) and check the
+  simulation shows no rapid into stock (`problems`).
+- **Finish one region before moving to the next (Jonas, 2026-11-18).** Within an operation, group the cuts by
+  region and finish one area (all its depth levels) before travelling to the next, taking the nearest area
+  next. Don't bounce around the part: on op1-top the adaptive steps hopped end to end and nearly all the time
+  was air. rCAD's `stay_down` now orders the cuts this way (`order_by_region`): a cut waits only for earlier
+  cuts that overlap its area (so depth levels and rough-before-finish hold), and keeps its direction (climb
+  finishes stay climb). Report the long links (moves over ~20 mm between cuts) per operation alongside the
+  air time, before and after.
 
 ## Checks before handing over
 
+0. **Never hand over a program without the SIM OK stamp.** rCAD's `export_gcode` simulates the exact
+   toolpaths it writes and refuses when the simulation finds any problem; a clean program carries
+   `(SIM OK: 0 problems in rCAD's stock simulation of these toolpaths, hash …)` under its title.
+   `allow_problems` only writes a `<name>.UNSAFE.nc` to look at — never hand that over. After the
+   post-processing scripts (pauses, dwells, Find stock), run `verify_gcode` on the final file: it simulates
+   the file's own moves on the setup and must say `ok`. Hand over only that file, from that run: op2-bottom
+   9080c8d was picked up from a different rCAD run than the one that simulated clean.
 1. `simulate_cam` for every setup reports no problems. Read the following for each op, and quote them in
    RUN.md:
    - time;

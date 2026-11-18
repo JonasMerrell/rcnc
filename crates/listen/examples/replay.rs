@@ -3,7 +3,7 @@
 //! passes (only for the printout) from `--cuts a-b,c-d`.
 //!
 //!     cargo run --release -p cnc-listen --example replay -- run.wav --on 129 --move 140 --rpm 24000 \
-//!         --cuts 144.6-147.7,150.7-153.9,156.9-160.0,163.0-165 [--limit 0.06 --time 0.3]
+//!         --cuts 144.6-147.7,150.7-153.9,156.9-160.0,163.0-165 [--slip 1400 --time 0.3]
 
 use cnc_listen::{Analyzer, Context, Guard, GuardSettings};
 
@@ -19,7 +19,7 @@ fn main() {
         .map(|c| c.split(',').map(|p| { let (a, b) = p.split_once('-').unwrap(); (a.parse().unwrap(), b.parse().unwrap()) }).collect())
         .unwrap_or_default();
     let mut settings = GuardSettings::default();
-    if let Some(l) = get("--limit") { settings.limit = l.parse().unwrap(); }
+    if let Some(l) = get("--slip") { settings.slip_rpm = l.parse().unwrap(); }
     if let Some(t) = get("--time") { settings.time = t.parse().unwrap(); }
     let mut a = Analyzer::new(rate);
     let mut g = Guard::new(settings);

@@ -155,6 +155,9 @@ pub struct Snapshot {
     pub mode: Mode,
     pub machine: Axes,
     pub work: Axes,
+    /// The work rotation in force (degrees counter-clockwise about the work origin, 0: none): from Find bores
+    /// measuring the part turned, for the rest of that program.
+    pub rotation: f64,
     pub coord_system: usize,
     pub tool: u32,
     pub tool_length_offset: f64,
@@ -1112,6 +1115,14 @@ impl Controller {
     }
 
     /// Set the active work offset so machine position `machine` on `axis` reads `work`.
+    /// Drop the work rotation, saying so if there was one.
+    pub(crate) fn clear_rotation(&mut self) {
+        if self.interp.rotation() != 0.0 {
+            self.interp.set_rotation(0.0);
+            self.info("Work rotation cleared");
+        }
+    }
+
     pub(crate) fn set_work_axis(&mut self, axis: usize, machine: f64, work: f64) {
         let cs = self.interp.state.coord_system;
         self.set_work_axis_in(cs, axis, machine, work);
@@ -1683,6 +1694,8 @@ impl Controller {
     /// The machine has stopped after a Stop (or `forced`: it didn't in time).
     fn finish_stop(&mut self, forced: bool) {
         self.drop_motion();
+        // a work rotation belongs to the run that measured it
+        self.clear_rotation();
         self.mode = Mode::Idle;
         if let Ok(s) = self.backend.poll(&self.outputs) {
             self.status = s;
@@ -1723,9 +1736,8 @@ impl Controller {
         if self.mode == Mode::EStop {
             self.outputs = Outputs::default();
         }
-        let off = self.interp.program_offset();
         let machine = self.machine_position();
-        self.outputs.work_position = std::array::from_fn(|i| machine[i] - off[i]);
+        self.outputs.work_position = self.interp.to_work(&machine);
         self.outputs.feed_rate = self.interp.state.feed;
         match self.backend.poll(&self.outputs) {
             Ok(s) => {
@@ -2190,7 +2202,6 @@ impl Controller {
 
     pub fn snapshot(&self) -> Snapshot {
         let machine = self.machine_position();
-        let off = self.interp.program_offset();
         let st = &self.interp.state;
         let line = match (&self.mode, &self.exec) {
             (
@@ -2220,7 +2231,8 @@ impl Controller {
         Snapshot {
             mode: self.mode,
             machine,
-            work: std::array::from_fn(|i| machine[i] - off[i]),
+            work: self.interp.to_work(&machine),
+            rotation: self.interp.rotation(),
             coord_system: st.coord_system,
             tool: st.tool,
             tool_length_offset: st.tool_length_offset,
@@ -4358,6 +4370,8 @@ mod tests {
         let top = crate::sim::homed_position(&config, &world, 2, high as f64 / spu(2));
         // RCNC_LOCATE_X: where across the stock (mm from its middle) the operator puts the probe for Find stock
         let locate_x: f64 = std::env::var("RCNC_LOCATE_X").ok().and_then(|v| v.parse().ok()).unwrap_or(2.5);
+        // RCNC_LOCATE_Y: and along it
+        let locate_y: f64 = std::env::var("RCNC_LOCATE_Y").ok().and_then(|v| v.parse().ok()).unwrap_or(-3.0);
         if let Some(l) = std::env::var("RCNC_AIR_CUT").ok().filter(|l| !l.is_empty()) {
             c.handle(Command::SetAirCut(Some(l.parse().unwrap())));
         }
@@ -4398,7 +4412,7 @@ mod tests {
                 };
                 go(&mut c, 2, s.machine[2].max(top + 30.0));
                 go(&mut c, 0, middle(0) + locate_x);
-                go(&mut c, 1, middle(1) - 3.0);
+                go(&mut c, 1, middle(1) + locate_y);
                 go(&mut c, 2, top - 5.0);
                 go(&mut c, 2, top + 5.0);
                 c.handle(Command::FindStockContinue);
@@ -4536,7 +4550,7 @@ mod tests {
             run_until_idle(&mut c, &clock, 600.0);
             c.handle(Command::Load {
                 name: "t".into(),
-                text: "T99 M6\n(RCNC FIND_STOCK SIZE=39,77,20 TOL=1)\n(RCNC FIND_BORES A=-10,-28 B=11,22 D=8 TOP=0 DEPTH=3 TOL=0.1 ROT=0.2)\nG0 X0 Y0 Z10\nM30".into(),
+                text: "T99 M6\n(RCNC FIND_STOCK SIZE=39,77,20 TOL=1)\n(RCNC FIND_BORES A=-10,-28 B=11,22 D=8 TOP=0 DEPTH=3 TOL=0.1 ROT=0.2)\nG0 X0 Y0 Z10\nG0 X11 Y22\nM0\nM30".into(),
             });
             c.handle(Command::CycleStart);
             let spu2 = |a: usize| config.axes[a].steps_per_unit;
@@ -4562,21 +4576,51 @@ mod tests {
                     go(&mut c, 2, top + 5.0);
                     c.handle(Command::FindStockContinue);
                 }
+                // stop at the M0 over bore B, with the work rotation still in force
+                if s.paused.as_deref().is_some_and(|p| p.starts_with("Program paused (M0)")) && c.status.idle {
+                    break;
+                }
                 if matches!(s.mode, Mode::Idle | Mode::Alarm) && s.tool_change.is_none() && s.find_stock.is_none() || s.probe_retry.is_some() && c.status.idle {
                     break;
                 }
             }
-            c
+            (c, world, clock)
         };
-        let c = run(0.0);
+        let config = crate::sim::dmc2_sim_config();
+        let (c, _, _) = run(0.0);
         let s = c.snapshot();
-        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?} {:?}", s.alarm, s.log);
         let found = s.log.iter().find(|l| l.starts_with("Bores found")).unwrap();
         assert!(found.contains("Ø8.000 and Ø8.000") && found.contains("(should be 54.231)") && found.contains("turned 0.000°"), "{found}");
-        assert!(close(s.work[0], 0.0) && close(s.work[1], 0.0), "{:?}", s.work);
+        assert!(close(s.work[0], 11.0) && close(s.work[1], 22.0) && s.rotation == 0.0, "{:?}", s.work);
+
+        // turned 0.1° and 0.19° (inside ROT=0.2): the program's X/Y turn with the part, so the move to bore B's
+        // work position lands on the bore itself: it moves on the machine exactly as far as the bore did, from
+        // where it was with the part square
+        let spu = |a: usize| config.axes[a].steps_per_unit;
+        let bore_b = |world: &crate::sim::SimWorld| -> [f64; 2] { std::array::from_fn(|a| crate::sim::homed_position(&config, world, a, world.bores[1].0[a] as f64 / spu(a))) };
+        let (square, world0, _) = run(0.0);
+        let (m0, b0) = (square.snapshot().machine, bore_b(&world0));
+        for turn in [0.1, 0.19] {
+            let (mut c, world, clock) = run(turn);
+            let s = c.snapshot();
+            let found = s.log.iter().find(|l| l.starts_with("Bores found")).unwrap();
+            assert!(found.contains("rotation applied"), "{found}");
+            assert!((s.rotation - turn).abs() < 0.01, "{} {turn}", s.rotation);
+            let b = bore_b(&world);
+            for a in 0..2 {
+                let (moved, bore_moved) = (s.machine[a] - m0[a], b[a] - b0[a]);
+                // within 0.005 mm: the simulator's whole steps (0.005 mm) put the bores and the tool on a grid
+                assert!((moved - bore_moved).abs() <= 0.005 + 1e-6, "turned {turn}°: axis {a} moved {moved}, the bore {bore_moved}");
+            }
+            assert!(close(s.work[0], 11.0) && close(s.work[1], 22.0), "{:?}", s.work);
+            // the program's end clears it
+            c.handle(Command::CycleStart);
+            run_until(&mut c, &clock, 30.0, "the end", |s| s.mode == Mode::Idle);
+            assert_eq!(c.snapshot().rotation, 0.0);
+        }
 
         // turned 0.5°: more than 0.2° off square, it holds for Probe again with nothing set
-        let c = run(0.5);
+        let (c, _, _) = run(0.5);
         let s = c.snapshot();
         assert_eq!(s.mode, Mode::Running);
         let r = s.probe_retry.unwrap();

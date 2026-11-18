@@ -18,6 +18,10 @@ pub struct CutLog {
     /// next run with; rcnc never changes the speed itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggestions: Vec<RpmSuggestion>,
+    /// The work rotation rcnc applied in the run (degrees, Find bores compensating the part's turn): the
+    /// moments' positions are machine positions of the turned program.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_deg: Option<f64>,
 }
 
 /// An operation that chattered, and the speed to try instead.
@@ -61,7 +65,7 @@ pub struct Moment {
     /// Work X, Y, Z and the real speed along the path, mm/min.
     pub pos: [f64; 3],
     pub velocity: f64,
-    /// Programmed and heard spindle speed, droop (share).
+    /// Programmed and heard spindle speed, droop under the programmed speed (share).
     pub rpm: f64,
     pub heard_rpm: Option<f64>,
     pub droop: Option<f64>,
@@ -72,6 +76,10 @@ pub struct Moment {
     /// The adaptive feed asked for after this window, share of the programmed feed (None: not in use).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adaptive_feed: Option<f64>,
+    /// The sag the bog guard judges: under the no-load speed it learned at this speed (`droop` is under the
+    /// programmed speed, so it also carries the VFD's own no-load slip, about 1.2% at 24k on the DMC2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub over_no_load: Option<f64>,
 }
 
 /// One program line: what it asked for and what was heard while it ran.
@@ -105,7 +113,7 @@ pub struct Line {
 
 impl CutLog {
     pub fn new(program: &str, input: &str) -> CutLog {
-        CutLog { program: program.into(), input: input.into(), lines: BTreeMap::new(), timeline: vec![], suggestions: vec![] }
+        CutLog { program: program.into(), input: input.into(), lines: BTreeMap::new(), timeline: vec![], suggestions: vec![], rotation_deg: None }
     }
 
     /// Add a window heard `t` seconds into the run.
@@ -124,6 +132,7 @@ impl CutLog {
             tooth_db: f.tooth_db,
             chatter: f.chatter,
             adaptive_feed: None,
+            over_no_load: None,
         });
         self.add(f);
     }
@@ -235,9 +244,15 @@ impl CutLog {
         p.into()
     }
 
+    /// Write the log to `path`, through a temporary file beside it, so a crash mid-write leaves the last
+    /// complete one.
     pub fn save(&self, path: &std::path::Path) -> Result<(), String> {
         let s = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(path, s).map_err(|e| format!("{}: {e}", path.display()))
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(".part");
+        let tmp = std::path::PathBuf::from(tmp);
+        std::fs::write(&tmp, s).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     pub fn load(path: &std::path::Path) -> Result<CutLog, String> {

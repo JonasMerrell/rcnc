@@ -1,6 +1,7 @@
 //! CNC controller desktop app: a modern replacement for Mach3.
 
 mod app;
+mod dialog;
 mod link;
 mod preview;
 mod sheet;
@@ -37,6 +38,11 @@ const USAGE: &str = "usage: cnc-controller [--sim [--sim-stock=X,Y,H] [--sim-bor
   --sim-audio=cut.wav  play a recording in place of the microphone";
 
 fn main() -> eframe::Result<()> {
+    // a file dialog, in its own process (see dialog.rs)
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some(dialog::PICK_FILE) {
+        dialog::child_main(&args[2..]);
+    }
     let mut simulate = false;
     let mut program = None;
     let mut stock = None;

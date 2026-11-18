@@ -47,7 +47,18 @@ enum JogStep {
     Step(f64),
 }
 
+/// What a file dialog open in its own process is for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Picking {
+    Program,
+    Sheet,
+    Profile,
+    ToolPhoto(u32),
+}
+
 pub struct App {
+    /// A file dialog open (in its own process, so a crash in it can't take rcnc down) and what it's for.
+    picking: Option<(Picking, crate::dialog::Pick)>,
     machine: ControllerHandle,
     snap: Arc<Snapshot>,
     toolpath: Toolpath,
@@ -134,6 +145,7 @@ impl App {
         machine.send(Command::Connect);
         let snap = machine.snapshot();
         App {
+            picking: None,
             machine,
             snap,
             toolpath: Toolpath::default(),
@@ -252,41 +264,78 @@ impl App {
         });
     }
 
-    /// File dialogs block the window until they close: Stop, Esc and jog
-    /// key-ups would go nowhere. Only while nothing moves.
+    /// File dialogs open only while nothing moves (a program paused at M0 counts as moving), and one at a time.
+    /// They run in their own process (dialog.rs), so the window stays live and a crash in the dialog leaves
+    /// rcnc running.
     fn can_open_dialogs(&self) -> bool {
-        matches!(self.snap.mode, Mode::Idle | Mode::EStop | Mode::Disconnected | Mode::Alarm)
+        self.picking.is_none() && matches!(self.snap.mode, Mode::Idle | Mode::EStop | Mode::Disconnected | Mode::Alarm)
+    }
+
+    pub(crate) fn pick(&mut self, what: Picking) {
+        if !self.can_open_dialogs() {
+            return;
+        }
+        let dir = self.program_file.as_ref().and_then(|(p, _)| p.parent().map(|d| d.to_path_buf()));
+        let pick = match what {
+            Picking::Program => crate::dialog::pick_file(
+                "Open a program",
+                &[("G-code", &["nc", "tap", "ngc", "gcode", "txt", "cnc", "nc1"]), ("All files", &["*"])],
+                None,
+            ),
+            Picking::Sheet => crate::dialog::pick_file("Open a setup sheet", &[("Web page", &["html", "htm"])], dir.as_deref()),
+            Picking::Profile => crate::dialog::pick_file("Import a Mach3 profile", &[("Mach3 profile", &["xml"])], None),
+            Picking::ToolPhoto(_) => crate::dialog::pick_file("Tool photo", &[("Image", &["png", "jpg", "jpeg"])], None),
+        };
+        self.picking = Some((what, pick));
+    }
+
+    /// A file dialog that closed: do what it was for, if nothing has started moving since it opened.
+    fn picked(&mut self, ctx: &egui::Context) {
+        let Some((what, pick)) = &self.picking else { return };
+        let what = *what;
+        let Some(result) = pick.poll() else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            return;
+        };
+        self.picking = None;
+        let path = match result {
+            Ok(Some(p)) => p,
+            Ok(None) => return,
+            Err(e) => {
+                self.machine.send(Command::Note(format!("File dialog: {e}")));
+                return;
+            }
+        };
+        if !self.can_open_dialogs() {
+            self.machine.send(Command::Note(format!("{} not opened: the machine started moving while the file dialog was open", path.display())));
+            return;
+        }
+        match what {
+            Picking::Program => self.load_path(path),
+            Picking::Sheet => {
+                self.set_sheet(Some(path));
+                self.view = View::Sheet;
+            }
+            Picking::Profile => {
+                let current = self.snap.config.clone();
+                self.import_profile_from(&path, &current);
+            }
+            Picking::ToolPhoto(n) => {
+                if let Some(t) = self.snap.tools.get(&n) {
+                    let mut t = t.clone();
+                    t.image = path.display().to_string();
+                    self.machine.send(Command::SetTool(n, Some(t)));
+                }
+            }
+        }
     }
 
     fn open_sheet(&mut self) {
-        if !self.can_open_dialogs() {
-            return;
-        }
-        let mut dialog = rfd::FileDialog::new().add_filter("Web page", &["html", "htm"]);
-        if let Some(dir) = self.program_file.as_ref().and_then(|(p, _)| p.parent()) {
-            dialog = dialog.set_directory(dir);
-        }
-        if let Some(path) = dialog.pick_file() {
-            self.set_sheet(Some(path));
-            self.view = View::Sheet;
-        }
+        self.pick(Picking::Sheet);
     }
 
     fn open_file(&mut self) {
-        if !self.can_open_dialogs() {
-            return;
-        }
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter(
-                "G-code",
-                &["nc", "tap", "ngc", "gcode", "txt", "cnc", "nc1"],
-            )
-            .add_filter("All files", &["*"])
-            .pick_file()
-        else {
-            return;
-        };
-        self.load_path(path);
+        self.pick(Picking::Program);
     }
 
     fn keyboard(&mut self, ctx: &egui::Context) {
@@ -402,6 +451,7 @@ impl eframe::App for App {
             self.alive = (self.snap.time, std::time::Instant::now());
         }
         self.watch_file(ctx.input(|i| i.time));
+        self.picked(ctx);
         let program = self.program_file.as_ref().map(|p| p.0.clone());
         self.ears.poll(&self.snap, program.as_deref(), &self.machine);
         self.vfd.poll(&self.snap, program.as_deref(), &self.machine);
@@ -690,6 +740,10 @@ impl App {
             }
             ui.add_space(12.0);
             pill(ui, &format!("G{}", 54 + s.coord_system));
+            if s.rotation != 0.0 {
+                // Find bores measured the part turned: the program's X/Y turn with it for this run
+                pill(ui, &format!("Rotated {:+.3}°", s.rotation));
+            }
             // During a change the interpreter already has the new tool; show what's in the spindle.
             let tool = s.tool_change.as_ref().map_or(s.tool, |t| t.from);
             pill(ui, &format!("T{tool}"));

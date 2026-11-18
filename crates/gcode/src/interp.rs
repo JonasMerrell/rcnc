@@ -268,7 +268,11 @@ pub struct BoresRequest {
     pub top: f64,
     pub depth: f64,
     pub tolerance: f64,
+    /// The most the part may be turned, degrees (`ROT`).
     pub rotation: f64,
+    /// Turn the program's X/Y with the part by the angle measured (`ROTATE=1`; on by default when ROT is
+    /// given, `ROTATE=0` to only check it).
+    pub rotate: bool,
 }
 
 /// `KEY=VALUE` words after a directive's keyword, or None if the comment isn't it.
@@ -345,6 +349,10 @@ impl BoresRequest {
                 depth: one("DEPTH", Some(3.0))?,
                 tolerance: one("TOL", Some(0.1))?,
                 rotation: one("ROT", Some(0.2))?,
+                rotate: match take(&words, "ROTATE", 1, what)? {
+                    Some(v) => v[0] != 0.0,
+                    None => take(&words, "ROT", 1, what)?.is_some(),
+                },
             };
             if !(r.diameter > 0.0) || (r.a[0] - r.b[0]).hypot(r.a[1] - r.b[1]) < 1.0 {
                 return Err("FIND_BORES needs D above zero and A and B apart".into());
@@ -540,6 +548,18 @@ pub struct Interpreter {
     g92_suspended: Option<Axes>,
     /// The current block has an F word (G93 needs one on every feed move).
     f_on_line: bool,
+    /// Work rotation in the XY plane, degrees counter-clockwise, about the work origin (G68-style): set from
+    /// a probing routine that measured the part turned (Find bores), for the rest of that program.
+    rotation: f64,
+}
+
+/// Work coordinates of a machine position with the program offset `off` and a work rotation of `rotation`
+/// degrees (counter-clockwise, about the work origin).
+pub fn work_of(off: &Axes, rotation: f64, machine: &Axes) -> Axes {
+    let (dx, dy) = (machine[0] - off[0], machine[1] - off[1]);
+    let (s, c) = rotation.to_radians().sin_cos();
+    let xy = if rotation == 0.0 { [dx, dy] } else { [c * dx + s * dy, -s * dx + c * dy] };
+    std::array::from_fn(|i| if i < 2 { xy[i] } else { machine[i] - off[i] })
 }
 
 /// Arc endpoint radius mismatch that is still accepted, in mm.
@@ -580,15 +600,85 @@ impl Interpreter {
             spindle_reversible: true,
             g92_suspended: None,
             f_on_line: false,
+            rotation: 0.0,
         }
     }
 
-    /// Replace the program, keeping machine state, offsets and tools.
+    /// Replace the program, keeping machine state, offsets and tools (not a work rotation: that belonged to
+    /// the program that measured it).
     pub fn load(&mut self, program: &str) {
         let fresh = Interpreter::new(program);
         self.lines = fresh.lines;
         self.labels = fresh.labels;
+        self.rotation = 0.0;
         self.rewind();
+    }
+
+    /// The work rotation, degrees counter-clockwise about the work origin (0: none).
+    pub fn rotation(&self) -> f64 {
+        self.rotation
+    }
+
+    /// Turn the program's XY by `degrees` about the work origin from here on (0 clears it): work X/Y read
+    /// along the part's turned axes. G53 moves and machine coordinates are not turned.
+    pub fn set_rotation(&mut self, degrees: f64) {
+        self.rotation = degrees;
+    }
+
+    /// A vector in work XY turned into machine XY.
+    fn turn(&self, v: [f64; 2]) -> [f64; 2] {
+        if self.rotation == 0.0 {
+            return v;
+        }
+        let (s, c) = self.rotation.to_radians().sin_cos();
+        [c * v[0] - s * v[1], s * v[0] + c * v[1]]
+    }
+
+    /// A vector in machine XY turned back into work XY.
+    fn unturn(&self, v: [f64; 2]) -> [f64; 2] {
+        if self.rotation == 0.0 {
+            return v;
+        }
+        let (s, c) = self.rotation.to_radians().sin_cos();
+        [c * v[0] + s * v[1], -s * v[0] + c * v[1]]
+    }
+
+    /// Machine coordinates of a point in work coordinates (offsets and rotation as they are now).
+    pub fn to_machine(&self, work: &Axes) -> Axes {
+        let off = self.program_offset();
+        let xy = self.turn([work[0], work[1]]);
+        std::array::from_fn(|i| if i < 2 { xy[i] + off[i] } else { work[i] + off[i] })
+    }
+
+    /// Work coordinates of a point in machine coordinates.
+    pub fn to_work(&self, machine: &Axes) -> Axes {
+        work_of(&self.program_offset(), self.rotation, machine)
+    }
+
+    /// Machine X/Y for the X/Y words of a move from machine `pos` (absolute or incremental, rotated).
+    fn xy_target(&self, wx: Option<f64>, wy: Option<f64>, pos: &Axes) -> [f64; 2] {
+        if self.rotation == 0.0 {
+            let off = self.program_offset();
+            let one = |i: usize, w: Option<f64>| match w {
+                None => pos[i],
+                Some(v) if self.state.absolute => v + off[i],
+                Some(v) => pos[i] + v,
+            };
+            return [one(0, wx), one(1, wy)];
+        }
+        if wx.is_none() && wy.is_none() {
+            return [pos[0], pos[1]];
+        }
+        if self.state.absolute {
+            let cur = self.to_work(pos);
+            let w = [wx.unwrap_or(cur[0]), wy.unwrap_or(cur[1])];
+            let off = self.program_offset();
+            let m = self.turn(w);
+            [m[0] + off[0], m[1] + off[1]]
+        } else {
+            let d = self.turn([wx.unwrap_or(0.0), wy.unwrap_or(0.0)]);
+            [pos[0] + d[0], pos[1] + d[1]]
+        }
     }
 
     /// Back to the start of the program, with the modes a program may
@@ -671,8 +761,7 @@ impl Interpreter {
 
     /// Current position in program (work) coordinates.
     pub fn work_position(&self) -> Axes {
-        let off = self.program_offset();
-        std::array::from_fn(|i| self.position[i] - off[i])
+        self.to_work(&self.position)
     }
 
     /// Report where a probe move actually stopped.
@@ -806,12 +895,18 @@ impl Interpreter {
     fn target(&self, b: &Block, machine_coords: bool) -> Axes {
         let words = self.axis_words(b);
         let off = self.program_offset();
-        std::array::from_fn(|i| match words[i] {
+        let mut t: Axes = std::array::from_fn(|i| match words[i] {
             None => self.position[i],
             Some(v) if machine_coords => v,
             Some(v) if self.state.absolute => v + off[i],
             Some(v) => self.position[i] + v,
-        })
+        });
+        if !machine_coords {
+            let xy = self.xy_target(words[0], words[1], &self.position);
+            t[0] = xy[0];
+            t[1] = xy[1];
+        }
+        t
     }
 
     /// Execute a block, then apply cutter compensation to its moves.
@@ -1022,6 +1117,9 @@ impl Interpreter {
                 }
                 920 => {
                     let words = self.axis_words(b);
+                    if self.rotation != 0.0 && (words[0].is_some() || words[1].is_some()) {
+                        return Err("G92 X/Y can't be set with a work rotation in force".into());
+                    }
                     let coord = self.params.coord_offset(self.state.coord_system);
                     let mut g92 = self.params.get_axes(num::G92);
                     for i in 0..6 {
@@ -1127,6 +1225,7 @@ impl Interpreter {
         self.state.return_to_r = false;
         self.state.cutter_comp = 400;
         self.g92_suspended = None;
+        self.rotation = 0.0;
     }
 
     /// Expand a user M-code macro in place. Macros are straight-line G-code
@@ -1231,6 +1330,9 @@ impl Interpreter {
                     entry.diameter = self.linear(d);
                 }
                 self.tools.insert(tool, entry);
+            }
+            2 | 20 if self.rotation != 0.0 && (b.get('X').is_some() || b.get('Y').is_some()) => {
+                return Err("G10 X/Y offsets can't be set with a work rotation in force".into());
             }
             2 | 20 => {
                 let index = match p as usize {
@@ -1356,14 +1458,20 @@ impl Interpreter {
             if o0.is_none() && o1.is_none() {
                 return Err("arc needs R or centre offsets".into());
             }
+            if self.rotation != 0.0 && plane != Plane::XY {
+                return Err("arcs outside the XY plane (G18/G19) can't run with a work rotation".into());
+            }
             if self.state.arc_absolute {
                 let off = self.program_offset();
                 // A missing offset is 0 in program coordinates, as for any absolute word.
-                center[a0] = o0.unwrap_or(0.0) + off[a0];
-                center[a1] = o1.unwrap_or(0.0) + off[a1];
+                let c = self.turn([o0.unwrap_or(0.0), o1.unwrap_or(0.0)]);
+                center[a0] = c[0] + off[a0];
+                center[a1] = c[1] + off[a1];
             } else {
-                center[a0] = from[a0] + o0.unwrap_or(0.0);
-                center[a1] = from[a1] + o1.unwrap_or(0.0);
+                // I/J run along the part's (turned) axes too
+                let d = self.turn([o0.unwrap_or(0.0), o1.unwrap_or(0.0)]);
+                center[a0] = from[a0] + d[0];
+                center[a1] = from[a1] + d[1];
             }
             let r0 = (from[a0] - center[a0]).hypot(from[a1] - center[a1]);
             let r1 = (to[a0] - center[a0]).hypot(to[a1] - center[a1]);
@@ -1479,15 +1587,9 @@ impl Interpreter {
             if pos[2] < r_z {
                 rapid(&mut pos, r_z, &mut ops);
             }
-            for i in 0..2 {
-                if let Some(v) = words[i] {
-                    pos[i] = if self.state.absolute {
-                        v + off[i]
-                    } else {
-                        pos[i] + v
-                    };
-                }
-            }
+            let xy = self.xy_target(words[0], words[1], &pos);
+            pos[0] = xy[0];
+            pos[1] = xy[1];
             ops.push(Op::Rapid { to: pos });
             rapid(&mut pos, r_z, &mut ops);
             let feed_to = |pos: &mut Axes, z: f64, ops: &mut Vec<Op>| {
@@ -2098,6 +2200,64 @@ mod tests {
         i.run_to_end(100).unwrap();
         assert_eq!(i.state.tool_length_offset, 0.0);
         assert_eq!(i.state.tlo_tool, None);
+    }
+
+    #[test]
+    fn a_work_rotation_turns_moves_and_arc_centres_about_the_work_origin() {
+        let mut i = Interpreter::new("");
+        i.params.set_coord_offset(0, [100.0, 200.0, -50.0, 0.0, 0.0, 0.0]);
+        i.set_rotation(90.0);
+        // X10 along the part's X, turned 90°: machine +Y from the origin
+        let ops = i.execute_line("G0 X10 Y0 Z5").unwrap();
+        match &ops[0] {
+            Op::Rapid { to } => assert!(close(to[0], 100.0) && close(to[1], 210.0) && close(to[2], -45.0), "{to:?}"),
+            other => panic!("{other:?}"),
+        }
+        let w = i.work_position();
+        assert!(close(w[0], 10.0) && close(w[1], 0.0), "{w:?}");
+        // only Y given: X stays where it is along the part
+        match &i.execute_line("G1 Y5 F100").unwrap()[0] {
+            Op::Linear { to, .. } => assert!(close(to[0], 95.0) && close(to[1], 210.0), "{to:?}"),
+            other => panic!("{other:?}"),
+        }
+        // an arc: centre from I/J along the part's axes too
+        match &i.execute_line("G3 X0 Y15 I-10 J0").unwrap()[0] {
+            Op::Arc { to, center, .. } => {
+                assert!(close(center[0], 95.0) && close(center[1], 200.0), "{center:?}");
+                assert!(close(to[0], 85.0) && close(to[1], 200.0), "{to:?}");
+            }
+            other => panic!("{other:?}"),
+        }
+        // incremental moves turn too
+        match &i.execute_line("G91 G1 X1").unwrap()[0] {
+            Op::Linear { to, .. } => assert!(close(to[0], 85.0) && close(to[1], 201.0), "{to:?}"),
+            other => panic!("{other:?}"),
+        }
+        i.execute_line("G90").unwrap();
+        // G53: machine coordinates, never turned
+        match &i.execute_line("G53 G0 X10 Y20").unwrap()[0] {
+            Op::Rapid { to } => assert!(close(to[0], 10.0) && close(to[1], 20.0), "{to:?}"),
+            other => panic!("{other:?}"),
+        }
+        // offsets can't be set by position while turned
+        assert!(i.execute_line("G92 X0").is_err());
+        assert!(i.execute_line("G10 L20 P1 X0").is_err());
+        // a small turn, as Find bores measures one: a point 44 mm out lands within a hair of where it should
+        let mut i = Interpreter::new("G0 X0 Y44
+M30");
+        i.set_rotation(-0.094);
+        let to = match &i.next_step().unwrap().unwrap().ops[0] {
+            Op::Rapid { to } => *to,
+            other => panic!("{other:?}"),
+        };
+        let a = (-0.094f64).to_radians();
+        assert!(close(to[0], -44.0 * a.sin()) && close(to[1], 44.0 * a.cos()), "{to:?}");
+        // the program's end clears it, and so does loading another
+        i.run_to_end(10).unwrap();
+        assert_eq!(i.rotation(), 0.0);
+        i.set_rotation(0.1);
+        i.load("G0 X1");
+        assert_eq!(i.rotation(), 0.0);
     }
 
     #[test]

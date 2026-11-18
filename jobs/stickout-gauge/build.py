@@ -220,6 +220,15 @@ for sgn, x, w in P_.SIDE:
 for x, w in P_.CARRIER:
     sid = d.sketch([{"type": "line", "from": [x, -67.0], "to": [x, 67.0]}])
     NEW["carrier"].append([sid, x, round(w, 4)])
+NEW["band9k"] = []
+for x, top_, dep, w, seam, label in P_.OP1_9K:
+    sid = d.sketch([{"type": "line", "from": [x, -67.0], "to": [x, 67.0]}])
+    NEW["band9k"].append([sid, x, top_, dep, round(w, 4), seam, label])
+# the 12k and 9k ladders that ran (op1a v5 passes 1-7, v6 passes 1-4): -X side, 12 deep at Z20, tool centres
+NEW["ladders"] = []
+for x in [-12.425, -11.725, -10.925, -9.925, -8.925, -7.925, -6.925, -5.925, -4.925, -3.925, -2.925]:
+    sid = d.sketch([{"type": "line", "from": [x, -67.0], "to": [x, 67.0]}])
+    NEW["ladders"].append([sid, x])
 json.dump(NEW, open("/home/jonas/dmc2/gauge/straight_passes.json", "w"), indent=1)
 d.S.append({"tool": "set_part", "args": {"body": [2, 0], "name": "Op 1 CAM body", "color": "#c9ced6", "material": "Aluminium 6061"}})
 # 4: the gauge alone in op 1's frame, for op 2 (it follows op 1's stock)

@@ -1,13 +1,15 @@
 # Stick-out gauge: how to run op 1
 
-The stock is the 1" (25.4) 6061 bar, sawn to **120.7 mm**. It lies along Y in the **right station**:
-- fixed jaw on the left (−X), jaws closed on the bar's 25.4 width;
+The stock is a **32 × 32** 6061 bar (measured; Find stock read 31.90 × 120.45), sawn to **120.7 mm**. It lies
+along Y in the **right station**:
+- fixed jaw on the left (−X), jaws closed on the bar's 32 width;
 - bottom on the vise's built-in ledges, so **Z0 = the Vise reference**;
 - the jaws grip the bottom 4.7 mm;
 - about 12.5 mm of bar hangs past each end of the 95.5 mm jaws, with nothing under it.
 
-**rcnc build:** mill/stickout-gauge 85c58d3 or later. It has the listening additions, (RCNC RECORD_AUDIO),
-the `.air.cutlog.json` naming, and the wait after a spindle speed change.
+**rcnc build:** fix/guard-arm **af90c74** or later: the bog guard that hears the spindle at every speed, no level
+check at Cycle Start (status "hold ready", then "hold armed" once the spindle has run in air), (RCNC
+REQUIRE_GUARD) and (RCNC RECORD_AUDIO).
 
 **Tools** (all carbide; the program headers fill rcnc's tool table):
 
@@ -20,7 +22,138 @@ the `.air.cutlog.json` naming, and the wait after a spindle speed change.
 
 At each change, use **Tap test** in the tool change window (Settings → Listening on).
 
-## Op 1a v2: calibration passes (`op1a-calibrate-v2.nc`, about 5:30 plus tool changes) — FOR REVIEW
+## Op 1a v7: the 9k ladder on (`op1a-calibrate-v7.nc`, about 1:30 plus a tool change)
+
+v6 (F004 = 150, S9000): 484/589/676/759 W by the model ran flat at 3.2/3.6/4.2/5.0% sag, no holds. v7 goes on at
+9k: three single passes 12 deep (Z32 -> Z20) from the -X wall (x +0.25). All waste above the gauge.
+
+| Pass | Step over | Feed | Model W | N·m | MRR cm³/min | Chip (max) mm | Tool stress MPa | Bend mm | Rib left |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 1 | F2660 | 850 | 0.90 | 32.2 | 0.072 | 397 | 0.028 | 5.15 |
+| 2 | 1.05 | F2910 | 949 | 1.01 | 36.9 | 0.08 | 443 | 0.031 | 4.1 |
+| 3 | 1.15 | F2990 | 1049 | 1.11 | 41.6 | 0.085 | 490 | 0.035 | 2.95 |
+
+- The feed tops out at 3000 mm/min, so passes 2 and 3 widen a little instead (1.05, 1.15).
+- Chips are thick: 0.07-0.085 mm (0.10-0.11 mm a tooth). Fine for carbide in 6061, but it's the top of the range.
+- The tool stays under 600 of its 800 MPa (at most 490).
+- **Three passes, not four:** above Z26 the cuts eat into a rib (x +0.25..+6.4). After pass 3 it's 2.95 mm wide and
+  6 mm tall; a fourth at about 1150 W would leave 1.65 mm, too thin to cut against. To go higher, the next stock
+  is the 4.45 mm of waste beside the gauge (x 11.5-16, Z5.5-Z19, both sides): op 1 takes it anyway.
+
+**Before:**
+- **VFD F004 = 150.**
+- rcnc on **guard-slip** (the hold in rpm). In Settings -> Listening set **"over 1400 rpm of slip or 12 %"**, for
+  0.3 s. The default 7% is only 610 rpm at 9k, and these passes should slip about 500-700 rpm.
+- Don't unclamp. Home, check **G54 X/Y = machine X120.472 Y387.240**.
+
+**If the hold trips: stop the program and note the pass. No Cycle Start retries** (the new hold doesn't trip on
+the start of a cut that settles).
+
+**After:** copy `op1a-calibrate-v7.nc.cutlog.json`, `.wav` and rcnc's `log.txt`. Then set the cap back to 7%.
+
+## Op 1a v6 (RAN 2026-11-18; in old-do-not-use/): a 9k mini-ladder with F004 = 150
+
+v5 (2026-11-18, F004 = 200) ran passes 1-7 at 12k: 484 W 3.8% sag, 590 W 5.2%, 676 W 5.7%, 759 W about 6.9% (held at
+6%), 839 W about 9% (held), no runaway. The VFD is now at **F004 = 150** (no-load at 9k: 108 V, 2.7 A). v6 cuts the
+same model watts as v5's passes 3-6, at **S9000**, to compare: four single passes 12 deep (Z32 -> Z20) from the -X
+wall (x -3.75), 1.0 mm each; the wall ends at x +0.25, a 6.15 mm core left. All waste above the gauge.
+
+| Pass | Step over | Feed | Model W | N·m | MRR cm³/min | Chip (max) mm | Tool stress MPa | Strip x |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 1.0 | F1270 | 484 | 0.51 | 15.2 | 0.034 | 226 | -3.75 .. -2.75 |
+| 2 | 1.0 | F1650 | 589 | 0.63 | 19.8 | 0.045 | 276 | -2.75 .. -1.75 |
+| 3 | 1.0 | F1980 | 676 | 0.72 | 23.8 | 0.053 | 316 | -1.75 .. -0.75 |
+| 4 | 1.0 | F2310 | 759 | 0.80 | 27.7 | 0.062 | 355 | -0.75 .. +0.25 |
+
+- At 9k the same watts are 1.33 x the torque of 12k, so the force and the chip are bigger: chips 0.034-0.062 mm
+  (slightly over 0.05 in the last two: fine for carbide in 6061), the tool at most 355 of 800 MPa.
+- **If F004 = 150 helps:** fewer rpm of slip per watt than v5 (v5 at 12k: 484 W 443 rpm, 590 W 595, 676 W 680).
+- **The hold at 9k:** 6% is only about 520 rpm of slip, so it will stop early. Same rule as v5: a hold that says
+  "over 6.0%" = stop the program; "still slowing down" in a pass's first second = one Cycle Start allowed, a second
+  hold on that pass = stop.
+
+**Before:** **F004 = 150** on the VFD. Don't unclamp. Home, check **G54 X/Y = machine X120.472 Y387.240**.
+Listening on, hold on.
+
+**After:** copy `op1a-calibrate-v6.nc.cutlog.json`, `.wav` and rcnc's `log.txt`.
+
+## Op 1a v5 (RAN 2026-11-18, passes 1-7; in old-do-not-use/): the 12k ladder
+
+v4 (2026-11-18) repeated run 1's 12k cut with the VFD's **F004 = 200**: it didn't bog at all. v5 finds how much the
+spindle carries at 12000 rpm now: ten single passes, all at **S12000**, 12 deep (Z32 -> Z20) from the bar's -X wall
+(x -9.7) in, each about 80-120 W (rCAD's model) heavier than the one before, from 247 W to 1130 W. Everything cut is
+waste above the gauge (Z3-Z19): op 1 later meets only less material. A 6.3 mm wide core is left (x +0.1 to +6.4).
+
+| Pass | Step over | Depth | Feed | Model W | N·m | MRR cm³/min | Chip (max) mm | Force N | Tool bend mm | Tool stress MPa | Strip x |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 0.45 | 12 | F1200 | 247 | 0.20 | 6.5 | 0.017 | 62 | 0.006 | 87 | -9.70 .. -9.25 |
+| 2 | 0.7 | 12 | F1200 | 364 | 0.29 | 10.1 | 0.021 | 91 | 0.009 | 128 | -9.25 .. -8.55 |
+| 3 | 0.8 | 12 | F1500 | 484 | 0.39 | 14.4 | 0.028 | 121 | 0.012 | 170 | -8.55 .. -7.75 |
+| 4 | 1 | 12 | F1500 | 590 | 0.47 | 18.0 | 0.03 | 148 | 0.015 | 207 | -7.75 .. -6.75 |
+| 5 | 1 | 12 | F1800 | 676 | 0.54 | 21.6 | 0.036 | 169 | 0.017 | 237 | -6.75 .. -5.75 |
+| 6 | 1 | 12 | F2100 | 759 | 0.60 | 25.2 | 0.042 | 190 | 0.019 | 266 | -5.75 .. -4.75 |
+| 7 | 1 | 12 | F2400 | 839 | 0.67 | 28.8 | 0.049 | 210 | 0.021 | 294 | -4.75 .. -3.75 |
+| 8 | 1.15 | 12 | F2400 | 949 | 0.76 | 33.1 | 0.051 | 238 | 0.024 | 333 | -3.75 .. -2.60 |
+| 9 | 1.3 | 12 | F2400 | 1058 | 0.84 | 37.4 | 0.054 | 265 | 0.026 | 371 | -2.60 .. -1.30 |
+| 10 | 1.4 | 12 | F2400 | 1130 | 0.90 | 40.3 | 0.055 | 283 | 0.028 | 396 | -1.30 .. +0.10 |
+
+- Chips stay 0.017-0.055 mm (3 flutes, F = 1200-2400).
+- The tool is not the limit: at the top step about 400 MPa of its 800, 0.03 mm of bend (rCAD's model, 24 out,
+  the force at mid-depth). The ladder is capped by the bar's width (the 6 mm core), at 1130 W.
+- Expected: unknown. The estimate for the pull-out at 12k now is between 650 and 1300 W by the model; at 24k it
+  stays at about 645 W (the drive can't give more than 110 V there).
+
+**Before:**
+- **The VFD must have F004 = 200.**
+- **Don't unclamp the bar**: v5 uses v2's G54. Home, check **G54 X/Y = machine X120.472 Y387.240**.
+- rcnc on fix/guard-arm (this build); Settings -> Listening on, hold on: "hold ready", then "hold armed".
+
+**Run:** each pass shows "Pass N: ... [W by the model]", 3 s in air, then the cut.
+**If the hold trips: do NOT Cycle Start again.** Stop the program and note the pass: that's the limit.
+
+**After:** copy `op1a-calibrate-v5.nc.cutlog.json`, `.wav` and rcnc's `log.txt`.
+
+## Op 1a v4 (RAN 2026-11-18; in old-do-not-use/): the VFD before/after test
+
+v2 run 1 (2026-11-18) ran passes 1-20; the bog guard held in pass 21, 0.3 x 12 at F1200 **S12000**, at 8% sag
+(about 700 rpm of slip on an air speed of about 11 640). The VFD (H100) was then found to give the spindle half
+its flux: **F004 (reference frequency) 400 -> 200** since then (in air: 12k now 200 Hz 108 V 1.6 A, was 55 V
+0.63 A; 24k unchanged, the drive can't give more than 110 V). v4 repeats the cut that bogged, unchanged, then
+finishes the bar at 24k:
+- **passes 21/22 exactly as in v2**: 0.3 x 12 F1200 at S12000. Pass 21 runs in air down to Y-8.1, where run 1
+  stopped, then cuts;
+- **passes 23-32 as planned, at 24k** (0.8 x 6, 0.4 x 12, the thin-chip 0.6 x 12 at F1200, 1.0 x 6, 0.45 x 12;
+  peak 499 W by the model, rCAD's sim 472 W): the bar ends as op 1 (`op1-top.nc`) expects, and they show whether
+  24k really is unchanged (set 29/30 and 31/32 against run 1's 13/14: 0.3 x 12 sagged 2.7% at 24k).
+- Every speed change is followed by 3 s in air (each pass's "Pass N" message and G4 P3): the bog guard learns each
+  speed's no-load speed there.
+
+**What to expect in 21/22:**
+- **if the fix works:** the motor at full flux slips about a quarter as much for the same torque: about 175 rpm,
+  **about 1.5% sag**, steady. No hold.
+- **if it doesn't:** about 8% and still falling, as in run 1: the hold trips (6% for 0.3 s, or over 4% and still
+  falling for 0.5 s). Then stop the program and send the logs; don't Cycle Start through it.
+
+**Before:**
+- **The VFD must have F004 = 200** for this run (check on the drive before starting; it was 400 in run 1).
+- **Don't unclamp the bar.** v4 has no Find stock (the bar's -X side is cut down to Z20, so it can't measure the
+  32 width any more): it uses v2's G54. rcnc keeps work offsets in its data folder (state.json) across restarts
+  and rebuilds; they are machine coordinates, good again once the machine is homed.
+- Home the machine, then check **G54 X/Y = machine X120.472 Y387.240** (what v2 run 1's Find stock set,
+  2026-11-18 01:06; Z from the Vise reference). If it isn't, or the bar has been unclamped, stop and ask for a
+  re-plan.
+- rcnc on fix/guard-arm (this build): it hears the spindle at every speed; status "hold ready", then "hold armed"
+  once the spindle has run in air.
+- T24 stays the same tool (re-measured at the tool change).
+- If you can: reset the wall meter's max just before pass 29 (the 1.0 x 6), and note it at the end.
+
+**Run:** each pass shows "Pass N: ...", 3 s in air, then the cut. If the hold trips, stop and note the pass.
+
+**After:** copy `op1a-calibrate-v4.nc.cutlog.json` and `.wav` from beside the program.
+
+## Op 1a v3 (superseded by v4, not run; in old-do-not-use/)
+
+## Op 1a v2 (RAN 2026-11-18, passes 1-20; now in old-do-not-use/): calibration passes
 
 **STOCK 32 × 32 × 120.7** (measured). The first program, `old-do-not-use/op1a-calibrate-v1-…`, broke T24 in its
 C4 (1.8 × 6 at F2400): the spindle stalled.
@@ -70,48 +203,46 @@ and wall W.
 
     python3 analyse.py op1a-calibrate-v2.nc.cutlog.json op1a-calibrate-v2.nc.air.cutlog.json predicted.json wall_watts.json
 
-## Op 1: the gauge's top side (`op1-top.nc`, about 50 min plus one chip pause)
+## Op 1: the gauge's top side (`op1-top.nc`, about 40 min plus one chip pause) — FOR REVIEW
 
-Re-planned for the **32 × 32 bar** and the spindle pull-out model (645 W stall at 24k):
-- every bulk cut is a **straight pass at ≤ 1 mm stepover**;
-- **peak 432 W** by rCAD's sim; nothing over 450.
+Re-planned 2026-11-18 for the spindle as measured with the VFD at **F004 = 150**: full torque up to 9000 rpm (9k
+carried 850-1049 W by rCAD's model steady in op1a v7), weak above (24k: never over about 450 W). The bulk is now
+**straight passes at S9000**, about 620 W each (caution 850 W, never-exceed 950 W at 9k); the finishing, the ball
+and the chamfer stay at 24k as before. Peak **778 W** (the first band strip: it also takes the 0.8 layer under the
+already-cut -X side). Every S change is followed by 3 s in air (G4 P3): the bog guard learns that speed's no-load
+speed there.
 
-Run it straight after op1a v2, **without unclamping**:
-- It doesn't probe: G54 stays from op 1a.
-- Its stock model is what op1a v2 leaves: z 32 in the middle, the +X side at z 26 in to x +6.4, the −X side at
-  z 20 in to x −9.7.
-- It has `(RCNC REQUIRE_GUARD)`: keep Listening on with the feed hold armed.
+The stock it starts from: the bar as op1a v2-v6 left it (the -X side cut down to Z20 in to x +0.25; a rib
+x 0.25..6.4 up to Z32.09; the +X side at Z26 from x 6.4). v7 then cut x 0.25..3.45 down to Z20 too: the first band
+strips run partly in air, lighter than the simulation shows.
 
-| # | Tool | Operation | Passes | Time | Peak W (spindle %) |
-|---|---|---|---|---|---|
-| 1 | T24 | **Band z32 → 26** (the middle, x +6.4 → −9.7): 0.85 × 6 strips, **F2100**, climb along +Y | 19 | 1:54 | 427 (66%) |
-| 2 | T24 | **Band z26 → 19.2** (x +16 → −9.7): 0.73 × 6.8, **F2100** | 35 | 4:05 | 423 (66%) |
-| 3 | T24 | Band −X side z20 → 19.2: 0.9 × 0.8 | 7 | 0:42 | 63 |
-| 4 | T24 | **Finish the gauge's top**: face z19.2 → 19, one 0.2 level | 1 | 0:54 | 47 |
-| 5 | T24 | **Lugs** z19 → 8: lines across X, 0.89 strips from each free end in, two 5.5 levels each; last line 0.3 off the end face | 72 | 7:12 | 432 (67%) |
-| 6 | T24 | **Side strips** beside the gauge z19 → 8.5: five 0.84 strips a side from the bar's edge in, two 5.25 levels | 20 | 2:50 | 413 (64%) |
-| 7 | T24 | Rough the thumb dish (adaptive, 0.64 stepover, 1 mm levels) | 1 | 7:35 | 299 |
-| 8 | T24 | Rough the slots and reliefs: traced inside, 1 mm levels, F1000, 0.2 left on the walls | 1 | 0:46 | 242 |
-| — | | **CHIP PAUSE**: spindle and coolant stop. Blow the chips out of the two slots and their reliefs, then Cycle Start. | | | |
-| 9 | T24 | Rough the walls z8.5 → **5.5** beside the jaws (adaptive, 0.64 stepover, 1.5 levels, 0.3 left) | 1 | 7:14 | 258 |
-| 10 | T24 | **Finish the slot walls and relief stop walls**: one full-depth 6 mm pass at **F1200** (the relief corners carry more) | 1 | 0:15 | 321 |
-| 11 | T24 | **Finish** the walls and end faces z19 → 8, one full-height pass (seam mid −X side) | 1 | 0:47 | 254 |
-| 12 | T24 | Finish the walls z8 → **5.5** (lugs' outsides too), F1200 | 1 | 0:43 | 225 |
-| 13 | T24 | Two Ø8 bores through the lugs at **y ±53.5** (op 2 finds them), to Z−0.5 | 1 | 0:28 | 190 |
-| 14 | T11 | Finish the thumb dish: scallop, **0.2 stepover (0.033 D)** | 1 | 8:55 | 5 |
-| 15 | T1 | Engrave the numbers 0.3 deep | 1 | 0:28 | |
-| 16 | T1 | Edge break 0.3 on the two bore mouths | 1 | 0:08 | |
-| 17 | T1 | Edge break 0.3 on every edge of the gauge's top: outline, slots, reliefs, dish rim | 1 | 0:16 | |
+**Before:** F004 = 150. rcnc on guard-slip; Settings -> Listening **1400 rpm / 7%**. Don't unclamp: G54 from v2
+(home, check machine X120.472 Y387.240).
 
-**Loads:**
-- The band passes are F2100, not F2400. rCAD's sim grid (0.134 cells) reads the 0.85 / 0.73 strips about 0.1
-  wider; at F2400 the sim read 472 W. The plan model (true width) gives 431 W at F2400 and about 400 at F2100.
-- Each pass runs y −67 → +67: plunge and exit are in air past the sawn ends.
-- Every straight pass climbs, with the material on the tool's left.
-- The bog guard is the backstop on all of it.
+| Step | Passes | Time | Peak W (model) |
+|---|---|---|---|
+| Band set 1: x 0.25..6.4, z32.1->19.2, 0.88 x 12.9 F1860 S9000 | 7 | 0:49 | 778 |
+| Band set 2: x 6.4..16, z26->19.2, 0.96 x 6.8 F3000 S9000 | 10 | 1:00 | 557 |
+| Band set 3: the -X skin z20->19.2, 0.96 x 0.8 F3000 S9000 | 17 | 1:42 | 66 |
+| Finish the gauge's top: face z 19.2 to 19, one 0.2 level | 1 | 0:54 | 228 |
+| Lugs z19->8: 0.89 x 11 F2270 S9000, 36 lines | 36 | 4:12 | 649 |
+| Side strips z19->8.5: 0.84 x 10.5 F2580 S9000, 10 lines | 10 | 1:20 | 683 |
+| Rough the thumb dish | 1 | 7:35 | 299 |
+| Rough the top slots and their end reliefs, 0.2 left on the walls | 1 | 0:46 | 242 |
+| Rough the walls Z8.5 to Z5.5 beside the jaws | 1 | 7:14 | 258 |
+| Finish the slot walls and the relief stop walls, one full-depth 6 mm pass round their outl | 1 | 0:15 | 321 |
+| Finish the walls and end faces Z19 to Z8, one full-height pass | 1 | 0:47 | 254 |
+| Finish the walls Z8 to Z5.5 | 1 | 0:43 | 225 |
+| Two Ø8 bores through the lugs | 1 | 0:28 | 190 |
+| Finish the thumb dish | 1 | 8:55 | 5 |
+| Engrave the top numbers 0.3 deep | 1 | 0:28 | 0 |
+| Edge break 0.3 on the two bore mouths in the lugs | 1 | 0:08 | 0 |
+| Edge break 0.3 on every edge of the gauge's top: outline | 1 | 0:16 | 0 |
 
-**Chips:** chip index at most 0.21 on the straight passes. The slot rough is 0.71, so the pause stays after it.
-Bores 0.50.
+- **CHIP PAUSE** after the slot rough (chip index 0.71), as before.
+- rCAD simulation: ok, no problems. The "unfinished" 792 mm² is the carrier's top beside the gauge, as before.
+- rcnc simulator: runs to the end in 2189 s (36:29): T24, the chip pause, T11, T1; S9000 / S24000 changes each
+  with a 3 s dwell.
 
 **Jaw clearance:**
 - The jaws grip the bar's bottom 4.7 (4.13 in the CAD), so nothing in op 1 goes below **Z5.5** within
@@ -157,7 +288,7 @@ end faces Z19 → 8 (11) and Z8 → 5.5 (12), dish (14).
 - deburr their **bottom ends** by hand (a deburring tool or countersink, lightly). That's where the bores
   broke through in op 1, and it's the side op 2 probes from.
 
-Op 2's program also says so before Find bores.
+Op 2's program also says so before probing.
 
 **What op 1 leaves for op 2:**
 - the gauge's top side finished;
@@ -167,35 +298,49 @@ Op 2's program also says so before Find bores.
 - the end lugs (8 thick) with the two Ø8 bores at y ±53.5;
 - beside the walls, the bar from Z0 to Z5.5 (the jaws' grip).
 
-## Op 2: the gauge's bottom side (`op2-bottom.nc`, about 11:40 plus two stops)
+## Op 2: the gauge's bottom side (`op2-bottom.nc`, about 6:05 plus three stops) — FOR REVIEW
 
-Re-planned for the 32 mm bar on the pull-out model, like op 1: straight passes at ≤ 1 mm stepover, **peak
-393 W** by rCAD's sim. It has `(RCNC REQUIRE_GUARD)`.
+Re-planned 2026-11-18 for the VFD at **F004 = 150**: the carrier at **S12000** (the top surface: chips fling better
+than at 9k, Jonas), the lugs and side strips at **S9000**, all shallow (2.8-5.5 deep), straight passes **both
+ways** (every other one conventional: roughing). rCAD's new linking (`stay_down`) keeps the tool down between
+strips where the way is clear (off the bar's ends, beside it) and lifts only as high as the stock still there needs.
+Since 2026-11-18 06:00 it also finishes one region before moving on (`order_by_region`): the rest rough no longer
+bounces end to end (49 s with 48 s of it air and 34 links over 20 mm, now 20 s, 19.5 s air, 4 long links).
 
-1. **Unclamp and flip** the part: op 1's finished top goes down on the ledges.
-   - Turn it over about X (end for end along Y stays). The bores and the part are symmetric, so either way
-     lands the same.
-   - Close the jaws on the **23 mm finished walls**, gripping 4.7.
-   - The lugs stand up past the jaw ends.
-2. Cycle Start. **The program stops first**: blow the chips out of both lug bores and deburr their upper ends
-   (where they broke through in op 1).
-3. `(RCNC Z_REFERENCE Vise)`, then T99 **Find bores**: `A=0,-53.5 B=0,53.5 D=8 TOP=19 DEPTH=4 TOL=0.1 ROT=0.2`.
-   This sets X/Y from the bores **before any cutting**. If a check fails, rcnc holds with Probe again.
-4. T24 (Tap test), then T1:
+1. **Unclamp and flip** the part: op 1's finished top goes down on the ledges. Turn it over about X. Close the jaws
+   on the **23 mm finished walls**, gripping 4.7. The lugs stand up past the jaw ends.
+2. Cycle Start. **The program stops first**: blow the chips out of both lug bores and deburr their upper ends.
+3. `(RCNC Z_REFERENCE Vise)`, then T99 **Find stock** (Jonas: op 2 starts with it; op 1's G54 doesn't hold for the
+   flipped part): jog the probe over the middle of the part (within about 8 mm), a few mm above it. It touches the
+   top, then the bar's outline that op 1 left above the jaws (the full bar, 31.9 x 120.45, from Z13.5 to Z19: op 1
+   cut beside the gauge only down to its Z5.5 and kept the carrier and lugs full width) at Z16, and sets a coarse
+   X/Y: `SIZE=31.9,120.45,19 AT=0,0,19 DEPTH=3 TOL=1 KEEPZ=1`. Z stays on the Vise reference.
+4. Then **Find bores** in the lugs for the exact X/Y: `A=0,-53.5 B=0,53.5 D=8 TOP=19 DEPTH=4 TOL=0.1 ROT=0.2`.
+5. T24, then T1. Stops: a **chip pause** after the slot rough, and a **chip pause before the finishing** (blow the
+   slots, the reliefs and the top clear), then the finishing.
 
-| # | Tool | Operation | Passes | Time | Peak W (spindle %) |
-|---|---|---|---|---|---|
-| 1 | T24 | **Carrier off** z19 → 16.2: 1.0 × 2.8 strips across the whole bar, climb | 32 | 2:08 | 248 (38%) |
-| 2 | T24 | **Finish the gauge's bottom**: face z16.2 → 16, one 0.2 level | 1 | 0:53 | 47 |
-| 3 | T24 | Rough the bottom slots and reliefs (1 mm levels, F1000, 0.2 left) | 1 | 0:43 | 242 |
-| — | | **CHIP PAUSE**: blow the chips out of the slots and reliefs (chip index 0.92), then Cycle Start | | | |
-| 4 | T24 | **Lugs off**: lines across X, 0.89 strips 5.5 deep from each lug's free end in, each climbing; the last stops 0.3 off the end face | 36 | 1:48 | 393 (61%) |
-| 5 | T24 | **Side strips** beside the walls z16 → 12.5: what op 1 left over the carrier (it stopped at op 1's Z5.5 = here Z13.5), 1 mm past it, five 0.84 strips a side | 10 | 0:50 | 232 (36%) |
-| 6 | T24 | Rough whatever is left down to Z5 (adaptive, 0.64 stepover, rest) | 1 | 0:55 | 113 |
-| 7 | T24 | Finish the slot walls and relief stop walls, one full-depth pass at **F1200** | 1 | 0:11 | 321 |
-| 8 | T24 | **Finish** the walls and end faces z16 → 10.5, one full-height pass (meets op 1's finish, 3 mm overlap; seam mid −X) | 1 | 0:25 | 169 |
-| 9 | T1 | Engrave the bottom numbers (22, 26) 0.3 deep | 1 | 0:13 | |
-| 10 | T1 | Edge break 0.3 on every edge of the bottom face: outline (includes the end faces' bottom edges), slots, reliefs | 1 | 0:12 | |
+**Before:** F004 = 150. rcnc on guard-slip; Settings -> Listening **1400 rpm / 7%**.
+
+| Step | Passes | Time | Air time (before) | Peak W (model) |
+|---|---|---|---|---|
+| Probe lug bore A | 1 | 0:06 | 6 s (was 6) | 0 |
+| Probe lug bore B | 1 | 0:06 | 6 s (was 6) | 0 |
+| Carrier off z19->16.2: 32 strips 1.0 x 2.8, F3000 S12000, both ways | 32 | 1:37 | 20 s (was 51) | 246 |
+| Finish the gauge's bottom: face z 16.2 to 16 | 1 | 0:53 | 12 s (was 12) | 111 |
+| Rough the bottom slots and their end reliefs | 1 | 0:42 | 4 s (was 5) | 242 |
+| Lug passes: 36 lines across X, 0.89 x 5.5, F3000 S9000, both ways | 36 | 0:40 | 18 s (was 86) | 364 |
+| Side strips z16->12.5: 10 lines 0.84 x 3.5, F3000 S9000, both ways | 10 | 0:33 | 15 s (was 32) | 182 |
+| Rough what is left down to Z5, region by region | 1 | 0:20 | 19.5 s (was 46, and 58 with the old links; long links 4, was 34) | 105 |
+| Finish the slot walls and the relief stop walls | 1 | 0:10 | 4 s (was 5) | 321 |
+| Finish the walls and end faces Z16 to Z10.5 | 1 | 0:25 | 20 s (was 19) | 165 |
+| Engrave the bottom numbers 0.3 deep | 1 | 0:07 | 4 s (was 10) | 0 |
+| Edge break 0.3 on every edge of the bottom face: outline | 1 | 0:13 | 2 s (was 1) | 0 |
+
+- **6:04 in all** by rCAD (6:33 before the region ordering, 9:07 with the old linking, and 11:16 before the
+  re-plan); the rcnc simulator runs it in 10:56 with Find stock, Find bores and the three stops (was 11:14).
+- Peak **364 W** (a lug pass). The S12000 carrier is 246 W, under 12k's 684 W caution.
+- rCAD simulation: ok, no problems (no rapid into the stock, the part or a fixture); unfinished 1 mm² (the
+  slot/relief corner grid). rcnc simulator: Find stock from the probe jogged 5 / 8 mm off the middle (and -5 / -8, -8 / +8, 0 / 0) reads 31.900 x 120.450; Find bores, the bores 0.4 / 0.3 mm off, reads them 107.000 apart. Started more than about 8 mm off along an axis, Find stock misses that side and holds (nothing set: Probe again).
 
 **Nothing comes loose:**
 - The carrier goes as chips, strip by strip.
@@ -206,13 +351,6 @@ Re-planned for the 32 mm bar on the pull-out model, like op 1: straight passes a
 
 **Grip and clearance:** the jaws hold the gauge's walls (op 2 Z0 → 4.7); nothing in op 2 goes below Z10.0
 (the slot floors), checked on the posted G-code: 5.3 above the jaw tops. rCAD's fixture clearance is 0.8, no flags.
-
-Check results:
-- **rCAD simulation:** op 2 starts from what op 1 really leaves. No problems; unfinished 1 mm² (the
-  slot/relief corner grid).
-- **rcnc simulator:** runs to the end in 846 s, with the lug bores in the bar started 0.4 / 0.3 mm off on
-  purpose. Find bores reads both bores 107.000 apart and moves G54 onto them.
-  - For the sim only, a Find stock at the start stands in for op 1's G54.
 
 **Sharp edges left for a file (vertical edges: a chamfer mill can't reach them):**
 - the gauge's **4 outside vertical corners**;
