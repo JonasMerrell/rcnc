@@ -1,0 +1,60 @@
+2026-11-18 05:29:05Z Loaded op2-bottom.nc
+2026-11-18 05:29:07Z Z zero for this work offset and the tools measured from now on: the Vise reference
+2026-11-18 05:29:07Z Before probing: blow the chips out of both lug bores and deburr their upper ends [where they broke through in op 1], then press Cycle Start
+2026-11-18 05:29:09Z T99 is already loaded
+2026-11-18 05:29:09Z Find stock: tap the probe's stylus, jog it over the middle of the stock, a few mm above the top, then press Continue
+2026-11-18 05:29:19Z Find stock: probe input works
+2026-11-18 05:29:23Z Find stock: probing down from machine Z-78.300; the sides 3.000 mm below the top, size within ±1.500 mm
+2026-11-18 05:29:23Z Probe: touched Z between -82.3050 and -82.4400, stopped at -82.4400 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:25Z Probe: touched Z between -82.3950 and -82.4000, stopped at -82.4000 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:25Z Find stock: top at machine Z-82.400
+2026-11-18 05:29:27Z Probe: touched X between 99.0600 and 99.1500, stopped at 99.1500 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:29Z Probe: touched X between 99.1100 and 99.1250, stopped at 99.1250 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:32Z Probe: touched X between 133.0650 and 132.9850, stopped at 132.9850 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:34Z Probe: touched X between 133.0250 and 133.0150, stopped at 133.0150 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:37Z Probe: touched Y between 332.5150 and 332.5600, stopped at 332.5600 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:39Z Probe: touched Y between 332.5200 and 332.5350, stopped at 332.5350 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:43Z Probe: touched Y between 453.6050 and 453.5400, stopped at 453.5400 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:45Z Probe: touched Y between 453.5800 and 453.5750, stopped at 453.5750 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:45Z Stock found: X 31.890 × Y 119.040 (job: 31.900 × 119.000), centre machine X116.070 Y393.055; work X/Y set, Z kept. Top at Z18.950 (-0.050 mm from the job's)
+2026-11-18 05:29:47Z Find stock done
+2026-11-18 05:29:47Z Find bores: Ø8.000 at X0.000 Y-53.500 and X0.000 Y53.500
+2026-11-18 05:29:49Z Probe: touched X between 118.9900 and 119.0450, stopped at 119.0450 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:50Z Probe: touched X between 119.0200 and 119.0250, stopped at 119.0250 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:51Z Probe: touched X between 113.1300 and 112.9600, stopped at 112.9600 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:53Z Probe: touched X between 112.9850 and 112.9800, stopped at 112.9800 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:54Z Probe: touched Y between 341.9750 and 342.0350, stopped at 342.0350 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:55Z Probe: touched Y between 341.9950 and 342.0100, stopped at 342.0100 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:56Z Probe: touched Y between 336.1350 and 335.9600, stopped at 335.9600 (0.0000 past the first poll that saw it)
+2026-11-18 05:29:58Z Probe: touched Y between 336.0050 and 336.0000, stopped at 336.0000 (0.0000 past the first poll that saw it)
+2026-11-18 05:30:01Z Probe: touched X between 118.9900 and 119.2300, stopped at 119.2300 (0.0000 past the first poll that saw it)
+2026-11-18 05:30:03Z Probe: touched X between 119.1900 and 119.2050, stopped at 119.2050 (0.0000 past the first poll that saw it)
+2026-11-18 05:30:04Z Probe: touched X between 113.1500 and 113.1450, stopped at 113.1450 (0.0000 past the first poll that saw it)
+2026-11-18 05:30:06Z Probe: touched X between 113.1550 and 113.1500, stopped at 113.1500 (0.0000 past the first poll that saw it)
+2026-11-18 05:30:06Z Probe: touched Y between 448.9950 and 449.0850, stopped at 449.0850 (0.0000 past the first poll that saw it)
+2026-11-18 05:30:08Z Probe: touched Y between 449.0500 and 449.0600, stopped at 449.0600 (0.0000 past the first poll that saw it)
+2026-11-18 05:30:09Z Probe: touched Y between 443.1000 and 443.0300, stopped at 443.0300 (0.0000 past the first poll that saw it)
+2026-11-18 05:30:11Z Probe: touched Y between 443.0700 and 443.0600, stopped at 443.0600 (0.0000 past the first poll that saw it)
+2026-11-18 05:30:11Z Bores found: bores Ø8.045 and Ø8.055, 107.055 mm apart (should be 107.000), part turned -0.094°; work X/Y set from their middle
+2026-11-18 05:30:11Z Find bores done
+2026-11-18 05:30:12Z Tool change to T24 started
+2026-11-18 05:30:16Z Load tool 24, then press Continue (or Cycle Start)
+2026-11-18 05:31:24Z Probe: touched Z between -84.3450 and -84.3800, stopped at -84.3800 (0.0000 past the first poll that saw it)
+2026-11-18 05:31:25Z Probe: touched Z between -84.3350 and -84.3500, stopped at -84.3500 (0.0000 past the first poll that saw it)
+2026-11-18 05:31:27Z Probe: touched Z between -84.3450 and -84.3500, stopped at -84.3500 (0.0000 past the first poll that saw it)
+2026-11-18 05:31:27Z Tool touched off: Z zero set on the vise, setter top at Z40.610
+2026-11-18 05:31:28Z Tool 24 loaded
+2026-11-18 05:31:28Z Staying at the safe height: going back to the same work Z would go lower than where the change began
+2026-11-18 05:31:35Z Tool change to T24 done
+2026-11-18 05:35:09Z Blow the chips out of the two slots and their end reliefs [spindle and coolant are off], then press Cycle Start
+2026-11-18 05:37:38Z Before the finishing: blow the chips out of the slots and reliefs and off the top [spindle and coolant are off], then press Cycle Start
+2026-11-18 05:38:45Z Tool change to T1 started
+2026-11-18 05:38:49Z Load tool 1, then press Continue (or Cycle Start)
+2026-11-18 05:39:51Z Probe: touched Z between -90.5100 and -90.5600, stopped at -90.5600 (0.0000 past the first poll that saw it)
+2026-11-18 05:39:53Z Probe: touched Z between -90.5200 and -90.5300, stopped at -90.5300 (0.0000 past the first poll that saw it)
+2026-11-18 05:39:55Z Probe: touched Z between -90.5250 and -90.5300, stopped at -90.5300 (0.0000 past the first poll that saw it)
+2026-11-18 05:39:55Z Tool touched off: Z zero set on the vise, setter top at Z40.610
+2026-11-18 05:39:55Z Tool 1 loaded
+2026-11-18 05:39:55Z Staying at the safe height: going back to the same work Z would go lower than where the change began
+2026-11-18 05:40:01Z Tool change to T1 done
+2026-11-18 05:40:40Z Program finished
