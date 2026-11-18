@@ -22,7 +22,43 @@ REQUIRE_GUARD) and (RCNC RECORD_AUDIO).
 
 At each change, use **Tap test** in the tool change window (Settings → Listening on).
 
-## Op 1a v4: the VFD before/after test, then the rest of v2 (`op1a-calibrate-v4.nc`, about 3:00 plus a tool change)
+## Op 1a v5: the 12k ladder (`op1a-calibrate-v5.nc`, about 3:30 plus a tool change)
+
+v4 (2026-11-18) repeated run 1's 12k cut with the VFD's **F004 = 200**: it didn't bog at all. v5 finds how much the
+spindle carries at 12000 rpm now: ten single passes, all at **S12000**, 12 deep (Z32 -> Z20) from the bar's -X wall
+(x -9.7) in, each about 80-120 W (rCAD's model) heavier than the one before, from 247 W to 1130 W. Everything cut is
+waste above the gauge (Z3-Z19): op 1 later meets only less material. A 6.3 mm wide core is left (x +0.1 to +6.4).
+
+| Pass | Step over | Depth | Feed | Model W | N·m | MRR cm³/min | Chip (max) mm | Force N | Tool bend mm | Tool stress MPa | Strip x |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 0.45 | 12 | F1200 | 247 | 0.20 | 6.5 | 0.017 | 62 | 0.006 | 87 | -9.70 .. -9.25 |
+| 2 | 0.7 | 12 | F1200 | 364 | 0.29 | 10.1 | 0.021 | 91 | 0.009 | 128 | -9.25 .. -8.55 |
+| 3 | 0.8 | 12 | F1500 | 484 | 0.39 | 14.4 | 0.028 | 121 | 0.012 | 170 | -8.55 .. -7.75 |
+| 4 | 1 | 12 | F1500 | 590 | 0.47 | 18.0 | 0.03 | 148 | 0.015 | 207 | -7.75 .. -6.75 |
+| 5 | 1 | 12 | F1800 | 676 | 0.54 | 21.6 | 0.036 | 169 | 0.017 | 237 | -6.75 .. -5.75 |
+| 6 | 1 | 12 | F2100 | 759 | 0.60 | 25.2 | 0.042 | 190 | 0.019 | 266 | -5.75 .. -4.75 |
+| 7 | 1 | 12 | F2400 | 839 | 0.67 | 28.8 | 0.049 | 210 | 0.021 | 294 | -4.75 .. -3.75 |
+| 8 | 1.15 | 12 | F2400 | 949 | 0.76 | 33.1 | 0.051 | 238 | 0.024 | 333 | -3.75 .. -2.60 |
+| 9 | 1.3 | 12 | F2400 | 1058 | 0.84 | 37.4 | 0.054 | 265 | 0.026 | 371 | -2.60 .. -1.30 |
+| 10 | 1.4 | 12 | F2400 | 1130 | 0.90 | 40.3 | 0.055 | 283 | 0.028 | 396 | -1.30 .. +0.10 |
+
+- Chips stay 0.017-0.055 mm (3 flutes, F = 1200-2400).
+- The tool is not the limit: at the top step about 400 MPa of its 800, 0.03 mm of bend (rCAD's model, 24 out,
+  the force at mid-depth). The ladder is capped by the bar's width (the 6 mm core), at 1130 W.
+- Expected: unknown. The estimate for the pull-out at 12k now is between 650 and 1300 W by the model; at 24k it
+  stays at about 645 W (the drive can't give more than 110 V there).
+
+**Before:**
+- **The VFD must have F004 = 200.**
+- **Don't unclamp the bar**: v5 uses v2's G54. Home, check **G54 X/Y = machine X120.472 Y387.240**.
+- rcnc on fix/guard-arm (this build); Settings -> Listening on, hold on: "hold ready", then "hold armed".
+
+**Run:** each pass shows "Pass N: ... [W by the model]", 3 s in air, then the cut.
+**If the hold trips: do NOT Cycle Start again.** Stop the program and note the pass: that's the limit.
+
+**After:** copy `op1a-calibrate-v5.nc.cutlog.json`, `.wav` and rcnc's `log.txt`.
+
+## Op 1a v4 (RAN 2026-11-18; in old-do-not-use/): the VFD before/after test
 
 v2 run 1 (2026-11-18) ran passes 1-20; the bog guard held in pass 21, 0.3 x 12 at F1200 **S12000**, at 8% sag
 (about 700 rpm of slip on an air speed of about 11 640). The VFD (H100) was then found to give the spindle half
