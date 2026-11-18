@@ -61,6 +61,9 @@ pub struct Generator {
     position: Axes,
     steps: [i64; 6],
     pub feed_override: f64,
+    /// The adaptive feed (listening: the spindle's sag; over 1 in air): a share of the programmed feed, on feed
+    /// moves only (over 1 not on moves going down), on top of `feed_override`.
+    pub adaptive: f64,
     pub rapid_override: f64,
     pub hold: bool,
     /// Path length past which no move can limit the speed now (see `tick`).
@@ -88,6 +91,7 @@ impl Generator {
             position: start,
             steps,
             feed_override: 1.0,
+            adaptive: 1.0,
             rapid_override: 1.0,
             hold: false,
         }
@@ -193,8 +197,11 @@ impl Generator {
     fn speed_scale(&self, m: &Planned) -> f64 {
         if m.rapid {
             self.rapid_override
-        } else {
+        } else if self.adaptive > 1.0 && m.unit[2] < -0.05 {
+            // never faster than programmed going down (a plunge or a ramp meets the work)
             self.feed_override
+        } else {
+            self.feed_override * self.adaptive
         }
     }
 

@@ -71,6 +71,12 @@ pub struct Tool {
     pub stickout: f64,
     /// Photo shown at a tool change in place of the drawing, if set.
     pub image: String,
+    /// Flutes (teeth), 0 if not known: the tooth-passing tone a microphone hears.
+    pub flutes: u32,
+    /// The tool's first bending mode from a tap test at this stick-out (0: not measured): frequency, Hz,
+    /// and damping ratio, for rCAD's chatter model.
+    pub mode_hz: f64,
+    pub mode_zeta: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -196,6 +202,9 @@ pub enum Op {
     /// Zero every tool measured from now on on this setter reference (an
     /// `(RCNC Z_REFERENCE Vise)` comment): the job's Z0 is that surface.
     ZReference(String),
+    /// G64 (`blend`: constant velocity, corners rounded within the planner's
+    /// junction deviation) or G61 / G61.1 (exact stop at the end of every move).
+    PathMode { blend: bool },
     ProgramEnd,
 }
 
@@ -611,6 +620,37 @@ impl Interpreter {
         self.lines.len()
     }
 
+    /// The first line from where the program will start that needs the machine homed, and why: a tool
+    /// change (M6, when `tool_changes` go to machine positions), machine coordinates (G53, G28, G30)
+    /// or a probing routine (`(RCNC FIND_STOCK ...)`, `FIND_BORES`, `PROBE_Z`). Its number counts from 1.
+    pub fn needs_homing(&self, tool_changes: bool) -> Option<(usize, &'static str)> {
+        self.lines.iter().enumerate().skip(self.pc).find_map(|(n, line)| {
+            let up = line.to_ascii_uppercase();
+            let (code, comment) = up.split_once(['(', ';']).unwrap_or((up.as_str(), ""));
+            if ["RCNC FIND_STOCK", "RCNC FIND_BORES", "RCNC PROBE_Z"].iter().any(|d| comment.trim_start().starts_with(d)) {
+                return Some((n + 1, "a probing routine"));
+            }
+            // words: a letter and the number after it
+            let mut words = vec![];
+            let mut chars = code.chars().filter(|c| !c.is_whitespace()).peekable();
+            while let Some(c) = chars.next() {
+                if c.is_ascii_alphabetic() {
+                    let mut num = String::new();
+                    while let Some(d) = chars.peek().filter(|d| d.is_ascii_digit() || **d == '.') {
+                        num.push(*d);
+                        chars.next();
+                    }
+                    words.push((c, num.parse::<f64>().unwrap_or(f64::NAN)));
+                }
+            }
+            words.iter().find_map(|(c, v)| match (c, *v) {
+                ('M', v) if v == 6.0 && tool_changes => Some((n + 1, "a tool change")),
+                ('G', v) if v == 53.0 || v == 28.0 || v == 30.0 => Some((n + 1, "machine coordinates")),
+                _ => None,
+            })
+        })
+    }
+
     /// Next line to execute.
     pub fn pc(&self) -> usize {
         self.pc
@@ -949,7 +989,8 @@ impl Interpreter {
                     self.state.tlo_tool = None;
                 }
                 540..=590 if g % 10 == 0 => self.state.coord_system = ((g - 540) / 10) as usize,
-                610 | 611 | 640 => {}
+                610 | 611 => ops.push(Op::PathMode { blend: false }),
+                640 => ops.push(Op::PathMode { blend: true }),
                 900 => self.state.absolute = true,
                 910 => self.state.absolute = false,
                 901 => self.state.arc_absolute = true,
@@ -1650,6 +1691,29 @@ mod tests {
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-6
+    }
+
+    #[test]
+    fn finds_what_needs_homing() {
+        assert_eq!(Interpreter::new("G0 X1\nG1 Y2 F100\nM30").needs_homing(true), None);
+        assert_eq!(Interpreter::new("G0 X1 (M6 in a comment)\nT1 M06\nM30").needs_homing(true), Some((2, "a tool change")));
+        assert_eq!(Interpreter::new("T1 M6\nM30").needs_homing(false), None, "a tool change done where the tool is");
+        assert_eq!(Interpreter::new("G0 X1\nG53 G0 Z0\nM30").needs_homing(true), Some((2, "machine coordinates")));
+        assert_eq!(Interpreter::new("G0 X1\n(RCNC FIND_BORES A=0,0 B=1,0 D=8 TOP=0)\nM30").needs_homing(true), Some((2, "a probing routine")));
+        // M60 / G530 aren't M6 / G53
+        assert_eq!(Interpreter::new("M60\nG0 X5\nM30").needs_homing(true), None);
+    }
+
+    #[test]
+    fn g64_and_g61_set_the_path_mode() {
+        let (_, ops) = run("G64 G1 X1 F100\nG61\nG61.1\nM30");
+        let modes: Vec<_> = ops.iter().filter_map(|o| match o {
+            Op::PathMode { blend } => Some(*blend),
+            _ => None,
+        }).collect();
+        assert_eq!(modes, [true, false, false]);
+        // the mode comes before the move on its line
+        assert!(matches!(ops[0], Op::PathMode { blend: true }), "{ops:?}");
     }
 
     #[test]

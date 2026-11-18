@@ -1,0 +1,12 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Op1 chamfer restart</title>
+<style>body{font:16px system-ui,sans-serif;background:#1d2229;color:#e3e7ec;margin:24px;max-width:760px}h1{font-size:22px}li{margin:6px 0}code{color:#8fc4ef}.w{color:#f2b04a}</style></head><body>
+<h1>Phone stand op 1: chamfer restart</h1>
+<p>For a part that op 1 has already cut (underside up at Z34, 74 × 74 walls, recess and two Ø8 bores done) after the machine was re-homed and G54 can't be trusted. Leave the part clamped as it is. Z0 stays the Vise reference.</p>
+<ol>
+<li><b>T99</b> touch probe: load it, it is measured on the setter.</li>
+<li><b>Find stock</b> 74 × 74, KEEPZ: tap the stylus, jog over the middle of the part a few mm above it, Continue. The top touch lands on the recess floor (Z32): the top only warns. The sides are touched 8 mm below it, on the finished walls. Size within 1 mm.</li>
+<li><b>Find bores</b> runs by itself: the two Ø8 bores at X∓18 Y19.25, 3 mm below the recess floor. Sets X/Y exactly; stops if their spacing is off by more than 0.1 or the part is turned more than 0.2°.</li>
+<li><b>T1</b> 90° chamfer mill (stick-out 22): 0.5 mm chamfers on the underside edges, the recess and the bores, the same moves as op 1.</li>
+</ol>
+<p class="w">About 4 min. Home the machine (Ref All Home) before Cycle Start.</p>
+</body></html>

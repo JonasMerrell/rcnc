@@ -3,7 +3,7 @@
 
 use eframe::egui::{self, Button, DragValue, RichText, ScrollArea, Vec2};
 use gcode::{Tool, AXIS_LETTERS};
-use machine::{mach3, store, Command, MachineConfig, Mode, ProbeJob};
+use machine::{mach3, store, Command, MachineConfig, Mode, ProbeCalShape, ProbeCalTarget, ProbeCalibration, ProbeJob};
 
 use super::palette::*;
 use super::{section_title, App};
@@ -119,6 +119,17 @@ impl App {
                         changed |= ui.add(DragValue::new(&mut t.flute_length).speed(0.1).range(0.0..=500.0).suffix(" mm")).changed();
                         ui.label(RichText::new("Stick out").color(MUTED));
                         changed |= ui.add(DragValue::new(&mut t.stickout).speed(0.1).range(0.0..=500.0).suffix(" mm")).changed();
+                        // the tool just measured, with its stick-out known for sure, calibrates the stick-out check
+                        if self.snap.last_measured_tool == Some(*n) && t.stickout > 0.0 {
+                            let text = if self.snap.config.tool_change.nut_face_z.is_some() { "Recalibrate stick-out check" } else { "Calibrate stick-out check" };
+                            if ui
+                                .small_button(text)
+                                .on_hover_text(format!("T{n} was just measured on the setter and sticks out exactly {} mm from the collet nut: from it, rcnc works out every measured tool's stick-out", t.stickout))
+                                .clicked()
+                            {
+                                self.machine.send(Command::CalibrateStickout { stickout: t.stickout });
+                            }
+                        }
                     });
                     ui.horizontal(|ui| {
                         ui.add_space(tw + ui.spacing().item_spacing.x);
@@ -398,6 +409,79 @@ impl App {
                 ui.end_row();
             });
             ui.add_space(8.0);
+            section_title(ui, "Calibrate probe");
+            {
+                let cal = &p.calibration;
+                let ball = if cal.diameter.iter().all(|d| *d > 0.0) {
+                    format!("Ball X {:.3} / Y {:.3} mm, on the {}", cal.diameter[0], cal.diameter[1], cal.diameter_on)
+                } else {
+                    format!("Ball not calibrated: the Ø{:.3} stylus diameter is used", p.stylus_diameter)
+                };
+                ui.label(RichText::new(ball).color(TEXT));
+                let z = if cal.z_offset_on.is_empty() {
+                    "Z offset not calibrated (0)".to_string()
+                } else {
+                    format!("Z offset {:+.3} mm, on the {} reference", cal.z_offset, cal.z_offset_on)
+                };
+                ui.label(RichText::new(z).color(TEXT));
+                if let Some(r) = s.probe_runout {
+                    ui.label(RichText::new(format!("Ball off centre X {:+.3} Y {:+.3} mm (until the probe comes out)", r[0], r[1])).color(TEXT));
+                }
+            }
+            ui.horizontal(|ui| {
+                for shape in ProbeCalShape::ALL {
+                    if ui.selectable_label(self.pc_shape == shape, shape.name()).clicked() {
+                        self.pc_shape = shape;
+                    }
+                }
+            });
+            let shape = self.pc_shape;
+            ui.horizontal(|ui| {
+                if shape.round() {
+                    ui.label(RichText::new("Diameter").color(MUTED));
+                    num(ui, &mut self.pc_size[0], 0.001, " mm");
+                } else {
+                    ui.label(RichText::new("Size X / Y").color(MUTED));
+                    num(ui, &mut self.pc_size[0], 0.001, " mm");
+                    num(ui, &mut self.pc_size[1], 0.001, " mm");
+                }
+                if !shape.inside() {
+                    ui.label(RichText::new("sides").color(MUTED));
+                    num(ui, &mut self.pc_depth, 0.1, " mm");
+                    ui.label(RichText::new("below the top").color(MUTED));
+                }
+            });
+            let idle = s.mode == Mode::Idle;
+            let size = if shape.round() { [self.pc_size[0]; 2] } else { self.pc_size };
+            let hint = "Effective ball size in X and Y. Then you can turn the probe half a turn and measure again to find how far it's off centre";
+            if ui
+                .add_enabled(idle && probe_in, Button::new(format!("Calibrate ball on the {}", shape.name().to_lowercase())).min_size(Vec2::new(260.0, 32.0)))
+                .on_hover_text(hint)
+                .clicked()
+            {
+                self.machine.send(Command::CalibrateProbe(ProbeCalTarget::Shape { shape, size, depth: self.pc_depth }));
+            }
+            ui.horizontal(|ui| {
+                let refs = &p.setter.references;
+                self.pc_zref = self.pc_zref.min(refs.len().saturating_sub(1));
+                let name = refs.get(self.pc_zref).map_or("—".to_string(), |r| r.name.clone());
+                egui::ComboBox::from_id_salt("probe-cal-zref").selected_text(name).show_ui(ui, |ui| {
+                    for (i, r) in refs.iter().enumerate() {
+                        ui.selectable_value(&mut self.pc_zref, i, &r.name);
+                    }
+                });
+                let go = ui
+                    .add_enabled(idle && probe_in && !refs.is_empty(), Button::new("Calibrate Z offset"))
+                    .on_hover_text("Touch a surface whose Z reference you trust (calibrated with a gauge block and a real tool)");
+                if go.clicked() {
+                    self.machine.send(Command::CalibrateProbe(ProbeCalTarget::ZReference(self.pc_zref)));
+                }
+            });
+            if p.calibration != ProbeCalibration::default() && ui.add_enabled(idle, Button::new("Forget the probe calibration")).clicked() {
+                p.calibration = ProbeCalibration::default();
+                changed = true;
+            }
+            ui.add_space(8.0);
             changed |= ui.checkbox(&mut p.auto_zero, "Set work zero at the result").changed();
             egui::Grid::new("probe-settings").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
                 changed |= labelled(ui, "Search feed", &mut p.fast_feed, 1.0, " mm/min");
@@ -406,7 +490,7 @@ impl App {
                 changed |= labelled(ui, "Back-off", &mut p.latch, 0.05, " mm");
                 changed |= labelled(ui, "Side clearance", &mut p.xy_clearance, 0.1, " mm");
                 changed |= labelled(ui, "Edge depth", &mut p.z_depth, 0.1, " mm");
-                changed |= labelled(ui, "Stylus diameter", &mut p.stylus_diameter, 0.01, " mm");
+                changed |= labelled(ui, "Stylus diameter (nominal)", &mut p.stylus_diameter, 0.01, " mm");
                 changed |= labelled(ui, "Touch plate", &mut p.plate_thickness, 0.01, " mm");
                 changed |= labelled(ui, "Boss size", &mut p.boss_size, 0.5, " mm");
             });
@@ -458,6 +542,8 @@ impl App {
     }
 
     pub(super) fn settings_page(&mut self, ui: &mut egui::Ui) {
+        self.ears.settings_ui(ui);
+        ui.separator();
         let s = self.snap.clone();
         let idle = matches!(s.mode, Mode::Idle | Mode::EStop | Mode::Disconnected | Mode::Alarm);
         if self.draft.config.is_none() {

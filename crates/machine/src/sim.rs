@@ -79,6 +79,9 @@ pub struct SimWorld {
     /// Steps added to `probe_z` after each move that stops on the probe, in
     /// order: a setter that doesn't read the same twice.
     pub touch_shifts: VecDeque<i64>,
+    /// Chips (or a burr): boxes the probe touches like the block, even inside a bore, each knocked
+    /// off after it has been touched that many times.
+    pub chips: Vec<(([i64; 2], [i64; 2], i64), u32)>,
 }
 
 pub struct Simulator {
@@ -98,8 +101,8 @@ pub struct Simulator {
     /// Force the probe input active (for manual probe tests from the UI).
     pub probe_override: bool,
     pub estop_pressed: bool,
-    /// Ignore the probe input as a stop pin (a board or pin setting that doesn't stop probes);
-    /// home switches still stop their moves.
+    /// Ignore the probe as the stop pin of single-axis moves (a board or pin
+    /// setting that doesn't stop probes); home switches still stop homing.
     pub ignore_stop_pin: bool,
 }
 
@@ -149,6 +152,19 @@ impl Simulator {
         self.world.block = Some((span(0, x), span(1, y), w.probe_z + (h * c.axes[2].steps_per_unit) as i64));
     }
 
+    /// A Ø`d` bore through the block at `x`, `y` mm from its middle; `chip`: with a 0.6 mm chip on its
+    /// +X wall that two touches knock off. Call after `add_stock`.
+    pub fn add_bore(&mut self, c: &MachineConfig, x: f64, y: f64, d: f64, chip: bool) {
+        let Some((bx, by, top)) = self.world.block else { return };
+        let spu = c.axes[0].steps_per_unit;
+        let st = |mm: f64| (mm * spu) as i64;
+        let m = [(bx[0] + bx[1]) / 2 + st(x), (by[0] + by[1]) / 2 + st(y)];
+        self.world.bores.push((m, st(d / 2.0)));
+        if chip {
+            self.world.chips.push((([m[0] + st(d / 2.0 - 0.6), m[0] + st(d / 2.0 + 1.0)], [m[1] - st(1.0), m[1] + st(1.0)], top), 2));
+        }
+    }
+
     pub fn new(clock: Arc<dyn Clock>) -> Self {
         let world = SimWorld {
             travel: [72_000, 52_000, 33_000, 0, 0, 0],
@@ -157,6 +173,7 @@ impl Simulator {
             bores: Vec::new(),
             blocks: Vec::new(),
             touch_shifts: VecDeque::new(),
+            chips: Vec::new(),
         };
         let physical = [36_000, 26_000, 30_000, 0, 0, 0];
         let last_time = clock.now();
@@ -191,7 +208,9 @@ impl Simulator {
                 dx.hypot(dy) < *r as f64
             });
             let inside = |(x, y, top): ([i64; 2], [i64; 2], i64)| (x[0]..=x[1]).contains(&p[0]) && (y[0]..=y[1]).contains(&p[1]) && p[2] <= top;
-            let in_block = (!in_bore && self.world.block.is_some_and(inside)) || self.world.blocks.iter().any(|b| inside(*b));
+            let in_block = (!in_bore && self.world.block.is_some_and(inside))
+                || self.world.blocks.iter().any(|b| inside(*b))
+                || self.world.chips.iter().any(|(b, _)| inside(*b));
             return self.probe_override || p[2] <= self.world.probe_z || in_block;
         }
         if Some(*input) == c.estop {
@@ -276,11 +295,19 @@ impl Simulator {
         for _ in 0..n {
             self.step_axis(a.m.axis, dir);
             a.done += 1;
-            if let Some((input, want)) = a.m.stop_on {
-                let probe = Some(input) == self.config.as_ref().and_then(|c| c.probe);
-                if !(probe && self.ignore_stop_pin) && self.input_active(&input) == want {
-                    if probe {
+            let probe = self.config.as_ref().and_then(|c| c.probe);
+            if let Some((input, want)) = a.m.stop_on.filter(|(i, _)| !(self.ignore_stop_pin && Some(*i) == probe)) {
+                if self.input_active(&input) == want {
+                    if Some(input) == self.config.as_ref().and_then(|c| c.probe) {
                         self.world.probe_z += self.world.touch_shifts.pop_front().unwrap_or(0);
+                        // a chip knocked off by the touches before goes now (not while it reads touching)
+                        self.world.chips.retain(|(_, left)| *left > 0);
+                        let p = self.physical;
+                        for (b, left) in &mut self.world.chips {
+                            if (b.0[0]..=b.0[1]).contains(&p[0]) && (b.1[0]..=b.1[1]).contains(&p[1]) && p[2] <= b.2 {
+                                *left = left.saturating_sub(1);
+                            }
+                        }
                     }
                     self.active = None;
                     return;

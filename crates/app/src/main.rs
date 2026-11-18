@@ -15,19 +15,47 @@ use machine::sim::{RealClock, Simulator};
 use machine::store;
 use machine::{Controller, ControllerHandle, MachineConfig};
 
-const USAGE: &str = "usage: cnc-controller [--sim [--sim-stock=X,Y,H]] [program.nc]
+/// Which rcnc this is: the version, the git commit it was built from, and
+/// "+dirty" if it was built with uncommitted changes. Shown in the top left
+/// and the title bar, so it can be checked against the commit that should be running.
+pub const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " · ",
+    env!("RCNC_COMMIT"),
+);
+/// Built with uncommitted changes, so the commit alone doesn't say what's running.
+pub const DIRTY: bool = !env!("RCNC_DIRTY").is_empty();
+
+const USAGE: &str = "usage: cnc-controller [--sim [--sim-stock=X,Y,H] [--sim-bores=X,Y;X,Y [--sim-chips]] [--sim-audio=cut.wav]] [program.nc]
 
   --sim                run against the built-in simulator instead of the DMC2's USB board
+  -V, --version        print which rcnc build this is
   --sim-stock=X,Y,H    put an X by Y mm block, H mm tall, in the middle of the simulator's table
-                       for the probe to find";
+                       for the probe to find
+  --sim-bores=X,Y;X,Y  Ø8 bores through that block, X,Y mm from its middle (for FIND_BORES)
+  --sim-chips          a chip in the first of those bores, knocked off by the first try (for Probe again)
+  --sim-audio=cut.wav  play a recording in place of the microphone";
 
 fn main() -> eframe::Result<()> {
     let mut simulate = false;
     let mut program = None;
     let mut stock = None;
+    let mut bores: Vec<[f64; 2]> = vec![];
+    let mut chips = false;
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--sim" => simulate = true,
+            "--sim-chips" => chips = true,
+            _ if arg.starts_with("--sim-bores=") => {
+                for xy in arg["--sim-bores=".len()..].split(';').filter(|v| !v.trim().is_empty()) {
+                    let v: Vec<f64> = xy.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+                    let [x, y] = v[..] else {
+                        eprintln!("--sim-bores needs X,Y;X,Y in mm\n{USAGE}");
+                        std::process::exit(2);
+                    };
+                    bores.push([x, y]);
+                }
+            }
             _ if arg.starts_with("--sim-stock=") => {
                 let v: Vec<f64> = arg["--sim-stock=".len()..].split(',').filter_map(|v| v.trim().parse().ok()).collect();
                 let [x, y, h] = v[..] else {
@@ -35,6 +63,13 @@ fn main() -> eframe::Result<()> {
                     std::process::exit(2);
                 };
                 stock = Some([x, y, h]);
+            }
+            _ if arg.starts_with("--sim-audio=") => {
+                let _ = app::ears::SIM_AUDIO.set(std::path::PathBuf::from(&arg["--sim-audio=".len()..]));
+            }
+            "-V" | "--version" => {
+                println!("rcnc {VERSION}{}", if DIRTY { " +dirty" } else { "" });
+                return Ok(());
             }
             "-h" | "--help" => {
                 println!("{USAGE}");
@@ -53,6 +88,9 @@ fn main() -> eframe::Result<()> {
         let mut sim = Simulator::new(clock.clone());
         if let Some([x, y, h]) = stock {
             sim.add_stock(&MachineConfig::dmc2(), x, y, h);
+            for (i, [bx, by]) in bores.iter().enumerate() {
+                sim.add_bore(&MachineConfig::dmc2(), *bx, *by, 8.0, chips && i == 0);
+            }
         }
         Box::new(sim)
     } else {
@@ -62,6 +100,7 @@ fn main() -> eframe::Result<()> {
     // saved as they change; the DMC2 defaults apply until something is saved.
     // The simulator keeps its own, so trying things out never changes the real machine's.
     let data = if simulate { store::data_dir().join("sim") } else { store::data_dir() };
+    let _ = app::ears::DATA.set(data.clone());
     let mut settings_error = None;
     let config = match store::load::<MachineConfig>(&data.join("machine.json")) {
         Ok(Some(c)) => c,
@@ -96,9 +135,10 @@ fn main() -> eframe::Result<()> {
     let web_data = data.join("webview");
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("CNC Controller")
-            // Small enough for a 1280 × 720 screen if Windows doesn't maximize it.
-            .with_inner_size([1180.0, 640.0])
+            .with_title(format!("rcnc {VERSION}{}", if DIRTY { " +dirty" } else { "" }))
+            .with_icon(icon())
+            // Small enough for a 720p screen, even at 125% scaling (1024 × 576), if Windows doesn't maximize it.
+            .with_inner_size([1000.0, 540.0])
             .with_min_inner_size([800.0, 480.0])
             .with_maximized(true),
         ..Default::default()
@@ -115,6 +155,13 @@ fn main() -> eframe::Result<()> {
         eprintln!("the controller did not confirm the machine was stopped");
     }
     result
+}
+
+/// The window and taskbar icon (the .exe's own icon is set by build.rs).
+fn icon() -> eframe::egui::IconData {
+    let img = image::load_from_memory(include_bytes!("../assets/icon.png")).expect("icon.png is a valid PNG").into_rgba8();
+    let (width, height) = img.dimensions();
+    eframe::egui::IconData { rgba: img.into_raw(), width, height }
 }
 
 /// How long quitting waits for the controller to stop the board.

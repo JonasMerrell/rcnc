@@ -18,12 +18,14 @@ use crate::probing::{self, ProbeJob, Routine, Step};
 use crate::store::{self, SavedState};
 
 mod calibrate;
+mod probecal;
 mod findstock;
 mod hometest;
 mod toolchange;
 pub use calibrate::{CalibrateStage, CalibrateView};
 pub use hometest::{stats as home_test_stats, HomeTestView};
-pub use findstock::{FindStockStage, FindStockView, StockFound, STOCK_REFERENCE};
+pub use probecal::{ProbeCalShape, ProbeCalStage, ProbeCalTarget, ProbeCalView};
+pub use findstock::{FindStockStage, FindStockView, ProbeRetryView, StockFound, STOCK_REFERENCE};
 pub use toolchange::{ToolChangeStage, ToolChangeView};
 
 /// Segments kept queued on the board while streaming (240 ms at 4 ms).
@@ -80,6 +82,9 @@ pub enum Command {
     /// Set the active work offset so this axis reads zero.
     ZeroAxis(usize),
     SetFeedOverride(f64),
+    /// The adaptive feed while a program runs: a share of the programmed feed, 0.3 to 2 (1 = off; over 1 only
+    /// in air, never on a move going down).
+    SetAdaptiveFeed(f64),
     SetRapidOverride(f64),
     SetSpindleOverride(f64),
     SetJogSpeed(f64),
@@ -99,6 +104,20 @@ pub enum Command {
     FindStock(gcode::StockRequest),
     /// The probe is over the stock: carry on with Find stock.
     FindStockContinue,
+    /// A probing step in a program failed and holds it: run the same request again from the top.
+    ProbeAgain,
+    /// Write a line in the message log (e.g. why the listening held the feed).
+    Note(String),
+    /// A probing step in a program failed a tolerance check only: set what it measured anyway and carry on.
+    ProbeAccept,
+    /// The tool last measured on the setter sticks out exactly this far (mm): calibrate the stick-out check.
+    CalibrateStickout { stickout: f64 },
+    /// A tap test measured this tool's ring: keep its frequency and damping in the tool table (allowed
+    /// during a tool change).
+    SetToolMode { tool: u32, hz: f64, zeta: f64 },
+    /// Find stock, before Continue: touch the sides `depth` mm below the top and
+    /// accept a size within `tolerance` mm of the job's.
+    FindStockSettings { depth: f64, tolerance: f64 },
     /// Air cut: run programs this many mm higher than written (None: for real). Only while idle.
     SetAirCut(Option<f64>),
     /// Calibrate the Z reference with this index: with the touch probe, or
@@ -109,6 +128,14 @@ pub enum Command {
     HomeTest { axis: usize, cycles: usize, away: f64 },
     /// Carry on with the calibration: over the surface / on the gauge, or save.
     CalibrateContinue,
+    /// Calibrate the touch probe on a known bore, cylinder, pocket, block or Z reference.
+    CalibrateProbe(ProbeCalTarget),
+    /// Carry on with the probe calibration: in place, measure again after the
+    /// probe was turned, or save the result.
+    CalibrateProbeContinue,
+    /// After a shape's result: wait for the probe to be turned half a
+    /// turn in the spindle, then measure again to find how far off centre it is.
+    CalibrateProbeTurn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +176,8 @@ pub struct Snapshot {
     pub probe_active: bool,
     pub estop_input: bool,
     pub feed_override: f64,
+    /// The adaptive feed now applied (1 = none).
+    pub adaptive_feed: f64,
     pub rapid_override: f64,
     pub spindle_override: f64,
     pub jog_speed: f64,
@@ -166,8 +195,20 @@ pub struct Snapshot {
     pub tool_change: Option<ToolChangeView>,
     /// The Find stock wizard in progress.
     pub find_stock: Option<FindStockView>,
+    /// A probing step in the program failed and holds it.
+    pub probe_retry: Option<ProbeRetryView>,
+    /// What the last probing (Find stock, Find bores, Probe Z, a probe job) found or why it failed,
+    /// until the next one.
+    pub last_probe: Option<String>,
     /// A Z reference calibration in progress.
     pub calibrate: Option<CalibrateView>,
+    /// A touch probe calibration in progress.
+    pub probe_cal: Option<ProbeCalView>,
+    /// How far the probe's ball sits off the spindle axis, X/Y mm, as last
+    /// measured while it has stayed in the spindle (None: not measured).
+    pub probe_runout: Option<[f64; 2]>,
+    /// The tool last measured on the setter (it can calibrate the stick-out check).
+    pub last_measured_tool: Option<u32>,
     /// The last homing test, running or finished.
     pub home_test: Option<HomeTestView>,
     /// The tool in the spindle as far as the controller knows (0: unknown).
@@ -227,6 +268,8 @@ enum Wait {
     Probe,
     /// A routine (the guided tool change) runs in its place.
     Routine,
+    /// A probing step failed: held until Probe again, Accept anyway or Stop.
+    ProbeRetry,
 }
 
 enum Source {
@@ -283,8 +326,23 @@ pub struct Controller {
     tool_change: Option<toolchange::ToolChange>,
     find_stock: Option<FindStockView>,
     calibrate: Option<CalibrateView>,
+    probe_cal: Option<ProbeCalView>,
+    /// The loaded probe's ball offset from the spindle axis, measured since it went in.
+    probe_runout: Option<[f64; 2]>,
+    /// The last tool measured on the setter and the machine Z its tip touched at (for the stick-out check).
+    last_setter_hit: Option<(u32, f64)>,
+    /// The program's last (MSG,...), for an M0 that follows it.
+    last_message: Option<String>,
     /// An automatic probing request (Probe Z, Find bores) runs in place of the program.
     auto_probe: bool,
+    /// The request running now (to run again if it fails), what it measured if it failed only a
+    /// tolerance, and the machine Z the probe goes back up to if it fails.
+    probe_again: Option<findstock::ProbeAgain>,
+    probe_accept: Option<findstock::Accept>,
+    probe_safe_z: Option<f64>,
+    /// A probing step in the program failed: the program waits for the operator.
+    probe_retry: Option<findstock::ProbeRetry>,
+    last_probe: Option<String>,
     /// The tool in the spindle has been measured on the setter since it was loaded.
     pub(crate) tool_measured: bool,
     /// Machine Z of the last setter touch of the tool in the spindle.
@@ -294,12 +352,14 @@ pub struct Controller {
     pub(crate) cs_references: [Option<String>; 6],
     /// Mode to go back to when a jog ends (a jog during Find stock).
     jog_return: Option<Mode>,
-    /// Air cut: the program's moves run this much higher. Tool changes,
-    /// probing and G53 moves near the top of Z stay where they are.
-    air_cut: Option<f64>,
     /// The top of Z's travel, found by homing Z at its top: nothing may be
     /// commanded above it.
     z_top: Option<f64>,
+    /// Air cut: the program's moves run this much higher. Tool changes,
+    /// probing and G53 moves near the top of Z stay where they are.
+    air_cut: Option<f64>,
+    /// G64 / G61 from the program; None: the profile's constant velocity setting.
+    path_blend: Option<bool>,
     /// The tool in the spindle, as far as the controller knows (0: unknown).
     loaded_tool: u32,
     /// Status polls that failed in a row.
@@ -358,12 +418,22 @@ impl Controller {
             tool_change: None,
             find_stock: None,
             calibrate: None,
+            probe_cal: None,
+            probe_runout: None,
+            last_setter_hit: None,
+            last_message: None,
             auto_probe: false,
+            probe_again: None,
+            probe_accept: None,
+            probe_safe_z: None,
+            probe_retry: None,
+            last_probe: None,
             tool_measured: false,
             setter_hit: None,
             cs_references: Default::default(),
             jog_return: None,
             air_cut: None,
+            path_blend: None,
             z_top: None,
             loaded_tool: 0,
             poll_failures: 0,
@@ -513,8 +583,12 @@ impl Controller {
     }
 
     fn info(&mut self, msg: impl Into<String>) {
+        let msg = msg.into();
+        if let Some(p) = &self.persist {
+            store::append_log(&p.dir, &msg);
+        }
         let log = Arc::make_mut(&mut self.log);
-        log.push_back(msg.into());
+        log.push_back(msg);
         while log.len() > 200 {
             log.pop_front();
         }
@@ -529,7 +603,12 @@ impl Controller {
         self.tool_change = None;
         self.find_stock = None;
         self.calibrate = None;
+        self.probe_cal = None;
         self.auto_probe = false;
+        self.probe_again = None;
+        self.probe_accept = None;
+        self.probe_safe_z = None;
+        self.probe_retry = None;
         self.jog_return = None;
     }
 
@@ -640,6 +719,7 @@ impl Controller {
             }
             Command::CycleStart => self.cycle_start(),
             Command::FeedHold => self.feed_hold(),
+            Command::Note(msg) => self.info(msg),
             Command::Stop => self.stop(),
             Command::ZeroAxis(axis) => {
                 if self.is_ready() && axis < AXIS_LETTERS.len() {
@@ -656,6 +736,8 @@ impl Controller {
                     self.hold_axis_move("feed override at 0%");
                 }
             }
+            // only a running program's feed moves: never a jog, a probe or a routine
+            Command::SetAdaptiveFeed(v) => self.generator.adaptive = if self.mode == Mode::Running { v.clamp(0.3, 2.0) } else { 1.0 },
             Command::SetRapidOverride(v) => self.generator.rapid_override = v.clamp(0.0, 1.0),
             Command::SetSpindleOverride(v) => self.spindle_override = v.clamp(0.0, 2.0),
             Command::SetJogSpeed(v) => self.config.jog_speed = v.clamp(0.001, 1.0),
@@ -702,8 +784,20 @@ impl Controller {
                 }
             }
             Command::FindStockContinue => self.find_stock_continue(),
+            Command::ProbeAgain => self.probe_again(),
+            Command::ProbeAccept => self.probe_accept(),
+            Command::CalibrateStickout { stickout } => self.calibrate_stickout(stickout),
+            Command::SetToolMode { tool, hz, zeta } => {
+                let t = self.interp.tools.entry(tool).or_default();
+                (t.mode_hz, t.mode_zeta) = (hz, zeta);
+                self.report(format!("T{tool} tap test: rings at {hz:.0} Hz, damping {zeta:.3}; kept in the tool table"));
+            }
+            Command::FindStockSettings { depth, tolerance } => self.find_stock_settings(depth, tolerance),
             Command::CalibrateZ { reference, gauge } => self.start_calibrate(reference, gauge),
             Command::CalibrateContinue => self.calibrate_continue(),
+            Command::CalibrateProbe(target) => self.start_probe_cal(target),
+            Command::CalibrateProbeContinue => self.probe_cal_continue(),
+            Command::CalibrateProbeTurn => self.probe_cal_turn(),
             Command::SetAirCut(lift) => {
                 if !self.is_ready() {
                     return self.info("Air cut can only be switched while the machine is idle");
@@ -1014,6 +1108,7 @@ impl Controller {
         self.end_tool_change(&result);
         self.end_find_stock(&result);
         self.end_calibrate(&result);
+        self.end_probe_cal(&result);
     }
 
     /// Set the active work offset so machine position `machine` on `axis` reads `work`.
@@ -1085,6 +1180,9 @@ impl Controller {
             if from.stickout > 0.0 {
                 tool.stickout = from.stickout;
             }
+            if from.flutes > 0 {
+                tool.flutes = from.flutes;
+            }
             if tool.kind == gcode::ToolKind::Auto {
                 tool.kind = tool.shape();
             }
@@ -1112,6 +1210,7 @@ impl Controller {
     }
 
     pub(crate) fn report(&mut self, msg: String) {
+        self.last_probe = Some(msg.clone());
         self.info(msg);
     }
 
@@ -1484,6 +1583,7 @@ impl Controller {
         match self.mode {
             Mode::Probing if self.find_stock.is_some() => self.find_stock_continue(),
             Mode::Probing if self.calibrate.is_some() => self.calibrate_continue(),
+            Mode::Probing if self.probe_cal.is_some() => self.probe_cal_continue(),
             Mode::Probing => self.tool_change_continue(None),
             Mode::Running => {
                 self.generator.hold = false;
@@ -1500,6 +1600,9 @@ impl Controller {
                         exec.wait = Wait::None;
                     }
                 }
+                if self.probe_retry.is_some() {
+                    self.info("A probing step failed: press Probe again, Accept anyway or Stop");
+                }
             }
             Mode::Idle => {
                 if self.interp.line_count() == 0 {
@@ -1508,6 +1611,18 @@ impl Controller {
                 }
                 if self.interp.is_finished() {
                     self.interp.rewind();
+                }
+                // a tool change, a probing routine or a G53 move goes to places in machine coordinates:
+                // refuse before the first cut rather than stop halfway
+                let unhomed: Vec<String> = (0..3).filter(|&a| self.config.axes[a].enabled && !self.homed[a]).map(|a| AXIS_LETTERS[a].to_string()).collect();
+                if let (false, Some((line, why))) = (unhomed.is_empty(), self.interp.needs_homing(self.config.tool_change.guided || self.config.tool_change_touch_off)) {
+                    return self.info(format!(
+                        "Home the machine first (Ref All Home): {} not homed, and the program has {why} (line {line}), which goes to machine positions",
+                        unhomed.join(", ")
+                    ));
+                }
+                if self.interp.pc() == 0 {
+                    self.path_blend = None;
                 }
                 self.sync_position();
                 self.exec = Some(Exec {
@@ -1598,6 +1713,10 @@ impl Controller {
     /// One controller cycle. Call every few milliseconds.
     pub fn update(&mut self) {
         self.autosave();
+        // the adaptive feed belongs to a running program
+        if self.mode != Mode::Running {
+            self.generator.adaptive = 1.0;
+        }
         if self.mode == Mode::Disconnected {
             return;
         }
@@ -1634,6 +1753,7 @@ impl Controller {
         self.watch_probe();
         self.find_stock_watch();
         self.calibrate_watch();
+        self.probe_cal_watch();
         if self.status.idle {
             self.probe_report();
         }
@@ -1813,6 +1933,12 @@ impl Controller {
                 continue;
             }
             let Some((line, op)) = exec.pending.front().cloned() else { continue };
+            if let Op::PathMode { blend } = op {
+                // the planner blends the moves it gets from now on: no need to stop for it
+                exec.pending.pop_front();
+                self.path_blend = Some(blend);
+                continue;
+            }
             let mut from = self.generator.end_position();
             let lift = self.air_cut.unwrap_or(0.0);
             from[2] -= lift;
@@ -1849,7 +1975,9 @@ impl Controller {
                     return;
                 }
                 exec.pending.pop_front();
-                for m in moves {
+                let blend = self.path_blend.unwrap_or(self.config.constant_velocity);
+                for mut m in moves {
+                    m.continues |= blend;
                     self.generator.push(m);
                 }
                 continue;
@@ -1890,6 +2018,11 @@ impl Controller {
                 let was_on = self.outputs.spindle_on;
                 let reversing = was_on && state != Spindle::Off && self.outputs.spindle_ccw != (state == Spindle::Ccw);
                 let rpm = rpm * self.spindle_override;
+                // a new speed while it runs: the VFD ramps to it, so wait the spin-up time scaled by the change
+                // (at least a quarter of it) before cutting at the new speed
+                let speed_change = (rpm - self.outputs.spindle_rpm).abs();
+                let retime = (was_on && state != Spindle::Off && speed_change > 0.01 * rpm.max(1.0))
+                    .then(|| self.config.spindle_spin_up * (speed_change / self.config.spindle_max_rpm.max(1.0)).clamp(0.25, 1.0));
                 self.outputs.spindle_on = state != Spindle::Off;
                 self.outputs.spindle_ccw = state == Spindle::Ccw;
                 self.outputs.spindle_rpm = rpm;
@@ -1900,7 +2033,7 @@ impl Controller {
                     _ if reversing => {
                         Wait::Until(now + self.config.spindle_spin_down + self.config.spindle_spin_up)
                     }
-                    _ => Wait::None,
+                    _ => retime.map(|t| Wait::Until(now + t)).unwrap_or(Wait::None),
                 }
             }
             Op::Coolant { flood, mist } => {
@@ -1922,16 +2055,19 @@ impl Controller {
             } else {
                 format!("Load tool {tool}, touch it off if needed, then press Cycle Start")
             }),
-            Op::Pause { optional } => Wait::Pause(if optional {
-                "Optional stop (M1)".into()
-            } else {
-                "Program paused (M0)".into()
+            // a (MSG,...) just before the stop says what it's for
+            Op::Pause { optional } => Wait::Pause(match (optional, self.last_message.take()) {
+                (true, None) => "Optional stop (M1)".into(),
+                (true, Some(m)) => format!("Optional stop (M1): {m}"),
+                (false, None) => "Program paused (M0)".into(),
+                (false, Some(m)) => format!("Program paused (M0): {m}"),
             }),
             Op::UserMCode { code, .. } => Wait::Pause(format!(
                 "M{code} macro is not available yet; press Cycle Start to skip it"
             )),
             Op::Message(text) => {
-                self.info(text);
+                self.info(text.clone());
+                self.last_message = Some(text);
                 Wait::None
             }
             Op::FindStock(request) => {
@@ -1966,6 +2102,8 @@ impl Controller {
                 Ok(()) => Wait::Probe,
                 Err(msg) => return self.raise(format!("line {}: {msg}", line + 1)),
             },
+            // taken in fill_planner
+            Op::PathMode { .. } => Wait::None,
             Op::ProgramEnd => {
                 self.outputs.spindle_on = false;
                 self.outputs.flood = false;
@@ -2117,6 +2255,7 @@ impl Controller {
                 .estop
                 .is_some_and(|p| p.is_active(self.status.inputs)),
             feed_override: self.generator.feed_override,
+            adaptive_feed: if self.mode == Mode::Running { self.generator.adaptive } else { 1.0 },
             rapid_override: self.generator.rapid_override,
             spindle_override: self.spindle_override,
             jog_speed: self.config.jog_speed,
@@ -2130,7 +2269,12 @@ impl Controller {
             g92: self.interp.params.get_axes(num::G92),
             tool_change: self.tool_change.as_ref().map(|t| t.view.clone()),
             find_stock: self.find_stock.clone(),
+            probe_retry: self.probe_retry.as_ref().map(|r| r.view.clone()),
+            last_probe: self.last_probe.clone(),
             calibrate: self.calibrate.clone(),
+            probe_cal: self.probe_cal.clone(),
+            probe_runout: self.probe_runout,
+            last_measured_tool: self.last_setter_hit.map(|h| h.0),
             home_test: self.home_test.clone(),
             loaded_tool: self.loaded_tool,
             tool_measured: self.tool_measured,
@@ -2400,6 +2544,8 @@ pub fn header_tools(text: &str) -> Vec<(u32, Tool)> {
             diameter,
             flute_length: after("flute length ").unwrap_or(0.0),
             stickout: after("stickout ").unwrap_or(0.0),
+            // "3 flutes"
+            flutes: words.windows(2).find(|w| w[1].trim_end_matches([',', ')']) == "flutes" || w[1].trim_end_matches([',', ')']) == "flute").and_then(|w| w[0].parse().ok()).unwrap_or(0),
             ..Default::default()
         };
         out.push((n, tool));
@@ -2749,6 +2895,131 @@ mod tests {
         assert!(!sent.enable && !sent.spindle_on, "{sent:?}");
     }
 
+    /// A new spindle speed while it runs waits for the VFD to get there (the spin-up time scaled by the change).
+    #[test]
+    fn a_speed_change_waits_for_the_spindle() {
+        let start_of_moves = |text: &str| {
+            let (mut c, clock) = setup();
+            c.handle(Command::Load { name: "t".into(), text: text.into() });
+            c.handle(Command::CycleStart);
+            let x0 = c.snapshot().machine[0];
+            for _ in 0..20_000 {
+                clock.advance(0.005);
+                c.update();
+                if (c.snapshot().machine[0] - x0).abs() > 1e-6 {
+                    return (clock.now(), c.config.spindle_spin_up, c.config.spindle_max_rpm);
+                }
+            }
+            panic!("never moved");
+        };
+        let (plain, spin, max) = start_of_moves("M3 S24000\nG91 G1 X1 F600\nM30");
+        let (changed, _, _) = start_of_moves("M3 S24000\nS12000\nG91 G1 X1 F600\nM30");
+        let want = spin * (12000.0 / max).clamp(0.25, 1.0);
+        assert!(spin > 0.0 && (changed - plain - want).abs() < 0.05, "{plain} {changed} {want}");
+    }
+
+    /// How long a feed hold takes to stop a cut at 2400 mm/min, from the command to the axes at rest (the
+    /// board still plays what is queued, about 0.24 s, then the planner's deceleration), and how far it goes.
+    #[test]
+    fn feed_hold_stops_a_cut_quickly() {
+        let (mut c, clock) = setup();
+        c.homed = [true; 6];
+        c.handle(Command::Mdi("G91 G1 Y100 F2400".into()));
+        // into the cut at full feed
+        for _ in 0..200 {
+            clock.advance(0.005);
+            c.update();
+        }
+        let s = c.snapshot();
+        assert!((s.velocity - 2400.0).abs() < 1.0, "{}", s.velocity);
+        let (t0, y0) = (clock.now(), s.machine[1]);
+        c.handle(Command::FeedHold);
+        let mut stopped = None;
+        let mut last = y0;
+        for _ in 0..400 {
+            clock.advance(0.005);
+            c.update();
+            let y = c.snapshot().machine[1];
+            if (y - last).abs() < 1e-9 && stopped.is_none() {
+                stopped = Some((clock.now() - t0, y - y0));
+            }
+            last = y;
+        }
+        let (dt, dy) = stopped.expect("stopped");
+        eprintln!("feed hold: stopped {dt:.3} s and {dy:.2} mm after the command");
+        assert!(dt < 0.35 && dy < 12.0, "{dt} {dy}");
+    }
+
+    /// The adaptive feed acts on the segments the controller makes next: the board's queue (240 ms) runs
+    /// out at the old feed first, then the axes slow at their acceleration.
+    #[test]
+    fn the_adaptive_feed_takes_hold_after_the_board_queue() {
+        let (mut c, clock) = setup();
+        c.homed = [true; 6];
+        c.handle(Command::Load { name: "t".into(), text: "G91 G1 Y100 F2400\nM30".into() });
+        c.handle(Command::CycleStart);
+        tick(&mut c, &clock, 200);
+        assert!((c.snapshot().velocity - 2400.0).abs() < 1.0, "{}", c.snapshot().velocity);
+        let t0 = clock.now();
+        c.handle(Command::SetAdaptiveFeed(0.6));
+        assert_eq!(c.snapshot().adaptive_feed, 0.6);
+        // the board's real speed, from where the axes are (over 20 ms: a few 4 ms segments)
+        let (mut starts, mut there) = (None, None);
+        let mut ys = std::collections::VecDeque::from([c.snapshot().machine[1]]);
+        for _ in 0..400 {
+            clock.advance(0.005);
+            c.update();
+            ys.push_back(c.snapshot().machine[1]);
+            if ys.len() > 5 {
+                ys.pop_front();
+            }
+            let v = (ys.back().unwrap() - ys.front().unwrap()) / (0.005 * (ys.len() - 1) as f64) * 60.0;
+            if ys.len() == 5 && v < 2350.0 && starts.is_none() {
+                starts = Some(clock.now() - t0);
+            }
+            if ys.len() == 5 && v <= 1450.0 && there.is_none() {
+                there = Some(clock.now() - t0);
+            }
+        }
+        let (starts, there) = (starts.expect("slows"), there.expect("gets to 60%"));
+        eprintln!("adaptive feed 100% -> 60%: starts slowing {starts:.3} s, at 60% {there:.3} s after the command");
+        assert!(starts > 0.2 && starts < 0.3 && there < 0.4, "{starts} {there}");
+        // and it is gone when the program ends
+        run_until_idle(&mut c, &clock, 30.0);
+        assert_eq!(c.mode(), Mode::Idle);
+        assert_eq!(c.snapshot().adaptive_feed, 1.0);
+        // never outside a program
+        c.handle(Command::SetAdaptiveFeed(0.5));
+        assert_eq!(c.snapshot().adaptive_feed, 1.0);
+    }
+
+    /// Over 100% (in air) on moves along the work, never on a move going down.
+    #[test]
+    fn the_adaptive_feed_never_speeds_up_a_plunge() {
+        let (mut c, clock) = setup();
+        c.homed = [true; 6];
+        c.handle(Command::Load { name: "t".into(), text: "G91 G1 Y40 F1200\nG1 Z-20 F600\nM30".into() });
+        c.handle(Command::CycleStart);
+        tick(&mut c, &clock, 20);
+        c.handle(Command::SetAdaptiveFeed(1.3));
+        // the board's speed over 40 ms (positions come back a few segments at a time)
+        let (mut fastest_y, mut fastest_z) = (0.0f64, 0.0f64);
+        let mut ms = std::collections::VecDeque::from([c.snapshot().machine]);
+        for _ in 0..2000 {
+            clock.advance(0.005);
+            c.update();
+            ms.push_back(c.snapshot().machine);
+            if ms.len() > 9 {
+                ms.pop_front();
+                let (a, b) = (ms.front().unwrap(), ms.back().unwrap());
+                fastest_y = fastest_y.max((b[1] - a[1]).abs() / 0.04 * 60.0);
+                fastest_z = fastest_z.max((b[2] - a[2]).abs() / 0.04 * 60.0);
+            }
+        }
+        assert!(fastest_y > 1500.0 && fastest_y < 1600.0, "Y {fastest_y}");
+        assert!(fastest_z < 610.0, "Z {fastest_z}");
+    }
+
     #[test]
     fn estop_rewinds_and_forgets_the_spindle() {
         let (mut c, clock) = setup();
@@ -3054,6 +3325,12 @@ mod tests {
             name: "t".into(),
             text: "T3 M6\nG0 Z20\nM30".into(),
         });
+        // the touch-off goes to the setter, in machine coordinates: not before homing
+        c.handle(Command::CycleStart);
+        assert_eq!(c.mode(), Mode::Idle);
+        assert!(c.snapshot().log.iter().any(|l| l.contains("Home the machine first") && l.contains("a tool change (line 1)")), "{:?}", c.snapshot().log);
+        // (as if homed where the simulator stands, so the machine positions below hold)
+        c.homed = [true; 6];
         c.handle(Command::CycleStart);
         for _ in 0..10 {
             clock.advance(0.005);
@@ -3105,6 +3382,76 @@ mod tests {
             }
         }
         (c, clock)
+    }
+
+    /// The stick-out check: calibrated from a tool whose stick-out is known, it stops a tool change whose
+    /// tool sticks out more than the tolerance off the program's, and says so.
+    #[test]
+    fn m0_shows_the_message_before_it() {
+        let (mut c, clock) = setup();
+        c.handle(Command::Load { name: "t".into(), text: "(MSG,Blow the chips out of the groove)\nM0\nM0\nM30".into() });
+        c.handle(Command::CycleStart);
+        for _ in 0..20 {
+            clock.advance(0.005);
+            c.update();
+        }
+        assert_eq!(c.snapshot().paused.as_deref(), Some("Program paused (M0): Blow the chips out of the groove"));
+        c.handle(Command::CycleStart);
+        for _ in 0..20 {
+            clock.advance(0.005);
+            c.update();
+        }
+        assert_eq!(c.snapshot().paused.as_deref(), Some("Program paused (M0)"), "the message is used once");
+    }
+
+    #[test]
+    fn tool_change_checks_the_stickout() {
+        let run = |nut_face: Option<f64>| {
+            let (mut c, clock) = probing_setup_with(|_| {});
+            let mut config = MachineConfig::dmc2();
+            config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, offset: 13.31, reference: String::new(), ..Default::default() };
+            config.tool_change = crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, centre_x: false, nut_face_z: nut_face, ..Default::default() };
+            c.handle(Command::SetConfig(Box::new(config)));
+            c.homed = [true; 6];
+            c.handle(Command::Mdi("G53 G0 X130 Y130 Z110".into()));
+            run_until_idle(&mut c, &clock, 5.0);
+            // the header gives T3 a 24 mm stick-out
+            c.handle(Command::Load { name: "t".into(), text: "(T3 6 mm end mill - D6 flat end mill, 3 flutes, flute length 18, stickout 24)\nT3 M6\nM30".into() });
+            c.handle(Command::CycleStart);
+            for _ in 0..80_000 {
+                clock.advance(0.005);
+                c.update();
+                let s = c.snapshot();
+                if s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading) && c.routine_waiting {
+                    c.handle(Command::ToolChangeContinue { measure: Some(true) });
+                }
+                if s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Mismatch) && c.routine_waiting || s.mode == Mode::Idle {
+                    break;
+                }
+            }
+            (c, clock)
+        };
+        // not calibrated: no check, but the measurement is kept for calibrating
+        let (mut c, _) = run(None);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?}", s.log);
+        assert_eq!(s.last_measured_tool, Some(3));
+        // say T3 really sticks out 24: the setter (sim table) touched at machine Z30
+        c.handle(Command::CalibrateStickout { stickout: 24.0 });
+        assert!(close(c.snapshot().config.tool_change.nut_face_z.unwrap(), 54.0), "{:?}", c.snapshot().config.tool_change.nut_face_z);
+
+        // calibrated as if the nut face were 3 mm lower: T3 measures 21, 3 off the program's 24
+        let (c, _) = run(Some(51.0));
+        let s = c.snapshot();
+        let t = s.tool_change.clone().expect("the change waits");
+        assert_eq!(t.stage, ToolChangeStage::Mismatch);
+        assert!(close(t.measured_stickout.unwrap(), 21.0), "{t:?}");
+        assert!(t.problem.as_ref().unwrap().contains("sticks out 21.0 mm, the program expects 24.0"), "{:?}", t.problem);
+        // within the tolerance: carries on
+        let (c, _) = run(Some(55.0));
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("T3 stick-out measured 25.0 mm (program expects 24.0)")), "{:?}", s.log);
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?}", s.log);
     }
 
     #[test]
@@ -3823,6 +4170,43 @@ mod tests {
         assert!(close(s.machine[0], 120.0) && close(s.machine[1], 135.0) && close(s.machine[2], 102.0), "{:?}", s.machine);
     }
 
+    /// Find stock in a program that touches nothing (the probe jogged off the stock) holds the
+    /// program instead of an alarm; Probe again starts the wizard over.
+    #[test]
+    fn find_stock_that_touches_nothing_holds_for_probe_again() {
+        let (mut c, clock) = find_stock_setup("T99 M6\n(RCNC FIND_STOCK SIZE=60,60,70 AT=0,0,0 TOL=0.5)\nG0 Z20\nM30");
+        let before = c.snapshot().work_offsets[0];
+        locate(&mut c, &clock, 40.0, 0.0);
+        c.handle(Command::FindStockContinue);
+        run_until(&mut c, &clock, 300.0, "the hold", |s| s.probe_retry.is_some() && s.mode == Mode::Running);
+        run_until(&mut c, &clock, 30.0, "the probe lifted", |s| s.velocity == 0.0);
+        let s = c.snapshot();
+        let r = s.probe_retry.clone().unwrap();
+        assert_eq!((r.name.as_str(), r.accept.is_none()), ("Find stock", true));
+        assert!(r.reason.contains("without touching"), "{}", r.reason);
+        assert!(s.alarm.is_none() && s.work_offsets[0] == before);
+        assert!(close(s.machine[2], 104.0), "back up where it started: {:?}", s.machine);
+        // only a tolerance failure can be accepted; Cycle Start doesn't skip it either
+        c.handle(Command::ProbeAccept);
+        c.handle(Command::CycleStart);
+        assert!(c.snapshot().probe_retry.is_some());
+        c.handle(Command::ProbeAgain);
+        let s = c.snapshot();
+        assert!(s.probe_retry.is_none() && s.find_stock.as_ref().unwrap().stage == FindStockStage::Locate);
+        let jog = |c: &mut Controller, axis: usize, by: f64| {
+            c.handle(Command::Jog { axis, positive: by > 0.0, step: Some(by.abs()) });
+            run_until(c, &clock, 30.0, "the end of a jog", |s| s.mode == Mode::Probing);
+        };
+        jog(&mut c, 0, -40.0);
+        locate(&mut c, &clock, 0.0, 0.0);
+        c.handle(Command::FindStockContinue);
+        run_until_idle(&mut c, &clock, 300.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?}", s.log);
+        assert!(s.last_probe.as_ref().unwrap().starts_with("Stock found: X 60.000 × Y 60.000"), "{:?}", s.last_probe);
+        assert!(close(s.work[0], 0.0) && close(s.work[1], 0.0), "{:?}", s.work);
+    }
+
     #[test]
     fn find_stock_stops_when_the_size_is_off() {
         let (mut c, clock) = find_stock_setup("T99 M6\n(RCNC FIND_STOCK SIZE=58,60,70 AT=29,30,0)\nM30");
@@ -3854,6 +4238,7 @@ mod tests {
         assert!(close(s.work[0], 30.0) && close(s.work[1], 30.0) && close(s.work[2] - s.machine[2], -100.0), "{:?}", s.work);
 
         let (mut c, clock) = probing_setup();
+        c.homed = [true; 6];
         c.handle(Command::Load { name: "t".into(), text: "(RCNC FIND_STOCK SIZE=60,60,70)\nM30".into() });
         c.handle(Command::CycleStart);
         run_until_idle(&mut c, &clock, 10.0);
@@ -3950,6 +4335,16 @@ mod tests {
                 sim.world.bores.push(([(bx[0] + bx[1]) / 2 + (v[0] * spu) as i64, (by[0] + by[1]) / 2 + (v[1] * spu) as i64], (4.0 * spu) as i64));
             }
         }
+        // RCNC_STEP="x,h": a stepped top: past x (mm from the middle, toward +X) the block is only h tall
+        if let Ok(st) = std::env::var("RCNC_STEP") {
+            let v: Vec<f64> = st.split(',').map(|n| n.trim().parse().unwrap()).collect();
+            let (bx, by, top) = sim.world.block.unwrap();
+            let spu = config.axes[0].steps_per_unit;
+            let xs = (bx[0] + bx[1]) / 2 + (v[0] * spu) as i64;
+            let low = sim.world.probe_z + (v[1] * config.axes[2].steps_per_unit) as i64;
+            sim.world.block = Some((bx, by, low));
+            sim.world.blocks.push(([bx[0], xs], by, top));
+        }
         let world = sim.world.clone();
         let mut c = Controller::new(config.clone(), Box::new(sim), clock.clone());
         c.handle(Command::Connect);
@@ -3958,13 +4353,18 @@ mod tests {
         run_until_idle(&mut c, &clock, 600.0);
         let spu = |a: usize| config.axes[a].steps_per_unit;
         let middle = |a: usize| crate::sim::homed_position(&config, &world, a, world.travel[a] as f64 / 2.0 / spu(a));
-        let top = crate::sim::homed_position(&config, &world, 2, world.block.unwrap().2 as f64 / spu(2));
+        // the stock's highest top (a stepped bar's full-height part)
+        let high = world.blocks.iter().map(|b| b.2).chain(world.block.map(|b| b.2)).max().unwrap();
+        let top = crate::sim::homed_position(&config, &world, 2, high as f64 / spu(2));
+        // RCNC_LOCATE_X: where across the stock (mm from its middle) the operator puts the probe for Find stock
+        let locate_x: f64 = std::env::var("RCNC_LOCATE_X").ok().and_then(|v| v.parse().ok()).unwrap_or(2.5);
         if let Some(l) = std::env::var("RCNC_AIR_CUT").ok().filter(|l| !l.is_empty()) {
             c.handle(Command::SetAirCut(Some(l.parse().unwrap())));
         }
         c.handle(Command::Load { name: path.clone(), text });
         c.handle(Command::CycleStart);
         let mut t = 0.0;
+        let limit: f64 = std::env::var("RCNC_MAX_S").ok().and_then(|v| v.parse().ok()).unwrap_or(4000.0);
         let mut changes = vec![];
         let mut lowest_cut = f64::INFINITY;
         loop {
@@ -3978,8 +4378,13 @@ mod tests {
             if s.mode == Mode::Running && s.spindle != Spindle::Off {
                 lowest_cut = lowest_cut.min(s.machine[2] - top);
             }
+            if s.paused.as_deref().is_some_and(|p| p.starts_with("Program paused (M0)")) {
+                println!("{} at {t:.0} s", s.paused.as_deref().unwrap_or_default());
+                c.handle(Command::CycleStart);
+            }
             if let Some(tc) = &s.tool_change {
                 if tc.stage == ToolChangeStage::Loading && c.routine_waiting {
+                    println!("T{} at {t:.0} s", tc.to);
                     changes.push(tc.to);
                     c.handle(Command::ToolChangeContinue { measure: None });
                 }
@@ -3992,7 +4397,7 @@ mod tests {
                     run_until(c, &clock, 120.0, "the end of a jog", |s| s.mode == Mode::Probing);
                 };
                 go(&mut c, 2, s.machine[2].max(top + 30.0));
-                go(&mut c, 0, middle(0) + 2.5);
+                go(&mut c, 0, middle(0) + locate_x);
                 go(&mut c, 1, middle(1) - 3.0);
                 go(&mut c, 2, top - 5.0);
                 go(&mut c, 2, top + 5.0);
@@ -4001,14 +4406,49 @@ mod tests {
             if s.mode == Mode::Idle && s.log.iter().any(|l| l.contains("Program finished")) {
                 break;
             }
-            assert!(t < 4000.0, "still running after {t:.0}s: {:?}", s.log);
+            assert!(t < limit, "still running after {t:.0}s: {:?}", s.log);
         }
         let s = c.snapshot();
         for l in s.log.iter().filter(|l| l.contains("Stock found") || l.contains("Bores found") || l.contains("touched off") || l.starts_with("Warning")) {
             println!("{l}");
         }
+        if std::env::var("RCNC_FULL_LOG").is_ok() {
+            for l in s.log.iter() {
+                println!("log: {l}");
+            }
+        }
         println!("{path}: finished after {t:.0} s simulated, tool changes {changes:?}, work offset {:?}", s.work_offsets[0]);
         println!("lowest the tool went with the spindle on: {lowest_cut:.3} mm from the stock top");
+    }
+
+    #[test]
+    fn g64_blends_short_moves_that_g61_stops_after() {
+        // a 3D finishing path: many short moves along a gentle curve
+        let mut path = String::from("G90 G0 X0 Y0 Z-10\n");
+        for k in 1..=400 {
+            let x = k as f64 * 0.25;
+            path += &format!("G1 X{x:.3} Y{:.3} F1500\n", (x / 8.0).sin() * 3.0);
+        }
+        let time = |mode: &str| {
+            let clock = Arc::new(ManualClock::default());
+            let mut c = Controller::new(crate::sim::dmc2_sim_config(), Box::new(Simulator::new(clock.clone())), clock.clone());
+            c.handle(Command::Connect);
+            c.handle(Command::Reset);
+            c.handle(Command::Home(None));
+            run_until_idle(&mut c, &clock, 600.0);
+            c.handle(Command::Mdi("G53 G0 X100 Y300 Z-20\nG10 L2 P1 X100 Y300 Z-100".into()));
+            run_until_idle(&mut c, &clock, 30.0);
+            c.handle(Command::Load { name: "t".into(), text: format!("{mode}\n{path}M30") });
+            let start = clock.now();
+            c.handle(Command::CycleStart);
+            run_until_idle(&mut c, &clock, 600.0);
+            assert!(c.snapshot().log.iter().any(|l| l.contains("Program finished")), "{:?}", c.snapshot().log);
+            clock.now() - start
+        };
+        let (blended, stopping) = (time("G64"), time("G61"));
+        // about 105 mm at 25 mm/s is 4.2 s, plus the rapid to the start; stopping dead 400 times takes far longer
+        assert!(blended < 6.0, "G64: {blended} s");
+        assert!(stopping > 1.5 * blended, "G61 {stopping} s, G64 {blended} s");
     }
 
     #[test]
@@ -4053,7 +4493,7 @@ mod tests {
             (T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill)\n(estimated time 3:13)\nG21\n(T5 later - D3)\nM30";
         let t = header_tools(text);
         assert_eq!(t.iter().map(|(n, _)| *n).collect::<Vec<_>>(), vec![99, 24, 1]);
-        assert_eq!((t[1].1.diameter, t[1].1.flute_length, t[1].1.stickout), (6.35, 19.05, 24.0));
+        assert_eq!((t[1].1.diameter, t[1].1.flute_length, t[1].1.stickout, t[1].1.flutes), (6.35, 19.05, 24.0, 3));
         assert_eq!(t[1].1.description, "3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes");
         assert_eq!((t[2].1.diameter, t[2].1.stickout), (6.35, 0.0));
 
@@ -4122,7 +4562,7 @@ mod tests {
                     go(&mut c, 2, top + 5.0);
                     c.handle(Command::FindStockContinue);
                 }
-                if matches!(s.mode, Mode::Idle | Mode::Alarm) && s.tool_change.is_none() && s.find_stock.is_none() {
+                if matches!(s.mode, Mode::Idle | Mode::Alarm) && s.tool_change.is_none() && s.find_stock.is_none() || s.probe_retry.is_some() && c.status.idle {
                     break;
                 }
             }
@@ -4135,11 +4575,124 @@ mod tests {
         assert!(found.contains("Ø8.000 and Ø8.000") && found.contains("(should be 54.231)") && found.contains("turned 0.000°"), "{found}");
         assert!(close(s.work[0], 0.0) && close(s.work[1], 0.0), "{:?}", s.work);
 
-        // turned 0.5°: more than 0.2° off square, it stops with nothing set
+        // turned 0.5°: more than 0.2° off square, it holds for Probe again with nothing set
         let c = run(0.5);
         let s = c.snapshot();
-        assert_eq!(s.mode, Mode::Alarm);
-        assert!(s.alarm.as_ref().unwrap().contains("off square"), "{:?}", s.alarm);
+        assert_eq!(s.mode, Mode::Running);
+        let r = s.probe_retry.unwrap();
+        assert!(r.reason.contains("off square") && r.reason.contains("square the part in the vise and Probe again"), "{}", r.reason);
+        let off = r.accept.unwrap();
+        assert!(off.contains("turned 0.502°, 0.302° over the 0.200° allowed"), "{off}");
+    }
+
+    /// A chip in a locating bore: Find bores fails its check, lifts the probe and holds the program
+    /// with nothing set. Probe again (the chip knocked off) carries on with the right offsets; Stop
+    /// leaves the offsets as they were; Accept anyway sets what it measured.
+    #[test]
+    fn a_failed_find_bores_holds_for_probe_again() {
+        #[derive(Clone, Copy, PartialEq, Debug)]
+        enum Answer {
+            Again,
+            Stop,
+            Accept,
+        }
+        let run = |answer: Answer| {
+            let clock = Arc::new(ManualClock::default());
+            let config = crate::sim::dmc2_sim_config();
+            let mut sim = Simulator::new(clock.clone());
+            sim.add_stock(&config, 39.0, 77.0, 20.0);
+            let (bx, by, top_steps) = sim.world.block.unwrap();
+            let mid = [(bx[0] + bx[1]) / 2, (by[0] + by[1]) / 2];
+            let spu = config.axes[0].steps_per_unit;
+            let st = |mm: f64| (mm * spu) as i64;
+            for (x, y) in [(-10.0, -28.0), (11.0, 22.0)] {
+                sim.world.bores.push(([mid[0] + st(x), mid[1] + st(y)], st(4.0)));
+            }
+            // a 0.6 mm chip on the +X wall of the first bore, gone after the two touches on it
+            let c = [mid[0] + st(-10.0), mid[1] + st(-28.0)];
+            sim.world.chips.push((([c[0] + st(3.4), c[0] + st(5.0)], [c[1] - st(1.0), c[1] + st(1.0)], top_steps), 2));
+            let world = sim.world.clone();
+            let mut c = Controller::new(config.clone(), Box::new(sim), clock.clone());
+            c.handle(Command::Connect);
+            c.handle(Command::Reset);
+            c.handle(Command::Home(None));
+            run_until_idle(&mut c, &clock, 600.0);
+            c.handle(Command::Load {
+                name: "t".into(),
+                text: "T99 M6\n(RCNC FIND_STOCK SIZE=39,77,20 TOL=1)\n(RCNC FIND_BORES A=-10,-28 B=11,22 D=8 TOP=0 DEPTH=3 TOL=0.1 ROT=0.2)\nG0 X0 Y0 Z10\nM30".into(),
+            });
+            c.handle(Command::CycleStart);
+            let spu2 = |a: usize| config.axes[a].steps_per_unit;
+            let middle = |a: usize| crate::sim::homed_position(&config, &world, a, world.travel[a] as f64 / 2.0 / spu2(a));
+            let top = crate::sim::homed_position(&config, &world, 2, world.block.unwrap().2 as f64 / spu2(2));
+            let (mut before, mut held) = (None, None);
+            for _ in 0..400_000 {
+                clock.advance(0.005);
+                c.update();
+                let s = c.snapshot();
+                if s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading) && c.routine_waiting {
+                    c.handle(Command::ToolChangeContinue { measure: None });
+                }
+                if s.find_stock.as_ref().is_some_and(|f| f.stage == FindStockStage::Locate) && c.routine_waiting && s.mode == Mode::Probing {
+                    let go = |c: &mut Controller, axis: usize, to: f64| {
+                        let by = to - c.snapshot().machine[axis];
+                        c.handle(Command::Jog { axis, positive: by > 0.0, step: Some(by.abs()) });
+                        run_until(c, &clock, 120.0, "the end of a jog", |s| s.mode == Mode::Probing);
+                    };
+                    go(&mut c, 2, s.machine[2].max(top + 30.0));
+                    go(&mut c, 0, middle(0) + 2.0);
+                    go(&mut c, 1, middle(1) + 1.0);
+                    go(&mut c, 2, top - 5.0);
+                    go(&mut c, 2, top + 5.0);
+                    c.handle(Command::FindStockContinue);
+                }
+                if c.auto_probe && before.is_none() {
+                    before = Some(s.work_offsets[0]);
+                }
+                if let (Some(r), true, None) = (&s.probe_retry, s.mode == Mode::Running && s.velocity == 0.0 && c.status.idle, &held) {
+                    held = Some((r.clone(), s.clone()));
+                    match answer {
+                        Answer::Again => c.handle(Command::ProbeAgain),
+                        Answer::Stop => c.handle(Command::Stop),
+                        Answer::Accept => c.handle(Command::ProbeAccept),
+                    }
+                }
+                if matches!(s.mode, Mode::Idle | Mode::Alarm) && s.tool_change.is_none() && s.find_stock.is_none() {
+                    break;
+                }
+            }
+            let (r, at) = held.expect("held for Probe again");
+            (c, r, at, before.unwrap(), top)
+        };
+
+        let (c, r, at, before, top) = run(Answer::Again);
+        assert_eq!(r.name, "Find bores");
+        assert!(r.reason.contains("One bore reads small") && r.reason.contains("clean the bores and Probe again"), "{}", r.reason);
+        assert!(r.accept.is_some(), "a tolerance failure can be accepted");
+        // held: nothing set, the probe lifted back out of the bores, the program at its line
+        assert_eq!(at.work_offsets[0], before);
+        assert!(at.machine[2] > top, "{} {top}", at.machine[2]);
+        assert_eq!(at.line, Some(2));
+        assert!(at.alarm.is_none() && at.last_probe.as_ref().unwrap().starts_with("Find bores failed"), "{:?}", at.last_probe);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?} {:?}", s.alarm, s.log);
+        assert!(s.last_probe.as_ref().unwrap().starts_with("Bores found: bores Ø8.000 and Ø8.000"), "{:?}", s.last_probe);
+        assert!(close(s.work[0], 0.0) && close(s.work[1], 0.0), "{:?}", s.work);
+        assert!(s.probe_retry.is_none());
+
+        let (c, _, _, before, _) = run(Answer::Stop);
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Idle);
+        assert!(s.alarm.is_none() && s.probe_retry.is_none());
+        assert_eq!(s.work_offsets[0], before, "Stop leaves the offsets as they were");
+        assert!(!s.log.iter().any(|l| l.contains("Program finished") || l.starts_with("Bores found")), "{:?}", s.log);
+
+        let (c, _, _, before, _) = run(Answer::Accept);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?}", s.log);
+        assert!(s.last_probe.as_ref().unwrap().contains("accepted outside the tolerance"), "{:?}", s.last_probe);
+        // the chip pushed the first bore's middle 0.3 mm to -X: the accepted middle is 0.15 off
+        assert!((s.work_offsets[0][0] - before[0] + 0.15).abs() < 0.03, "{:?} {before:?}", s.work_offsets[0]);
     }
 
     #[test]
@@ -4162,6 +4715,170 @@ mod tests {
         let found = s.log.iter().find(|l| l.starts_with("Stock found")).unwrap();
         assert!(found.contains("Warning: the top is at Z110.610, 0.610 mm from the Z110"), "{found}");
         assert_eq!(s.config.probing.setter.reference, "Vise");
+    }
+
+    /// A probe loaded and measured over the sim's block (X/Y 100..160, top Z100)
+    /// with a 2 mm stylus, the setter at Z30 and the Vise reference at -70
+    /// (where the setter's top really is above the block top).
+    fn probe_cal_setup(world: impl FnOnce(&mut Simulator)) -> (Controller, Arc<ManualClock>) {
+        let (mut c, clock) = probing_setup_with(world);
+        let mut config = MachineConfig::dmc2();
+        config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, offset: 13.31, reference: String::new(), ..Default::default() };
+        config.probing.stylus_diameter = 2.0;
+        config.tool_change = crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, ..Default::default() };
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.homed = [true; 6];
+        c.handle(Command::Mdi("G53 G0 Z110\nG53 G0 X130 Y130".into()));
+        run_until_idle(&mut c, &clock, 10.0);
+        c.handle(Command::Load { name: "t".into(), text: "T99 M6\nM30".into() });
+        c.handle(Command::CycleStart);
+        run_until(&mut c, &clock, 60.0, "loading the probe", |s| s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading));
+        c.handle(Command::CycleStart);
+        run_until_idle(&mut c, &clock, 120.0);
+        c.handle(Command::Mdi("G53 G0 Z110".into()));
+        run_until_idle(&mut c, &clock, 10.0);
+        assert!(close(c.snapshot().machine[2], 110.0));
+        (c, clock)
+    }
+
+    fn probe_cal_jog(c: &mut Controller, clock: &ManualClock, axis: usize, by: f64) {
+        c.handle(Command::Jog { axis, positive: by > 0.0, step: Some(by.abs()) });
+        run_until(c, clock, 60.0, "the end of a jog", |s| s.mode == Mode::Probing);
+    }
+
+    fn probe_cal_result(c: &mut Controller, clock: &ManualClock) -> ProbeCalView {
+        run_until(c, clock, 300.0, "the result", |s| s.probe_cal.as_ref().is_some_and(|p| p.stage == ProbeCalStage::Result) && s.mode == Mode::Probing);
+        tick(c, clock, 400);
+        c.snapshot().probe_cal.clone().unwrap()
+    }
+
+    /// The sim's probe is a point, so a Ø20 bore measured as Ø21.9 means a 1.9 mm ball.
+    /// Turned half a turn the centre doesn't move (no runout). Saved, Find stock-style
+    /// edges then use the 0.95 mm radius.
+    #[test]
+    fn calibrates_the_probe_in_an_inner_bore_and_turned() {
+        let (mut c, clock) = probe_cal_setup(|sim| sim.world.bores.push(([26_000, 26_000], 2_000)));
+        c.handle(Command::CalibrateProbe(ProbeCalTarget::Shape { shape: ProbeCalShape::InnerBore, size: [21.9; 2], depth: 3.0 }));
+        assert_eq!(c.snapshot().probe_cal.as_ref().unwrap().stage, ProbeCalStage::Locate);
+        // Continue does nothing before the stylus is tapped
+        c.handle(Command::CalibrateProbeContinue);
+        assert_eq!(c.snapshot().probe_cal.as_ref().unwrap().stage, ProbeCalStage::Locate);
+        // tap on the block top beside the bore, then into the bore, 3 off its middle
+        probe_cal_jog(&mut c, &clock, 0, -18.0);
+        probe_cal_jog(&mut c, &clock, 2, -20.0);
+        assert!(c.snapshot().probe_cal.as_ref().unwrap().tapped);
+        probe_cal_jog(&mut c, &clock, 2, 2.0);
+        probe_cal_jog(&mut c, &clock, 0, 21.0);
+        probe_cal_jog(&mut c, &clock, 1, -2.0);
+        probe_cal_jog(&mut c, &clock, 2, -5.0);
+        c.handle(Command::CalibrateProbeContinue);
+        let p = probe_cal_result(&mut c, &clock);
+        let d = p.new.as_ref().unwrap().diameter;
+        assert!(close(d[0], 1.9) && close(d[1], 1.9), "{p:?}");
+        assert!(p.repeat.unwrap() < 0.02 && p.runout.is_none(), "{p:?}");
+        assert!(close(p.centres[0][0], 130.0) && close(p.centres[0][1], 130.0), "{p:?}");
+        // turn it and measure again
+        c.handle(Command::CalibrateProbeTurn);
+        assert_eq!(c.snapshot().probe_cal.as_ref().unwrap().stage, ProbeCalStage::Turn);
+        c.handle(Command::CalibrateProbeContinue);
+        let p = probe_cal_result(&mut c, &clock);
+        let r = p.runout.unwrap();
+        assert!(close(r[0], 0.0) && close(r[1], 0.0), "{p:?}");
+        // only once round
+        c.handle(Command::CalibrateProbeTurn);
+        assert_eq!(c.snapshot().probe_cal.as_ref().unwrap().stage, ProbeCalStage::Result);
+        c.handle(Command::CalibrateProbeContinue);
+        run_until_idle(&mut c, &clock, 30.0);
+        let s = c.snapshot();
+        assert!(s.probe_cal.is_none());
+        let cal = &s.config.probing.calibration;
+        assert!(close(cal.diameter[0], 1.9) && close(cal.diameter[1], 1.9) && cal.diameter_on == "Ø21.900 inner bore", "{cal:?}");
+        assert!(s.probe_runout.is_some());
+        assert!((s.config.probing.ball_radius(0) - cal.diameter[0] / 2.0).abs() < 1e-12);
+        assert!(s.log.iter().any(|l| l.starts_with("Probe calibrated: ball X 1.9")), "{:?}", s.log);
+    }
+
+    /// The block is 60 × 60: told it's 58.1, the ball measures 1.9. Cancel keeps what was stored.
+    #[test]
+    fn calibrates_the_probe_on_an_outer_rectangle_and_cancel_keeps_the_old() {
+        let (mut c, clock) = probe_cal_setup(|_| {});
+        c.handle(Command::CalibrateProbe(ProbeCalTarget::Shape { shape: ProbeCalShape::OuterRectangle, size: [58.1; 2], depth: 3.0 }));
+        probe_cal_jog(&mut c, &clock, 2, -20.0);
+        probe_cal_jog(&mut c, &clock, 2, 4.0);
+        probe_cal_jog(&mut c, &clock, 1, 3.0);
+        c.handle(Command::CalibrateProbeContinue);
+        let p = probe_cal_result(&mut c, &clock);
+        let d = p.new.as_ref().unwrap().diameter;
+        assert!(close(d[0], 1.9) && close(d[1], 1.9), "{p:?}");
+        assert!(close(p.centres[0][0], 130.0) && close(p.centres[0][1], 130.0), "{p:?}");
+        c.handle(Command::Stop);
+        run_until_idle(&mut c, &clock, 10.0);
+        let s = c.snapshot();
+        assert!(s.probe_cal.is_none());
+        assert_eq!(s.config.probing.calibration, crate::probing::ProbeCalibration::default());
+    }
+
+    /// An outer cylinder (a Ø40 boss standing on the table) and an inner rectangle (a 30 × 20 pocket).
+    #[test]
+    fn calibrates_the_probe_on_an_outer_cylinder_and_an_inner_rectangle() {
+        // the cylinder: a box the sim can't make round, so measure a square boss as a "cylinder"
+        // off-centre in Y: the chord trick still lands the X span on the full width
+        let (mut c, clock) = probe_cal_setup(|_| {});
+        c.handle(Command::CalibrateProbe(ProbeCalTarget::Shape { shape: ProbeCalShape::OuterCylinder, size: [58.0; 2], depth: 3.0 }));
+        probe_cal_jog(&mut c, &clock, 2, -20.0);
+        probe_cal_jog(&mut c, &clock, 2, 4.0);
+        c.handle(Command::CalibrateProbeContinue);
+        let p = probe_cal_result(&mut c, &clock);
+        assert!(close(p.new.as_ref().unwrap().diameter[0], 2.0), "{p:?}");
+        assert_eq!(p.on, "Ø58.000 outer cylinder");
+        c.handle(Command::Stop);
+        run_until_idle(&mut c, &clock, 10.0);
+
+        // a pocket: the sim's bores are round, so a Ø20 bore stands in for a 20 × 20 pocket
+        let (mut c, clock) = probe_cal_setup(|sim| sim.world.bores.push(([26_000, 26_000], 2_000)));
+        c.handle(Command::CalibrateProbe(ProbeCalTarget::Shape { shape: ProbeCalShape::InnerRectangle, size: [21.95, 21.95], depth: 3.0 }));
+        probe_cal_jog(&mut c, &clock, 0, -18.0);
+        probe_cal_jog(&mut c, &clock, 2, -20.0);
+        probe_cal_jog(&mut c, &clock, 2, 2.0);
+        probe_cal_jog(&mut c, &clock, 0, 18.0);
+        probe_cal_jog(&mut c, &clock, 2, -5.0);
+        c.handle(Command::CalibrateProbeContinue);
+        let p = probe_cal_result(&mut c, &clock);
+        assert!(close(p.new.as_ref().unwrap().diameter[1], 1.95), "{p:?}");
+        assert_eq!(p.on, "21.950 × 21.950 inner rectangle");
+    }
+
+    /// The Vise reference stored 0.05 lower than the probe sees it: the probe's Z offset is +0.05,
+    /// and Calibrate Z with the probe then lands on the stored value.
+    #[test]
+    fn calibrates_the_probe_z_offset_on_a_trusted_reference() {
+        let (mut c, clock) = probe_cal_setup(|_| {});
+        let mut config = c.snapshot().config.clone();
+        let vise = config.probing.setter.references.iter().position(|r| r.name == "Vise").unwrap();
+        config.probing.setter.references[vise].setter_top = -70.05;
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.handle(Command::CalibrateProbe(ProbeCalTarget::ZReference(vise)));
+        probe_cal_jog(&mut c, &clock, 2, -20.0);
+        probe_cal_jog(&mut c, &clock, 2, 4.0);
+        c.handle(Command::CalibrateProbeContinue);
+        let p = probe_cal_result(&mut c, &clock);
+        let n = p.new.clone().unwrap();
+        assert!(close(n.z_offset, 0.05) && n.z_offset_on == "Vise" && n.diameter == [0.0; 2], "{p:?}");
+        // a turn is only for shapes
+        c.handle(Command::CalibrateProbeTurn);
+        assert_eq!(c.snapshot().probe_cal.as_ref().unwrap().stage, ProbeCalStage::Result);
+        c.handle(Command::CalibrateProbeContinue);
+        run_until_idle(&mut c, &clock, 30.0);
+        assert!(close(c.snapshot().config.probing.calibration.z_offset, 0.05));
+        // Calibrate Z with the probe now agrees with the stored -70.05
+        c.handle(Command::CalibrateZ { reference: vise, gauge: None });
+        probe_cal_jog(&mut c, &clock, 2, -8.0);
+        probe_cal_jog(&mut c, &clock, 2, 4.0);
+        c.handle(Command::CalibrateContinue);
+        run_until(&mut c, &clock, 120.0, "the result", |s| s.calibrate.as_ref().is_some_and(|k| k.stage == CalibrateStage::Result) && s.mode == Mode::Probing);
+        tick(&mut c, &clock, 400);
+        let k = c.snapshot().calibrate.clone().unwrap();
+        assert!(close(k.new.unwrap(), -70.05), "{k:?}");
     }
 
     /// Two vise stations in one program: G54 zeroed on the vise, G55 on another reference. One measurement
@@ -4266,11 +4983,7 @@ mod tests {
     #[test]
     fn nothing_takes_z_above_the_top_of_its_travel() {
         let clock = Arc::new(ManualClock::default());
-        // The DMC2 with the setter and change position where the homed
-        // simulator's table is (its table is the setter, physical Z30).
-        let mut config = MachineConfig::dmc2();
-        (config.probing.setter.x, config.probing.setter.y, config.probing.setter.travel_z) = (42.0, 302.0, -37.0);
-        config.tool_change.z = -17.0;
+        let config = crate::sim::dmc2_sim_config();
         let mut sim = Simulator::new(clock.clone());
         let mut c = Controller::new(config.clone(), Box::new(sim), clock.clone());
         c.handle(Command::Connect);
@@ -4315,6 +5028,49 @@ mod tests {
         c.handle(Command::Jog { axis: 2, positive: true, step: Some(30.0) });
         run_until_idle(&mut c, &clock, 30.0);
         assert!(c.snapshot().machine[2] <= top + 0.01, "{:?}", c.snapshot().machine);
+    }
+
+    /// A side depth deeper than the stylus is long: the wizard waits with the
+    /// problem shown until the depth is one the stylus can reach.
+    #[test]
+    fn find_stock_waits_for_a_depth_the_stylus_can_reach() {
+        let clock = Arc::new(ManualClock::default());
+        let config = crate::sim::dmc2_sim_config();
+        let mut sim = Simulator::new(clock.clone());
+        sim.add_stock(&config, 39.0, 77.0, 20.0);
+        let mut c = Controller::new(config, Box::new(sim), clock.clone());
+        c.handle(Command::Connect);
+        c.handle(Command::Reset);
+        c.handle(Command::Home(None));
+        run_until_idle(&mut c, &clock, 600.0);
+        c.handle(Command::Load {
+            name: "t".into(),
+            text: "(T99 probe - touch probe, D2 stylus ball, flute length 12, stickout 40)\n(RCNC Z_REFERENCE Vise)\nT99 M6\n(RCNC FIND_STOCK SIZE=39,77,20 AT=0,0,20 DEPTH=20 KEEPZ=1)\nM30".into(),
+        });
+        c.handle(Command::CycleStart);
+        for _ in 0..200_000 {
+            clock.advance(0.005);
+            c.update();
+            let s = c.snapshot();
+            if s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading) && c.routine_waiting {
+                c.handle(Command::ToolChangeContinue { measure: None });
+            }
+            if s.find_stock.is_some() && c.routine_waiting || s.mode == Mode::Alarm {
+                break;
+            }
+        }
+        // the wizard waits with the problem shown, and won't go on until the depth fits the stylus
+        let s = c.snapshot();
+        let f = s.find_stock.clone().expect("the wizard is up");
+        assert_eq!(f.depth, 20.0);
+        let p = f.problem.clone().unwrap_or_default();
+        assert!(p.contains("20.000 mm below the top") && p.contains("stylus (T99) is only 12.000 mm long"), "{p}");
+        c.handle(Command::FindStockSettings { depth: 12.5, tolerance: 2.0 });
+        assert!(c.snapshot().find_stock.unwrap().problem.is_some(), "12.5 is past the 12 mm stylus (the simulator's ball is a point)");
+        c.handle(Command::FindStockSettings { depth: 10.0, tolerance: 2.0 });
+        let f = c.snapshot().find_stock.unwrap();
+        assert_eq!((f.depth, f.request.depth, f.tolerance, f.problem), (10.0, Some(10.0), 2.0, None));
+        assert_eq!(c.snapshot().mode, Mode::Probing);
     }
 
     /// Runs `program` on a 39 x 77 x 20 block whose -X face sits 0.5 mm off a

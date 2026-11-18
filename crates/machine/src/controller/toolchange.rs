@@ -39,6 +39,8 @@ pub struct ToolChangeView {
     pub return_to_start: bool,
     /// Why the tool change is paused, at `Mismatch`.
     pub problem: Option<String>,
+    /// The new tool's stick-out from its setter measurement, once the check is calibrated.
+    pub measured_stickout: Option<f64>,
 }
 
 pub(super) struct ToolChange {
@@ -106,6 +108,7 @@ impl Controller {
                 measure: self.config.tool_change_touch_off,
                 return_to_start: tc.return_to_start,
                 problem: None,
+                measured_stickout: None,
             },
             start,
             z_offset: self.interp.program_offset()[2],
@@ -150,6 +153,10 @@ impl Controller {
         let Some(t) = &self.tool_change else { return Ok(vec![]) };
         let (start, z_offset, outputs) = (t.start, t.z_offset, t.outputs.clone());
         let view = t.view.clone();
+        if self.loaded_tool != view.to {
+            // the probe's offset from the spindle axis changes when it's taken out
+            self.probe_runout = None;
+        }
         self.loaded_tool = view.to;
         self.info(format!("Tool {} loaded", view.to));
         // The program carries on expecting the spindle and coolant as they
@@ -220,23 +227,68 @@ fn measure_steps(s: &ProbeSettings) -> Vec<Step> {
     let mut steps = probing::setter_steps(s);
     let s = s.clone();
     steps.push(Step::Then(Box::new(move |c, hits| match probing::setter_reading(&s, hits) {
-        Ok(hit) => Ok(probing::touch_off(c, &s, hit)),
-        Err(e) => {
-            c.info(format!("Tool change paused: {e}"));
-            c.stage(ToolChangeStage::Mismatch);
-            c.set_problem(Some(e));
-            let up = s.setter.travel_z.max(c.machine_position()[2]);
-            Ok(vec![
-                Step::MoveTo { axis: 2, to: up, feed: s.travel_feed, guarded: false },
-                Step::Operator,
-                Step::Then(Box::new(|c, _| {
-                    c.set_problem(None);
-                    c.stage(ToolChangeStage::Measuring);
-                    c.info("Measuring the tool again");
-                    Ok(measure_steps(&c.config.probing))
-                })),
-            ])
-        }
+        Ok(hit) => match c.stickout_problem(hit) {
+            None => Ok(probing::touch_off(c, &s, hit)),
+            Some(e) => Ok(mismatch(c, &s, e)),
+        },
+        Err(e) => Ok(mismatch(c, &s, e)),
     })));
     steps
+}
+
+/// Lift off the setter and wait for the operator to check things, then measure again.
+fn mismatch(c: &mut Controller, s: &ProbeSettings, e: String) -> Vec<Step> {
+    c.info(format!("Tool change paused: {e}"));
+    c.stage(ToolChangeStage::Mismatch);
+    c.set_problem(Some(e));
+    let up = s.setter.travel_z.max(c.machine_position()[2]);
+    vec![
+        Step::MoveTo { axis: 2, to: up, feed: s.travel_feed, guarded: false },
+        Step::Operator,
+        Step::Then(Box::new(|c, _| {
+            c.set_problem(None);
+            c.stage(ToolChangeStage::Measuring);
+            c.info("Measuring the tool again");
+            Ok(measure_steps(&c.config.probing))
+        })),
+    ]
+}
+
+impl Controller {
+    /// The tool's tip touched the setter at machine Z `hit`: remember it, and with the nut face calibrated,
+    /// check its stick-out against the program's (the simulation assumed it). Why it's wrong, if it is.
+    fn stickout_problem(&mut self, hit: f64) -> Option<String> {
+        let to = self.tool_change.as_ref()?.view.to;
+        self.last_setter_hit = Some((to, hit));
+        let k = self.config.tool_change.nut_face_z?;
+        let measured = k - hit;
+        let expected = self.interp.tools.get(&to).map(|t| t.stickout).filter(|s| *s > 0.0);
+        if let Some(t) = &mut self.tool_change {
+            t.view.measured_stickout = Some(measured);
+        }
+        let Some(expected) = expected else {
+            self.info(format!("T{to} stick-out measured {measured:.1} mm (the program gives none)"));
+            return None;
+        };
+        self.info(format!("T{to} stick-out measured {measured:.1} mm (program expects {expected:.1})"));
+        let tol = self.config.tool_change.stickout_tolerance;
+        ((measured - expected).abs() > tol).then(|| {
+            format!(
+                "T{to} sticks out {measured:.1} mm, the program expects {expected:.1} (more than {tol:.1} off): the simulation's tool bend and holder clearance assumed {expected:.1}. Set the stick-out, then Continue to measure again."
+            )
+        })
+    }
+
+    /// The tool last measured on the setter has exactly `stickout` mm out of the collet nut: calibrate the
+    /// stick-out check from it.
+    pub(super) fn calibrate_stickout(&mut self, stickout: f64) {
+        let Some((tool, hit)) = self.last_setter_hit else {
+            return self.info("Measure a tool on the setter first (a tool change), then calibrate the stick-out check with it");
+        };
+        if !(stickout > 0.0) {
+            return self.info("The stick-out must be more than zero");
+        }
+        self.config.tool_change.nut_face_z = Some(hit + stickout);
+        self.report(format!("Stick-out check calibrated from T{tool} at {stickout:.1} mm: tools measured from now on report their stick-out"));
+    }
 }

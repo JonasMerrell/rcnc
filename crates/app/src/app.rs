@@ -12,6 +12,7 @@ use std::sync::Arc;
 use crate::preview::{self, Camera, Toolpath};
 use crate::sheet::{self, Sheets, SheetView};
 
+pub mod ears;
 mod findstock;
 mod pages;
 mod toolchange;
@@ -77,12 +78,23 @@ pub struct App {
     tc_measure: Option<bool>,
     /// Jog step in the Find stock window, mm.
     fs_step: f64,
+    /// Accept anyway was pressed in the failed-probe window: show what it means and ask again.
+    accept_confirm: bool,
+    /// The message log window is open.
+    log_open: bool,
     /// Stock size for Find stock started from the Probe page.
     fs_size: [f64; 3],
     /// Air cut height to switch on, mm.
     air_lift: f64,
     /// Gauge block thickness for calibrating a Z reference without the probe, mm.
     cal_gauge: f64,
+    /// Calibrate probe on the Probe page: the reference shape, its X/Y size
+    /// (a round one's diameter is the X), how far below an outer one's top
+    /// the sides are touched, and the Z reference for the Z offset.
+    pc_shape: machine::ProbeCalShape,
+    pc_size: [f64; 2],
+    pc_depth: f64,
+    pc_zref: usize,
     /// Homing test: axis, re-homes, distance away between homes (mm).
     ht_axis: usize,
     ht_cycles: usize,
@@ -103,6 +115,8 @@ pub struct App {
     confirm_quit: bool,
     /// Quit was confirmed: let the window close.
     quitting: bool,
+    /// The microphone, if there is one.
+    ears: ears::Ears,
 }
 
 impl App {
@@ -139,9 +153,15 @@ impl App {
             file_checked: 0.0,
             tc_measure: None,
             fs_step: 1.0,
+            accept_confirm: false,
+            log_open: false,
             fs_size: [39.0, 20.0, 77.0],
             air_lift: 25.0,
             cal_gauge: 10.0,
+            pc_shape: machine::ProbeCalShape::InnerBore,
+            pc_size: [20.0, 20.0],
+            pc_depth: 3.0,
+            pc_zref: 0,
             ht_axis: 0,
             ht_cycles: 20,
             ht_away: 100.0,
@@ -154,6 +174,7 @@ impl App {
             program_lines: (0, Vec::new()),
             confirm_quit: false,
             quitting: false,
+            ears: ears::Ears::new(),
         }
     }
 
@@ -320,8 +341,22 @@ impl App {
             }
         }
         if input.modifiers.alt && input.key_pressed(Key::R) {
-            self.machine.send(Command::CycleStart);
+            self.cycle_start();
         }
+    }
+
+    /// Cycle Start, unless the program asks for the listening feed hold (`(RCNC REQUIRE_GUARD)`) and it can't
+    /// work: listening off, the hold switched off, or the input silent. Then it says why and doesn't start.
+    fn cycle_start(&mut self) {
+        if ears::requires_guard(&self.snap.program) && matches!(self.snap.mode, machine::Mode::Idle) {
+            if let Err(why) = self.ears.guard_ready() {
+                self.machine.send(Command::Note(format!(
+                    "Cycle Start refused: this program needs the listening feed hold (it asks with (RCNC REQUIRE_GUARD)), but {why}. Settings -> Listening"
+                )));
+                return;
+            }
+        }
+        self.machine.send(Command::CycleStart);
     }
 
     fn start_jog(&mut self, axis: usize, positive: bool) {
@@ -363,6 +398,11 @@ impl eframe::App for App {
             self.alive = (self.snap.time, std::time::Instant::now());
         }
         self.watch_file(ctx.input(|i| i.time));
+        let program = self.program_file.as_ref().map(|p| p.0.clone());
+        self.ears.poll(&self.snap, program.as_deref(), &self.machine);
+        if self.ears.listening() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         self.update_preview(ctx);
         self.keyboard(ctx);
         self.guard_close(ctx);
@@ -430,7 +470,10 @@ impl eframe::App for App {
             });
         self.tool_change_window(ctx);
         self.find_stock_window(ctx);
+        self.probe_retry_window(ctx);
+        self.log_window(ctx);
         self.calibrate_window(ctx);
+        self.probe_cal_window(ctx);
 
         // The sheet is a native window over the centre area, drawn above
         // anything egui puts there: keep it out of the way of the tool change
@@ -584,6 +627,17 @@ impl App {
                 Mode::Probing => ("PROBING", ACCENT),
                 Mode::Alarm => ("ALARM", RED),
             };
+            // Which build this is, to check against the commit that should be running.
+            let gap = ui.spacing().item_spacing.x;
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(RichText::new(format!("rcnc {}", crate::VERSION)).monospace().color(TEXT))
+                .on_hover_text("rcnc version and the git commit it was built from");
+            if crate::DIRTY {
+                ui.label(RichText::new("+dirty").monospace().color(AMBER))
+                    .on_hover_text("Built with uncommitted changes: this is not exactly that commit");
+            }
+            ui.spacing_mut().item_spacing.x = gap;
+            ui.add_space(10.0);
             badge(ui, label, color);
             if let Some(l) = s.air_cut {
                 ui.add_space(4.0);
@@ -643,6 +697,7 @@ impl App {
                     .map(|b| b.name.as_str())
                     .unwrap_or("No board");
                 ui.label(RichText::new(board).color(MUTED).size(13.0));
+                self.ears.indicator(ui);
                 if let Some(alarm) = &s.alarm {
                     ui.label(RichText::new(alarm).color(RED).strong());
                 } else if let Some(msg) = &s.paused {
@@ -1026,7 +1081,7 @@ impl App {
                 )
                 .clicked()
             {
-                self.machine.send(Command::CycleStart);
+                self.cycle_start();
             }
             if ui
                 .add_enabled(
@@ -1119,6 +1174,16 @@ impl App {
                         edit.request_focus();
                     }
                 });
+                // what the last probing found stays until the next, however far the log scrolls on
+                ui.horizontal(|ui| {
+                    if ui.small_button(if self.log_open { "Hide log" } else { "Log…" }).on_hover_text("All recent messages; every line is also kept with its time in log.txt in the data folder").clicked() {
+                        self.log_open = !self.log_open;
+                    }
+                    if let Some(p) = &s.last_probe {
+                        let color = if p.contains("failed") || p.starts_with("Failed") { AMBER } else { GREEN };
+                        ui.add(egui::Label::new(RichText::new(format!("Last probe: {p}")).size(12.0).color(color)).truncate()).on_hover_text(p);
+                    }
+                });
                 // Exactly two lines, so a long log can't push the rest of the window around.
                 let row = ui.fonts_mut(|f| f.row_height(&FontId::proportional(12.0)));
                 let height = 2.0 * row + ui.spacing().item_spacing.y;
@@ -1147,6 +1212,45 @@ impl App {
                     });
             });
         });
+    }
+}
+
+impl App {
+    /// The whole recent log, scrollable and selectable, over the preview.
+    fn log_window(&mut self, ctx: &egui::Context) {
+        if !self.log_open {
+            return;
+        }
+        let s = self.snap.clone();
+        let mut open = true;
+        egui::Window::new("Log")
+            .open(&mut open)
+            .default_size(Vec2::new(760.0, 360.0))
+            .max_height(ctx.content_rect().height() * 0.55)
+            .anchor(egui::Align2::LEFT_BOTTOM, Vec2::new(16.0, -110.0))
+            .show(ctx, |ui| {
+                if let Some(p) = &s.last_probe {
+                    ui.label(RichText::new("Last probe").size(13.0).color(MUTED).strong());
+                    ui.add(egui::Label::new(RichText::new(p).size(14.0).color(TEXT)).selectable(true));
+                    ui.separator();
+                }
+                ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, true]).max_height(ctx.content_rect().height() * 0.4).show(ui, |ui| {
+                    for msg in s.log.iter() {
+                        let color = if msg.starts_with("Alarm") || msg.starts_with("E-stop") {
+                            RED
+                        } else if msg.starts_with("Bores found") || msg.starts_with("Stock found") || msg.starts_with("Probe Z") {
+                            GREEN
+                        } else {
+                            TEXT
+                        };
+                        ui.add(egui::Label::new(RichText::new(msg).size(13.0).color(color)).selectable(true));
+                    }
+                });
+                if let Some(d) = ears::DATA.get() {
+                    ui.label(RichText::new(format!("Kept with times in {}", d.join(machine::store::LOG_FILE).display())).size(12.0).color(MUTED));
+                }
+            });
+        self.log_open = open;
     }
 }
 

@@ -1,0 +1,4 @@
+tool_index,preset_name,tool_type,tool_description,tool_number,tool_diameter,tool_numberOfFlutes,tool_material,tool_fluteLength,tool_bodyLength,tool_overallLength,tool_shaftDiameter,tool_shoulderLength,tool_cornerRadius,tool_tipDiameter,tool_tipAngle,tool_taperAngle,tool_spindleSpeed,tool_feedCutting,tool_feedPlunge,tool_feedEntry,tool_feedExit,tool_feedRamp,tool_feedPerTooth,tool_stepdown,tool_stepover,tool_coolant,tool_productId
+2,Default preset,chamfer mill,ALUMINUM,1,6.35,4,carbide,18,36,50.8,6.35,27,,0,,45,24000,2880,100,2880,2880,333.333,0.03,,,flood,
+13,Default preset,ball end mill,6mm 2 flute ball end mill,11,6,2,hss,18,24,36,6,21,,,,,24000,3000,333.333,3000,3000,333.333,0.0625,8,0.5,flood,
+28,Default preset,flat end mill,3 FLUTE DLC 1/4,24,6.35,3,carbide,19.05,24,36,6.35,21,,,,,24000,3000,333.333,3000,3000,333.333,0.0416667,12,0.5,flood,

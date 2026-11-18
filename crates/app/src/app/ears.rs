@@ -1,0 +1,519 @@
+//! Listening to the cut (the `listen` crate): the microphone's input, what it says about the running
+//! line, the cut log written next to the program, the live indicator, and the tap test at a tool change.
+//! Nothing here touches the machine's motion.
+
+use super::palette::*;
+use eframe::egui::{self, RichText};
+use gcode::Spindle;
+use listen::{Analyzer, Context, CutLog, Frame, Guard, GuardSettings, Limiter, LimiterSettings, Source};
+use machine::{Command, ControllerHandle, Mode, Snapshot};
+use std::sync::Arc;
+
+/// A WAV file to play in place of a microphone (`--sim-audio=file.wav`).
+pub static SIM_AUDIO: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+/// The data folder (the listening settings go there).
+pub static DATA: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Which input to listen on, saved in the data folder.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct EarsSettings {
+    on: bool,
+    device: Option<String>,
+    /// Hold the feed when the spindle bogs (heard droop over its no-load droop, for a time).
+    #[serde(default)]
+    guard: GuardSettings,
+    /// The adaptive feed's tuning; a program turns it on with `(RCNC ADAPTIVE_FEED ...)`.
+    #[serde(default)]
+    limiter: LimiterSettings,
+}
+
+pub struct Ears {
+    settings: EarsSettings,
+    file: std::path::PathBuf,
+    source: Option<Source>,
+    analyzer: Option<Analyzer>,
+    /// Why there's no input, if there isn't.
+    problem: Option<String>,
+    /// What the running program sounds like, and where it goes when the program ends; when it started.
+    log: Option<(std::path::PathBuf, CutLog)>,
+    log_start: std::time::Instant,
+    guard: Guard,
+    /// The adaptive feed (stage 1: reduce-only, on the spindle's sag), and the share last sent to the machine.
+    limiter: Limiter,
+    adaptive_sent: f64,
+    /// Per program: its adaptive feed settings (None: not asked for) and, per line, whether it's on there.
+    adaptive: (usize, Option<LimiterSettings>, Vec<bool>),
+    /// Why the guard last held the feed, shown until the program moves on again.
+    held: Option<String>,
+    /// Since the listening started (the guard's clock).
+    clock: std::time::Instant,
+    /// A program with `(RCNC RECORD_AUDIO)` in it: the whole run's sound, written as a WAV beside it.
+    recording: Option<(std::path::PathBuf, Vec<f32>)>,
+    pub last: Option<Frame>,
+    /// Recent chatter verdicts, to steady the indicator.
+    chatter_recent: std::collections::VecDeque<bool>,
+    tap: Tap,
+    /// The operation each program line belongs to (its last "(Name - Kind)" comment), per program.
+    ops: (usize, Vec<String>),
+}
+
+enum Tap {
+    Idle,
+    /// Recording for a tap test of this tool until then.
+    Recording { tool: u32, until: std::time::Instant, samples: Vec<f32> },
+    Done { tool: u32, result: Result<listen::tap::Ring, String> },
+}
+
+impl Ears {
+    pub fn new() -> Ears {
+        let file = DATA.get().cloned().unwrap_or_default().join("listen.json");
+        let settings = std::fs::read_to_string(&file).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let mut e = Ears {
+            settings,
+            file,
+            source: None,
+            analyzer: None,
+            problem: None,
+            log: None,
+            log_start: std::time::Instant::now(),
+            guard: Guard::default(),
+            limiter: Limiter::new(LimiterSettings::default()),
+            adaptive_sent: 1.0,
+            adaptive: (0, None, vec![]),
+            held: None,
+            clock: std::time::Instant::now(),
+            recording: None,
+            last: None,
+            chatter_recent: Default::default(),
+            tap: Tap::Idle,
+            ops: (0, vec![]),
+        };
+        e.guard = Guard::new(e.settings.guard);
+        e.limiter = Limiter::new(e.settings.limiter);
+        e.reopen();
+        e
+    }
+
+    fn save(&self) {
+        if let Ok(s) = serde_json::to_string_pretty(&self.settings) {
+            let _ = std::fs::write(&self.file, s);
+        }
+    }
+
+    fn reopen(&mut self) {
+        self.source = None;
+        self.analyzer = None;
+        self.problem = None;
+        if let Some(wav) = SIM_AUDIO.get() {
+            match Source::wav(wav) {
+                Ok(s) => self.source = Some(s),
+                Err(e) => self.problem = Some(e),
+            }
+        } else if self.settings.on {
+            match listen::open(self.settings.device.as_deref()) {
+                Ok(s) => self.source = Some(s),
+                Err(e) => self.problem = Some(e),
+            }
+        }
+        if let Some(s) = &self.source {
+            self.analyzer = Some(Analyzer::new(s.rate()));
+        }
+    }
+
+    /// Each frame: take what came in, analyse it against what the machine is doing, log it per line.
+    pub fn poll(&mut self, s: &Snapshot, program: Option<&std::path::Path>, machine: &ControllerHandle) {
+        if self.source.is_none() {
+            return;
+        }
+        let ctx = self.context(s);
+        let Some(src) = &mut self.source else { return };
+        let samples = src.take();
+        if let Tap::Recording { tool, until, samples: rec } = &mut self.tap {
+            rec.extend_from_slice(&samples);
+            if std::time::Instant::now() >= *until {
+                let (tool, rec) = (*tool, std::mem::take(rec));
+                let rate = src.rate();
+                self.tap = Tap::Done { tool, result: listen::tap::analyse(&rec, rate, 500.0, 0.45 * rate as f64) };
+            }
+            return;
+        }
+        // the hold is over once the program moves again (Cycle Start) or stops
+        if self.held.is_some() && (!s.hold || !matches!(s.mode, Mode::Running)) && s.velocity > 0.0 {
+            self.held = None;
+        }
+        let Some(a) = &mut self.analyzer else { return };
+        let frames = a.push(&samples, &ctx);
+        // a program running: log it, and write the log beside the program when it stops
+        let running = matches!(s.mode, Mode::Running) && s.program_name.is_some();
+        if running && self.log.is_none() {
+            if let Some(p) = program {
+                // an air cut's log goes beside the real one, not over it
+                let air = s.air_cut.is_some();
+                self.log = Some((CutLog::path_for_run(p, air), CutLog::new(&p.display().to_string(), &src.name())));
+                self.log_start = std::time::Instant::now();
+                self.recording = records_audio(&s.program).then(|| (CutLog::wav_for_run(p, air), Vec::new()));
+            }
+        }
+        // windows come in batches a few times a second: spread them back over the time they took
+        let now = self.log_start.elapsed().as_secs_f64();
+        let step = samples_per_frame_s(src.rate());
+        let n = frames.len();
+        // the bog guard: hold the feed (the spindle stays on) when the spindle can't keep its speed
+        let gt = self.clock.elapsed().as_secs_f64();
+        // the adaptive feed, where the program asks for it: only with the guard armed behind it
+        if self.adaptive.0 != Arc::as_ptr(&s.program) as usize {
+            let (set, on) = adaptive_lines(&s.program, self.settings.limiter);
+            self.adaptive = (Arc::as_ptr(&s.program) as usize, set, on);
+            self.limiter = Limiter::new(set.unwrap_or(self.settings.limiter));
+        }
+        let mut asked = vec![None; n];
+        for (i, f) in frames.iter().enumerate() {
+            let t = gt - (n - 1 - i) as f64 * step;
+            if let Some(why) = self.guard.update(t, f) {
+                if matches!(s.mode, Mode::Running) && !s.hold {
+                    machine.send(Command::FeedHold);
+                    machine.send(Command::Note(why.clone()));
+                    self.held = Some(why);
+                }
+            }
+            let line_on = self.adaptive.1.is_some() && f.ctx.line.checked_sub(1).and_then(|l| self.adaptive.2.get(l)).copied().unwrap_or(false);
+            if running && line_on && self.settings.guard.on {
+                asked[i] = Some(self.limiter.update(t, f, self.guard.excess(f)));
+            } else {
+                self.limiter.reset();
+            }
+        }
+        let want = asked.iter().rev().flatten().next().copied().unwrap_or(1.0);
+        if (want - self.adaptive_sent).abs() > 0.004 || (want == 1.0 && self.adaptive_sent != 1.0) {
+            machine.send(Command::SetAdaptiveFeed(want));
+            self.adaptive_sent = want;
+        }
+        if let Some((_, log)) = &mut self.log {
+            for (i, f) in frames.iter().enumerate() {
+                log.add_at(now - (n - 1 - i) as f64 * step, f);
+                if let Some(m) = log.timeline.last_mut() {
+                    m.adaptive_feed = asked[i];
+                }
+            }
+        }
+        if let Some((_, rec)) = &mut self.recording {
+            // at most an hour (about 330 MB at 48 kHz)
+            if rec.len() < src.rate() as usize * 3600 {
+                rec.extend_from_slice(&samples);
+            }
+        }
+        if !running && !matches!(s.mode, Mode::Probing) && s.paused.is_none() {
+            if let Some((path, mut log)) = self.log.take() {
+                if !log.lines.is_empty() {
+                    // where it chattered: a speed to try next time (in the log for rCAD; never changed here)
+                    log.suggest(s.config.spindle_max_rpm.max(1.0));
+                    let _ = log.save(&path);
+                }
+            }
+            if let Some((path, rec)) = self.recording.take() {
+                if !rec.is_empty() {
+                    let _ = listen::write_wav(&path, &rec, src.rate());
+                }
+            }
+        }
+        if let Some(f) = frames.last() {
+            self.chatter_recent.push_back(f.chatter.is_some());
+            if self.chatter_recent.len() > 6 {
+                self.chatter_recent.pop_front();
+            }
+            self.last = Some(f.clone());
+        }
+    }
+
+    fn context(&mut self, s: &Snapshot) -> Context {
+        let line = s.line.map(|l| l + 1).unwrap_or(0);
+        if self.ops.0 != Arc::as_ptr(&s.program) as usize {
+            let mut cur = String::new();
+            self.ops = (
+                Arc::as_ptr(&s.program) as usize,
+                s.program
+                    .lines()
+                    .map(|l| {
+                        let t = l.trim();
+                        if let Some(name) = t.strip_prefix('(').and_then(|r| r.strip_suffix(')')).and_then(|r| r.rsplit_once(" - ").map(|x| x.0)) {
+                            if !name.starts_with('T') && !name.contains("made by") {
+                                cur = name.to_string();
+                            }
+                        }
+                        cur.clone()
+                    })
+                    .collect(),
+            );
+        }
+        let tool = s.tools.get(&s.tool);
+        Context {
+            line,
+            op: line.checked_sub(1).and_then(|i| self.ops.1.get(i)).cloned().unwrap_or_default(),
+            tool: s.tool,
+            teeth: tool.map(|t| t.flutes).filter(|f| *f > 0).unwrap_or(2),
+            rpm: if s.spindle == Spindle::Off { 0.0 } else { s.rpm },
+            feed: s.feed_rate,
+            pos: [s.work[0], s.work[1], s.work[2]],
+            velocity: s.velocity,
+            cutting: s.spindle != Spindle::Off && matches!(s.mode, Mode::Running) && s.velocity > 0.0,
+        }
+    }
+
+    /// Whether the bog guard can hold the feed now: listening, the hold on, and sound coming in.
+    pub fn guard_ready(&self) -> Result<(), String> {
+        if self.source.is_none() {
+            return Err(self.problem.clone().map(|p| format!("there is no input ({p})")).unwrap_or("listening is off".into()));
+        }
+        if !self.settings.guard.on {
+            return Err("the feed hold is switched off".into());
+        }
+        match &self.last {
+            Some(f) if f.loud_db > -80.0 => Ok(()),
+            Some(f) => Err(format!("the input is silent ({:.0} dB)", f.loud_db)),
+            None => Err("nothing has been heard yet".into()),
+        }
+    }
+
+    pub fn recording(&self) -> bool {
+        self.recording.is_some()
+    }
+
+    pub fn listening(&self) -> bool {
+        self.source.is_some()
+    }
+
+    /// The small live readout in the status bar: what the microphone hears.
+    pub fn indicator(&self, ui: &mut egui::Ui) {
+        if self.source.is_none() {
+            if self.settings.on {
+                ui.label(RichText::new("mic: none").size(12.0).color(MUTED)).on_hover_text(self.problem.clone().unwrap_or_default());
+            }
+            return;
+        }
+        let chatter = self.chatter_recent.iter().filter(|c| **c).count() >= 3;
+        let (text, color) = match &self.last {
+            Some(f) if chatter => (format!("mic: CHATTER {:.0} Hz", f.chatter.map(|c| c.0).unwrap_or(0.0)), RED),
+            Some(Frame { droop: Some(d), .. }) => (format!("mic: rpm −{:.1}%", d * 100.0), if *d > 0.06 { AMBER } else { GREEN }),
+            Some(f) if f.ctx.rpm > 0.0 => ("mic: listening".to_string(), MUTED),
+            _ => ("mic: on".to_string(), MUTED),
+        };
+        ui.label(RichText::new(text).size(13.0).color(color).strong()).on_hover_text("From the microphone: the spindle's speed under load (droop) and chatter. Logged per line next to the program as .cutlog.json.");
+        if let Some(why) = &self.held {
+            ui.label(RichText::new("FEED HELD: spindle bogging").size(13.0).color(RED).strong()).on_hover_text(why);
+        }
+        if let Some(set) = self.adaptive.1 {
+            let (t, c) = if self.adaptive_sent < 0.995 {
+                (format!("feed {:.0}% (adaptive)", self.adaptive_sent * 100.0), AMBER)
+            } else if self.adaptive_sent > 1.005 {
+                (format!("feed {:.0}% (air)", self.adaptive_sent * 100.0), GREEN)
+            } else {
+                ("adaptive feed".to_string(), MUTED)
+            };
+            ui.label(RichText::new(t).size(12.0).color(c)).on_hover_text(format!(
+                "The program asked for the adaptive feed: it lowers the feed (to {:.0}% at the least) to keep the spindle's sag near {:.1}% over its no-load sag; in air it goes up to {:.0}%",
+                set.min * 100.0,
+                set.target * 100.0,
+                set.max * 100.0
+            ));
+        }
+        let (gtext, gcolor) = match self.guard_ready() {
+            Ok(()) => ("hold armed", GREEN),
+            Err(_) if !self.settings.guard.on => ("hold off", MUTED),
+            Err(_) => ("hold NOT armed", AMBER),
+        };
+        ui.label(RichText::new(gtext).size(12.0).color(gcolor))
+            .on_hover_text(format!("Feed hold when the spindle bogs: over {:.0}% slow for {:.1} s, or still slowing down after {:.1} s (Settings -> Listening)", self.settings.guard.limit * 100.0, self.settings.guard.time, self.settings.guard.rising_time));
+        if self.recording.is_some() {
+            ui.label(RichText::new("● REC").size(13.0).color(RED).strong()).on_hover_text("The program asked for (RCNC RECORD_AUDIO): its sound is saved as a .wav beside it when it ends");
+        }
+    }
+
+    /// The Settings page's part.
+    pub fn settings_ui(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("Listening (microphone)").size(16.0).strong());
+        if SIM_AUDIO.get().is_some() {
+            ui.label(RichText::new(format!("Playing {} in place of a microphone (--sim-audio)", SIM_AUDIO.get().unwrap().display())).color(MUTED));
+            return;
+        }
+        let mut on = self.settings.on;
+        if ui.checkbox(&mut on, "Listen to the cut: spindle speed under load, chatter, logged per line").changed() {
+            self.settings.on = on;
+            self.save();
+            self.reopen();
+        }
+        let inputs = listen::inputs();
+        let current = self.settings.device.clone().unwrap_or_else(|| "Default input".into());
+        let mut picked = None;
+        egui::ComboBox::from_label("Input").selected_text(&current).show_ui(ui, |ui| {
+            if ui.selectable_label(self.settings.device.is_none(), "Default input").clicked() {
+                picked = Some(None);
+            }
+            for name in &inputs {
+                if ui.selectable_label(self.settings.device.as_deref() == Some(name), name).clicked() {
+                    picked = Some(Some(name.clone()));
+                }
+            }
+        });
+        if let Some(p) = picked {
+            self.settings.device = p;
+            self.save();
+            self.reopen();
+        }
+        match (&self.source, &self.problem) {
+            (Some(s), _) => {
+                ui.label(RichText::new(format!("Listening on {} at {} Hz", s.name(), s.rate())).color(GREEN));
+            }
+            (None, Some(p)) => {
+                ui.label(RichText::new(p).color(AMBER));
+            }
+            _ => {}
+        }
+        if inputs.is_empty() {
+            ui.label(RichText::new("No input devices found (plug the microphone in, then open Settings again).").size(12.0).color(MUTED));
+        }
+        ui.add_space(6.0);
+        let mut g = self.settings.guard;
+        ui.checkbox(&mut g.on, "Feed hold when the spindle bogs").on_hover_text(
+            "While cutting: when the heard speed is more than the limit under its no-load speed for longer than the time, hold the feed (the spindle stays on; Cycle Start carries on)",
+        );
+        ui.horizontal(|ui| {
+            let mut pct = g.limit * 100.0;
+            ui.label("over");
+            ui.add(egui::DragValue::new(&mut pct).range(2.0..=15.0).speed(0.1).suffix(" % slow"));
+            ui.label("for");
+            ui.add(egui::DragValue::new(&mut g.time).range(0.1..=2.0).speed(0.01).suffix(" s"));
+            g.limit = pct / 100.0;
+        });
+        if g != self.settings.guard {
+            self.settings.guard = g;
+            self.guard.settings = g;
+            self.save();
+        }
+    }
+
+    /// The tool change window's tap test: record a second while the operator taps the tool, then show what
+    /// it rings at and keep it in the tool table.
+    pub fn tap_ui(&mut self, ui: &mut egui::Ui, tool: u32, machine: &ControllerHandle) {
+        if self.source.is_none() {
+            return;
+        }
+        ui.add_space(6.0);
+        match &self.tap {
+            Tap::Idle => {
+                if ui.button(RichText::new("Tap test").size(16.0)).on_hover_text("Press, then within a second tap the tool near its tip with something hard (a wrench). Measures how it rings for the chatter model.").clicked() {
+                    self.tap = Tap::Recording { tool, until: std::time::Instant::now() + std::time::Duration::from_millis(1500), samples: vec![] };
+                }
+            }
+            Tap::Recording { .. } => {
+                ui.label(RichText::new("Tap the tool now…").size(18.0).color(AMBER).strong());
+                ui.ctx().request_repaint();
+            }
+            Tap::Done { tool: t, result } => {
+                let t = *t;
+                match result.clone() {
+                    Ok(r) => {
+                        ui.label(RichText::new(format!("T{t} rings at {:.0} Hz, damping {:.3} ({:.0} dB over the noise)", r.hz, r.zeta, r.snr_db)).size(16.0).color(GREEN));
+                        ui.horizontal(|ui| {
+                            if ui.button("Keep it").clicked() {
+                                machine.send(Command::SetToolMode { tool: t, hz: r.hz, zeta: r.zeta });
+                                self.tap = Tap::Idle;
+                            }
+                            if ui.button("Again").clicked() {
+                                self.tap = Tap::Idle;
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        ui.label(RichText::new(e).color(AMBER));
+                        if ui.button("Again").clicked() {
+                            self.tap = Tap::Idle;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Seconds between analysis windows (half a window: 8192 samples at 32 kHz and up, else 4096).
+fn samples_per_frame_s(rate: u32) -> f64 {
+    let n = if rate >= 32_000 { 8192 } else { 4096 };
+    (n / 2) as f64 / rate.max(1) as f64
+}
+
+/// A program asks for the listening feed hold with `(RCNC REQUIRE_GUARD)`: Cycle Start refuses without it.
+pub fn requires_guard(program: &str) -> bool {
+    program.lines().any(|l| l.trim().to_ascii_uppercase().starts_with("(RCNC REQUIRE_GUARD"))
+}
+
+/// A program turns the adaptive feed on with `(RCNC ADAPTIVE_FEED TARGET=3 MIN=60 MAX=120)` (sag over no-load,
+/// %; the lowest feed and, in air, the highest, % of the programmed; all optional, else the Settings page's;
+/// MAX defaults to 100: no speed-up), and off and on again for
+/// operations with `(RCNC ADAPTIVE_FEED OFF)` / `(RCNC ADAPTIVE_FEED ON)`: on from its first such line. Its
+/// settings (None: not asked for) and, per line, whether it's on there.
+pub fn adaptive_lines(program: &str, base: LimiterSettings) -> (Option<LimiterSettings>, Vec<bool>) {
+    let mut set: Option<LimiterSettings> = None;
+    let mut on = false;
+    let lines = program
+        .lines()
+        .map(|l| {
+            let u = l.trim().to_ascii_uppercase();
+            if let Some(rest) = u.strip_prefix("(RCNC ADAPTIVE_FEED") {
+                let rest = rest.trim_end_matches(')');
+                let words: Vec<&str> = rest.split_whitespace().collect();
+                if words.first() == Some(&"OFF") {
+                    on = false;
+                } else {
+                    on = true;
+                    let s = set.get_or_insert(base);
+                    for w in words {
+                        let num = |k: &str| w.strip_prefix(k).and_then(|v| v.trim_end_matches('%').parse::<f64>().ok());
+                        if let Some(v) = num("TARGET=") {
+                            s.target = (v / 100.0).clamp(0.005, 0.05);
+                        }
+                        if let Some(v) = num("MIN=") {
+                            s.min = (v / 100.0).clamp(0.3, 1.0);
+                        }
+                        // speeding up in air: off unless asked, at most 150%
+                        if let Some(v) = num("MAX=") {
+                            s.max = (v / 100.0).clamp(1.0, 1.5);
+                        }
+                    }
+                }
+            }
+            on
+        })
+        .collect();
+    (set, lines)
+}
+
+/// A program asks for its run to be recorded with an `(RCNC RECORD_AUDIO)` comment (a calibration program).
+pub fn records_audio(program: &str) -> bool {
+    program.lines().any(|l| l.trim().to_ascii_uppercase().starts_with("(RCNC RECORD_AUDIO"))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_program_turns_the_adaptive_feed_on_for_its_roughing() {
+        let base = listen::LimiterSettings::default();
+        let (set, on) = super::adaptive_lines("G21\n(RCNC ADAPTIVE_FEED TARGET=1.5 MIN=70)\nG1 X1\n(RCNC ADAPTIVE_FEED OFF)\nG1 X2\n(rcnc adaptive_feed on)\nG1 X3", base);
+        let set = set.unwrap();
+        assert!((set.target - 0.015).abs() < 1e-12 && (set.min - 0.7).abs() < 1e-12);
+        assert_eq!(on, vec![false, true, true, false, false, true, true]);
+        assert_eq!(super::adaptive_lines("G21\nG1 X1\nM30", base), (None, vec![false, false, false]));
+        // nonsense is held to sane bounds
+        let (set, _) = super::adaptive_lines("(RCNC ADAPTIVE_FEED TARGET=40 MIN=5 MAX=300)", base);
+        assert_eq!((set.unwrap().target, set.unwrap().min, set.unwrap().max), (0.05, 0.3, 1.5));
+        // no MAX: no speed-up in air
+        assert_eq!(super::adaptive_lines("(RCNC ADAPTIVE_FEED)", base).0.unwrap().max, 1.0);
+    }
+
+    #[test]
+    fn a_program_asks_to_be_recorded() {
+        assert!(super::records_audio("G21\n(rcnc record_audio)\nM30"));
+        assert!(super::records_audio("(RCNC RECORD_AUDIO: calibration passes)"));
+        assert!(!super::records_audio("G21\n(RECORD_AUDIO)\nM30"));
+        assert!(super::requires_guard("(RCNC REQUIRE_GUARD: the feed hold must be armed)\nM30") && !super::requires_guard("M30"));
+    }
+}

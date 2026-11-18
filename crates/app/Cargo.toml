@@ -13,6 +13,8 @@ path = "src/main.rs"
 gcode.workspace = true
 machine.workspace = true
 blueskyt.workspace = true
+# Listening to the cut: the sound card input on every build (it does nothing without a microphone).
+listen = { workspace = true, features = ["audio"] }
 eframe = "0.33"
 # Tool photos in the tool change window.
 egui_extras = { version = "0.33", default-features = false, features = ["file", "image"] }
@@ -23,3 +25,7 @@ serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 wry = "0.57"
+
+[build-dependencies]
+# The .exe's icon on Windows.
+embed-resource = "3"
