@@ -20,7 +20,30 @@ the `.air.cutlog.json` naming, and the wait after a spindle speed change.
 
 At each change, use **Tap test** in the tool change window (Settings → Listening on).
 
-## Op 1a v2: calibration passes (`op1a-calibrate-v2.nc`, about 5:30 plus tool changes) — FOR REVIEW
+## Op 1a v3: the rest of v2 (`op1a-calibrate-v3.nc`, about 3:00 plus a tool change)
+
+v2 run 1 (2026-11-18) ran passes 1-20. The bog guard held in pass 21, the rpm sweep's 12k step (0.3 x 12 at
+F1200 S12000), at 8% sag: the spindle can't carry that torque at 12k (the pull-out torque falls at low speed).
+v3 finishes the job at 24k only:
+- **passes 21/22: the 12k strip again at 24k**, 0.3 x 12 F2400, the cut passes 13/14 proved (2.7% sag). Pass 21
+  runs in air down to Y-8.1, where run 1 stopped, then cuts.
+- **passes 23-32 as planned**: 0.8 x 6, 0.4 x 12, the thin-chip comparison 0.6 x 12 at F1200, 1.0 x 6, 0.45 x 12.
+  Peak 499 W by the model (1.0 x 6), rCAD's sim 472 W.
+That leaves the bar exactly as op 1 (`op1-top.nc`) was planned for.
+
+**Before:**
+- **Don't unclamp the bar.** v3 has no Find stock (the bar's -X side is cut down to Z20, so it can't measure the
+  32 width any more): it uses v2's G54. Home the machine, check G54 is still the one v2 set. If the bar has been
+  unclamped, stop and ask for a re-plan.
+- rcnc on the build with the listening fixes (fix/guard-arm 5f03e41 or later): it hears the spindle at every
+  speed now; status "hold ready", then "hold armed" once the spindle has run in air.
+- T24 stays the same tool (re-measured at the tool change).
+
+**Run:** as v2: each pass shows "Pass N: ...", 3 s in air, then the cut. If the hold trips, stop and note the pass.
+
+**After:** copy `op1a-calibrate-v3.nc.cutlog.json` and `.wav` from beside the program.
+
+## Op 1a v2 (RAN 2026-11-18, passes 1-20; now in old-do-not-use/): calibration passes
 
 **STOCK 32 × 32 × 120.7** (measured). The first program, `old-do-not-use/op1a-calibrate-v1-…`, broke T24 in its
 C4 (1.8 × 6 at F2400): the spindle stalled.
