@@ -290,9 +290,18 @@ The planning rules that follow:
   cuts only as high as the stock still there needs (+1 mm), stays down at depth through cleared space or past
   the stock's end, and rapids down to 1 mm over the stock before an entry, feeding only the rest. Tool changes
   and speed changes keep the full retract.
-- **No two-way strips (Jonas, 2026-11-18).** The both-ways strips tried on op 2 of the stick-out gauge are
-  withdrawn: every cutting pass is climb (see Roughing). Link full laps to the next lap with a short tangent
-  step-in at depth instead.
+- **Climb by default; two-way only for open-slab straight roughing (Jonas, 2026-11-18).** Every pass is climb
+  by default and always for finishing; laps round the part are climb only (they have no air return to save).
+  Two-way (every other pass conventional) is allowed ONLY for roughing an open slab with straight passes (e.g.
+  taking the top off the bar), where the plan shows it saves time over one-way passes with stay-down returns,
+  and with stock left for a climb finish. Report the time of both and which was picked.
+- **Rough from the power budget (rCAD `power_target`, branch power-target).** Give adaptive roughing a target
+  (default 650 W at 9k, caution 850 W; 12k: 565 W, caution 684 W) and a cap (`power_cap`, the caution): rCAD
+  picks the stepover so the steady cut takes the target at the feed, and lowers the feed only where the
+  engagement rises (corners, entries), instead of narrowing the whole op. Use F3000 (the machine's max) and
+  chip thinning for the feed; depth per level stays 5–7 mm at 9k (chip packing, Jonas), not the full flute.
+  Climb by itself doesn't raise the removal rate (power per mm³ is about the same either way): the gain is in
+  using the budget and in cutting less air.
 - Report the air time per operation in the review (rapids and feed moves not in material) and check the
   simulation shows no rapid into stock (`problems`).
 - **Finish one region before moving to the next (Jonas, 2026-11-18).** Within an operation, group the cuts by
