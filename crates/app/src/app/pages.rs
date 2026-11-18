@@ -384,6 +384,7 @@ impl App {
                     depth: None,
                     keep_z: false,
                     jaw: None,
+                    jaw_at: None,
                 }));
             }
             if !probe_in {
@@ -539,6 +540,8 @@ impl App {
 
     pub(super) fn settings_page(&mut self, ui: &mut egui::Ui) {
         self.ears.settings_ui(ui);
+        ui.separator();
+        self.vfd.settings_ui(ui);
         ui.separator();
         let s = self.snap.clone();
         let idle = matches!(s.mode, Mode::Idle | Mode::EStop | Mode::Disconnected | Mode::Alarm);

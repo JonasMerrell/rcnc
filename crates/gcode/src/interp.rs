@@ -226,6 +226,11 @@ pub struct StockRequest {
     /// stock, touched beside the stock at work Z `JAWZ` (between the parallels
     /// and the jaw's top): the stock's face against it is X `AT - SIZE/2`.
     pub jaw: Option<(f64, f64)>,
+    /// `JAWAT=x` (with `JAWX`): work X of the face that lies against the fixed
+    /// jaw when it isn't the stock's own `AT - SIZE/2` face, e.g. a wall an
+    /// earlier setup machined, gripped below a wider raw band the sides are
+    /// touched on.
+    pub jaw_at: Option<f64>,
 }
 
 /// The reference named in an `(RCNC Z_REFERENCE <name>)` comment.
@@ -366,7 +371,7 @@ impl StockRequest {
         if rest.len() < Self::KEYWORD.len() || !rest[..Self::KEYWORD.len()].eq_ignore_ascii_case(Self::KEYWORD) {
             return None;
         }
-        let mut r = StockRequest { size: [0.0; 3], top_centre: [0.0; 3], tolerance: None, depth: None, keep_z: false, jaw: None };
+        let mut r = StockRequest { size: [0.0; 3], top_centre: [0.0; 3], tolerance: None, depth: None, keep_z: false, jaw: None, jaw_at: None };
         let (mut jaw_side, mut jaw_z) = (None, None);
         let mut sized = false;
         let nums = |v: &str| -> Result<Vec<f64>, String> {
@@ -391,6 +396,7 @@ impl StockRequest {
                 "KEEPZ" => nums(v).map(|n| r.keep_z = n.first().is_some_and(|v| *v != 0.0)),
                 "JAWX" => nums(v).map(|n| jaw_side = n.first().map(|v| v.signum())),
                 "JAWZ" => nums(v).map(|n| jaw_z = n.first().copied()),
+                "JAWAT" => nums(v).map(|n| r.jaw_at = n.first().copied()),
                 _ => Err(format!("FIND_STOCK: unknown setting {k}")),
             };
             if let Err(e) = res {
@@ -405,6 +411,9 @@ impl StockRequest {
             (None, None) => None,
             _ => return Some(Err("FIND_STOCK: JAWX=-1 or 1 needs JAWZ= (the height to touch the jaw at)".into())),
         };
+        if r.jaw_at.is_some() && r.jaw.is_none() {
+            return Some(Err("FIND_STOCK: JAWAT= goes with JAWX= and JAWZ=".into()));
+        }
         Some(Ok(r))
     }
 }
@@ -2296,9 +2305,12 @@ M30");
         let (_, ops) = run("(RCNC FIND_STOCK SIZE=39,20,77 AT=0,0,-1.5 TOL=0.8)\nM30");
         assert_eq!(
             ops[0],
-            Op::FindStock(StockRequest { size: [39.0, 20.0, 77.0], top_centre: [0.0, 0.0, -1.5], tolerance: Some(0.8), depth: None, keep_z: false, jaw: None })
+            Op::FindStock(StockRequest { size: [39.0, 20.0, 77.0], top_centre: [0.0, 0.0, -1.5], tolerance: Some(0.8), depth: None, keep_z: false, jaw: None, jaw_at: None })
         );
         assert!(StockRequest::parse("rcnc find_stock size=1,2,3 depth=2").unwrap().is_ok());
+        let r = StockRequest::parse("RCNC FIND_STOCK SIZE=25.4,98,12.2 AT=0,0,12.2 JAWX=-1 JAWZ=2.5 JAWAT=-12.5").unwrap().unwrap();
+        assert_eq!((r.jaw, r.jaw_at), (Some((-1.0, 2.5)), Some(-12.5)));
+        assert!(StockRequest::parse("RCNC FIND_STOCK SIZE=1,2,3 JAWAT=-1").unwrap().is_err());
         assert!(StockRequest::parse("RCNC FIND_STOCK AT=0,0,0").unwrap().is_err());
         assert!(StockRequest::parse("RCNC FIND_STOCK SIZE=1,2").unwrap().is_err());
         assert!(StockRequest::parse("just a comment").is_none());

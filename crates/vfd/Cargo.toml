@@ -1,0 +1,23 @@
+[package]
+name = "cnc-vfd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Reading the spindle VFD (H100) over RS-485 Modbus RTU: output frequency, current and voltage. Read-only."
+
+[lib]
+name = "vfd"
+
+[features]
+default = []
+# A real serial port (a USB-RS485 adapter). Without it only the protocol, the decoding and the hold logic build.
+serial = ["dep:serialport"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serialport = { version = "4", default-features = false, optional = true }
+
+[[example]]
+name = "vfd_probe"
+required-features = ["serial"]

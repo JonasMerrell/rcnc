@@ -16,6 +16,7 @@ pub mod ears;
 mod findstock;
 mod pages;
 mod toolchange;
+mod vfd;
 use pages::{SettingsDraft, Tab};
 
 mod palette {
@@ -128,6 +129,8 @@ pub struct App {
     quitting: bool,
     /// The microphone, if there is one.
     ears: ears::Ears,
+    /// The spindle VFD over RS-485, if the adapter is there.
+    vfd: vfd::SpindleVfd,
 }
 
 impl App {
@@ -187,6 +190,7 @@ impl App {
             confirm_quit: false,
             quitting: false,
             ears: ears::Ears::new(),
+            vfd: vfd::SpindleVfd::new(),
         }
     }
 
@@ -450,7 +454,8 @@ impl eframe::App for App {
         self.picked(ctx);
         let program = self.program_file.as_ref().map(|p| p.0.clone());
         self.ears.poll(&self.snap, program.as_deref(), &self.machine);
-        if self.ears.listening() {
+        self.vfd.poll(&self.snap, program.as_deref(), &self.machine);
+        if self.ears.listening() || self.vfd.connected() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         self.update_preview(ctx);
@@ -752,6 +757,7 @@ impl App {
                     .unwrap_or("No board");
                 ui.label(RichText::new(board).color(MUTED).size(13.0));
                 self.ears.indicator(ui);
+                self.vfd.indicator(ui);
                 if let Some(alarm) = &s.alarm {
                     ui.label(RichText::new(alarm).color(RED).strong());
                 } else if let Some(msg) = &s.paused {
