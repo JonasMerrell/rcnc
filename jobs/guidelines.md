@@ -156,7 +156,11 @@ The planning rules that follow:
     ends still are not square, so ask Jonas for a measurement at that height or give TOL 1.5.
   - **Rotation:** Find bores reports the part's turn but rcnc so far only shifts X/Y. The gauge sat -0.094 deg
     (about 0.16 mm per 100 mm, probably the vise's squareness to Y), which put about 0.07 mm of step at the
-    ends of the walls. Rotation compensation after Find bores is being added to rcnc; until it is on the mill
+    ends of the walls. rcnc PR 18 (work-rotation) compensates it: after Find bores the program's X/Y turn
+    with the part about the work origin for the rest of that program (`ROTATE=1`, the default when `ROT=` is
+    given; `ROTATE=0` only checks). `ROT=` stays the most allowed. It shows as "Rotated x°" beside G54, is
+    logged as "rotation applied", goes in the cut log, and clears at M30, Stop, a new program or new probing.
+    G53 moves are never turned; G92 / G10 L20 X/Y are refused while turned. Until PR 18 is built on the mill
     PC, expect that error on anything op 2 cuts that must meet op 1.
   - The probe reads bores about 0.05 mm large (8.045 / 8.055 for 8.000): uncalibrated trigger travel, not the
     bore. Don't use probed diameters as measurements yet.
@@ -189,6 +193,10 @@ The planning rules that follow:
     2026-11-18 (branch climb-loops): the gauge's adaptive roughing all ran conventional. rCAD now has a test
     that checks the side of the material for contour, adaptive and pocket; check the direction in the render
     anyway.
+  - In rCAD: a `contour` op (side outside) with `stepdown` and `max_engagement` (fraction of Ø) roughs the
+    whole band round the part in laps: offset loops from the outermost material in, each clipped to where
+    material is (so the square stock's corners get their own short laps), climbing, linked at depth with
+    `stay_down`. Its `stepover` is a fraction of Ø too (0.132 = 0.84 mm on T24).
   - **Corners:** roll round outside corners on an arc (no stop and turn). Where a lap would take more than the
     load check allows (square stock corners over a rounded part corner, inside corners), add corner-clearing
     laps or relief passes so the engagement stays bounded; never a full-width bite. Check the worst-load
