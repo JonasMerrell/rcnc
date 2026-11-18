@@ -1,0 +1,25 @@
+2026-11-18 02:56:43Z Loaded op1a-calibrate-v7.nc
+2026-11-18 02:56:46Z Z zero for the tools measured from now on: the Vise reference
+2026-11-18 02:56:46Z Tool change to T24 started
+2026-11-18 02:56:54Z Load tool 24, then press Continue (or Cycle Start)
+2026-11-18 02:57:09Z Probe: touched Z between -86.2950 and -86.5400, stopped at -86.5400 (0.0000 past the first poll that saw it)
+2026-11-18 02:57:11Z Probe: touched Z between -86.5000 and -86.5050, stopped at -86.5050 (0.0000 past the first poll that saw it)
+2026-11-18 02:57:13Z Probe: touched Z between -86.4950 and -86.5050, stopped at -86.5050 (0.0000 past the first poll that saw it)
+2026-11-18 02:57:13Z Tool touched off: Z zero set on the vise, setter top at Z40.610
+2026-11-18 02:57:13Z Tool 24 loaded
+2026-11-18 02:57:13Z Staying at the safe height: going back to the same work Z would go lower than where the change began
+2026-11-18 02:57:17Z Stopping
+2026-11-18 02:57:17Z Stopped
+2026-11-18 02:57:35Z Z zero for this work offset and the tools measured from now on: the Vise reference
+2026-11-18 02:57:35Z T24 is already loaded
+2026-11-18 02:57:39Z Stopped
+2026-11-18 02:57:44Z Loaded op1a-calibrate-v7.nc
+2026-11-18 02:57:47Z Z zero for this work offset and the tools measured from now on: the Vise reference
+2026-11-18 02:57:47Z T24 is already loaded
+2026-11-18 02:57:49Z Stopped
+2026-11-18 02:57:57Z Z zero for this work offset and the tools measured from now on: the Vise reference
+2026-11-18 02:57:57Z T24 is already loaded
+2026-11-18 02:58:09Z Pass 1: 9k ladder 1/3: 1 x 12 F2660 S9000 [850 W by the model, 0.90 N m] - spindle in air 3 s, then the cut
+2026-11-18 02:58:19Z Pass 2: 9k ladder 2/3: 1.05 x 12 F2910 S9000 [949 W by the model, 1.01 N m] - spindle in air 3 s, then the cut
+2026-11-18 02:58:29Z Pass 3: 9k ladder 3/3: 1.15 x 12 F2990 S9000 [1049 W by the model, 1.11 N m] - spindle in air 3 s, then the cut
+2026-11-18 02:58:41Z Program finished
