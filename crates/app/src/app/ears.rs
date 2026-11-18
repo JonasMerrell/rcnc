@@ -45,6 +45,8 @@ pub struct Ears {
     adaptive: (usize, Option<LimiterSettings>, Vec<bool>),
     /// Why the guard last held the feed, shown until the program moves on again.
     held: Option<String>,
+    /// The speed (rpm / 250) the unheard-spindle hold last fired at, so it fires once per speed.
+    unheard_held: Option<i64>,
     /// Since the listening started (the guard's clock).
     clock: std::time::Instant,
     /// A program with `(RCNC RECORD_AUDIO)` in it: the whole run's sound, written as a WAV beside it.
@@ -81,6 +83,7 @@ impl Ears {
             adaptive_sent: 1.0,
             adaptive: (0, None, vec![]),
             held: None,
+            unheard_held: None,
             clock: std::time::Instant::now(),
             recording: None,
             last: None,
@@ -183,6 +186,24 @@ impl Ears {
                 self.limiter.reset();
             }
         }
+        // a program that needs the hold mustn't move with the spindle on before the hold has heard it and
+        // learned its no-load speed there: hold the feed once per speed instead (Cycle Start carries on)
+        if running {
+            let key = (ctx.rpm / 250.0).round() as i64;
+            let learned = ctx.rpm > 0.0 && self.guard.air_droop(ctx.rpm).is_some();
+            if holds_unheard(requires_guard(&s.program), ctx.cutting, ctx.rpm, learned, self.unheard_held == Some(key), self.settings.guard.on) && !s.hold {
+                let why = format!(
+                    "Feed hold: the listening hold hasn't heard the spindle at S{:.0} yet (no speed found in its sound, so no no-load speed learned) and this program needs it (RCNC REQUIRE_GUARD). Check the transducer and the level; Cycle Start carries on without the hold at this speed",
+                    ctx.rpm
+                );
+                machine.send(Command::FeedHold);
+                machine.send(Command::Note(why.clone()));
+                self.held = Some(why);
+                self.unheard_held = Some(key);
+            }
+        } else {
+            self.unheard_held = None;
+        }
         let want = asked.iter().rev().flatten().next().copied().unwrap_or(1.0);
         if (want - self.adaptive_sent).abs() > 0.004 || (want == 1.0 && self.adaptive_sent != 1.0) {
             machine.send(Command::SetAdaptiveFeed(want));
@@ -259,19 +280,22 @@ impl Ears {
         }
     }
 
-    /// Whether the bog guard can hold the feed now: listening, the hold on, and sound coming in.
+    /// Whether the bog guard can hold the feed: Ok(true) armed (the spindle heard and its no-load speed
+    /// learned at this speed), Ok(false) ready (a live input and the hold on: it arms once the spindle runs),
+    /// Err(why) not.
+    pub fn arm_state(&self) -> Result<bool, String> {
+        let input = match &self.source {
+            None => Err(self.problem.clone().map(|p| format!("there is no input ({p})")).unwrap_or("listening is off".into())),
+            Some(_) => Ok(()),
+        };
+        let rpm = self.last.as_ref().map(|f| f.ctx.rpm).unwrap_or(0.0);
+        arm(input, self.settings.guard.on, self.last.as_ref().map(|f| f.loud_db), rpm, rpm > 0.0 && self.guard.air_droop(rpm).is_some())
+    }
+
+    /// Whether a program that needs the hold may start: a live input and the hold on (the spindle is off
+    /// then; whether it hears the spindle is checked at the program's first move with the spindle on).
     pub fn guard_ready(&self) -> Result<(), String> {
-        if self.source.is_none() {
-            return Err(self.problem.clone().map(|p| format!("there is no input ({p})")).unwrap_or("listening is off".into()));
-        }
-        if !self.settings.guard.on {
-            return Err("the feed hold is switched off".into());
-        }
-        match &self.last {
-            Some(f) if f.loud_db > -80.0 => Ok(()),
-            Some(f) => Err(format!("the input is silent ({:.0} dB)", f.loud_db)),
-            None => Err("nothing has been heard yet".into()),
-        }
+        self.arm_state().map(|_| ())
     }
 
     pub fn recording(&self) -> bool {
@@ -299,7 +323,8 @@ impl Ears {
         };
         ui.label(RichText::new(text).size(13.0).color(color).strong()).on_hover_text("From the microphone: the spindle's speed under load (droop) and chatter. Logged per line next to the program as .cutlog.json.");
         if let Some(why) = &self.held {
-            ui.label(RichText::new("FEED HELD: spindle bogging").size(13.0).color(RED).strong()).on_hover_text(why);
+            let banner = if why.contains("hasn't heard the spindle") { "FEED HELD: spindle not heard" } else { "FEED HELD: spindle bogging" };
+            ui.label(RichText::new(banner).size(13.0).color(RED).strong()).on_hover_text(why);
         }
         if let Some(set) = self.adaptive.1 {
             let (t, c) = if self.adaptive_sent < 0.995 {
@@ -316,13 +341,14 @@ impl Ears {
                 set.max * 100.0
             ));
         }
-        let (gtext, gcolor) = match self.guard_ready() {
-            Ok(()) => ("hold armed", GREEN),
-            Err(_) if !self.settings.guard.on => ("hold off", MUTED),
-            Err(_) => ("hold NOT armed", AMBER),
+        let what = format!("Feed hold when the spindle bogs: over {:.0}% slow for {:.1} s, or still slowing down after {:.1} s (Settings -> Listening)", self.settings.guard.limit * 100.0, self.settings.guard.time, self.settings.guard.rising_time);
+        let (gtext, gcolor, why) = match self.arm_state() {
+            Ok(true) => ("hold armed", GREEN, "the spindle is heard and its no-load speed learned".to_string()),
+            Ok(false) => ("hold ready", TEXT, "the input is live; it arms once it has heard the spindle run a few seconds in air".to_string()),
+            Err(_) if !self.settings.guard.on => ("hold off", MUTED, "switched off".to_string()),
+            Err(why) => ("hold NOT armed", AMBER, why),
         };
-        ui.label(RichText::new(gtext).size(12.0).color(gcolor))
-            .on_hover_text(format!("Feed hold when the spindle bogs: over {:.0}% slow for {:.1} s, or still slowing down after {:.1} s (Settings -> Listening)", self.settings.guard.limit * 100.0, self.settings.guard.time, self.settings.guard.rising_time));
+        ui.label(RichText::new(gtext).size(12.0).color(gcolor)).on_hover_text(format!("{what}: {why}"));
         if self.recording.is_some() {
             ui.label(RichText::new("● REC").size(13.0).color(RED).strong()).on_hover_text("The program asked for (RCNC RECORD_AUDIO): its sound is saved as a .wav beside it when it ends");
         }
@@ -441,6 +467,30 @@ fn samples_per_frame_s(rate: u32) -> f64 {
     (n / 2) as f64 / rate.max(1) as f64
 }
 
+/// Under this the input is dead: unplugged or muted reads digital silence (about -165 dB); a connected
+/// transducer on the DMC2 reads about -97 dB with the spindle off.
+pub const LIVE_INPUT_DB: f64 = -130.0;
+
+/// The hold's state from what it knows: the input (Err why), the hold switched on, the last window's level,
+/// the spindle speed then, and whether the no-load speed is learned there. Ok(true) armed, Ok(false) ready.
+pub fn arm(input: Result<(), String>, on: bool, level_db: Option<f64>, rpm: f64, learned: bool) -> Result<bool, String> {
+    input?;
+    if !on {
+        return Err("the feed hold is switched off".into());
+    }
+    match level_db {
+        None => Err("nothing has come in from the input yet".into()),
+        Some(db) if db <= LIVE_INPUT_DB => Err(format!("the input is dead ({db:.0} dB: check the transducer and its cable)")),
+        Some(_) => Ok(rpm > 0.0 && learned),
+    }
+}
+
+/// Whether to hold the feed before a move: the program needs the hold, the hold is on, the machine is moving
+/// with the spindle on, no no-load speed is learned at this speed, and it hasn't already held at this speed.
+pub fn holds_unheard(requires: bool, moving: bool, rpm: f64, learned: bool, already: bool, on: bool) -> bool {
+    requires && on && moving && rpm > 0.0 && !learned && !already
+}
+
 /// A program asks for the listening feed hold with `(RCNC REQUIRE_GUARD)`: Cycle Start refuses without it.
 pub fn requires_guard(program: &str) -> bool {
     program.lines().any(|l| l.trim().to_ascii_uppercase().starts_with("(RCNC REQUIRE_GUARD"))
@@ -494,6 +544,34 @@ pub fn records_audio(program: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cycle_start_needs_a_live_input_not_a_running_spindle() {
+        // the gauge programs start with the probe, spindle off: a connected transducer reads about -97 dB
+        assert_eq!(super::arm(Ok(()), true, Some(-97.0), 0.0, false), Ok(false));
+        // unplugged: digital silence
+        assert!(super::arm(Ok(()), true, Some(-165.0), 0.0, false).unwrap_err().contains("dead"));
+        assert!(super::arm(Ok(()), true, None, 0.0, false).is_err());
+        assert!(super::arm(Err("listening is off".into()), true, Some(-60.0), 0.0, false).is_err());
+        assert!(super::arm(Ok(()), false, Some(-60.0), 0.0, false).unwrap_err().contains("switched off"));
+        // the spindle heard and its no-load speed learned: armed
+        assert_eq!(super::arm(Ok(()), true, Some(-60.0), 24_000.0, true), Ok(true));
+        assert_eq!(super::arm(Ok(()), true, Some(-60.0), 24_000.0, false), Ok(false));
+    }
+
+    #[test]
+    fn a_move_with_the_spindle_unheard_is_held_once() {
+        use super::holds_unheard;
+        // spindle on, moving, nothing learned at this speed: hold
+        assert!(holds_unheard(true, true, 24_000.0, false, false, true));
+        // the normal case: learned in the dwell before the move
+        assert!(!holds_unheard(true, true, 24_000.0, true, false, true));
+        // once per speed; not while standing; not with the spindle off (the probe moves); not without REQUIRE_GUARD
+        assert!(!holds_unheard(true, true, 24_000.0, false, true, true));
+        assert!(!holds_unheard(true, false, 24_000.0, false, false, true));
+        assert!(!holds_unheard(true, true, 0.0, false, false, true));
+        assert!(!holds_unheard(false, true, 24_000.0, false, false, true));
+    }
+
     #[test]
     fn a_program_turns_the_adaptive_feed_on_for_its_roughing() {
         let base = listen::LimiterSettings::default();
