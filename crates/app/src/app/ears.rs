@@ -50,7 +50,12 @@ pub struct Ears {
     /// Since the listening started (the guard's clock).
     clock: std::time::Instant,
     /// A program with `(RCNC RECORD_AUDIO)` in it: the whole run's sound, written as a WAV beside it.
-    recording: Option<(std::path::PathBuf, Vec<f32>)>,
+    /// The run's recording, written to disk as it comes (`(RCNC RECORD_AUDIO)`).
+    recording: Option<listen::WavRecorder>,
+    /// When the running log was last written out, and the write in flight: a crash keeps all but the last
+    /// few seconds of the run's log.
+    log_saved: std::time::Instant,
+    log_saving: Option<std::thread::JoinHandle<()>>,
     pub last: Option<Frame>,
     /// Recent chatter verdicts, to steady the indicator.
     chatter_recent: std::collections::VecDeque<bool>,
@@ -86,6 +91,8 @@ impl Ears {
             unheard_held: None,
             clock: std::time::Instant::now(),
             recording: None,
+            log_saved: std::time::Instant::now(),
+            log_saving: None,
             last: None,
             chatter_recent: Default::default(),
             tap: Tap::Idle,
@@ -154,7 +161,11 @@ impl Ears {
                 let air = s.air_cut.is_some();
                 self.log = Some((CutLog::path_for_run(p, air), CutLog::new(&p.display().to_string(), &src.name())));
                 self.log_start = std::time::Instant::now();
-                self.recording = records_audio(&s.program).then(|| (CutLog::wav_for_run(p, air), Vec::new()));
+                self.log_saved = std::time::Instant::now();
+                // at most an hour of it (about 330 MB at 48 kHz)
+                self.recording = records_audio(&s.program)
+                    .then(|| listen::WavRecorder::create(&CutLog::wav_for_run(p, air), src.rate(), 3600.0))
+                    .and_then(|r| r.map_err(|e| eprintln!("recording: {e}")).ok());
             }
         }
         // windows come in batches a few times a second: spread them back over the time they took
@@ -221,23 +232,42 @@ impl Ears {
                 }
             }
         }
-        if let Some((_, rec)) = &mut self.recording {
-            // at most an hour (about 330 MB at 48 kHz)
-            if rec.len() < src.rate() as usize * 3600 {
-                rec.extend_from_slice(&samples);
+        if let Some(rec) = &mut self.recording {
+            if let Err(e) = rec.push(&samples) {
+                eprintln!("recording: {e}");
+                self.recording = None;
+            }
+        }
+        // the log so far, every few seconds, on a thread of its own (it's a few MB by the end of a long run)
+        if let Some((path, log)) = &self.log {
+            let idle = self.log_saving.as_ref().is_none_or(|h| h.is_finished());
+            if idle && self.log_saved.elapsed().as_secs_f64() >= LOG_SAVE_S && !log.lines.is_empty() {
+                self.log_saved = std::time::Instant::now();
+                let (path, log) = (path.clone(), log.clone());
+                self.log_saving = std::thread::Builder::new()
+                    .name("cut log".into())
+                    .spawn(move || {
+                        if let Err(e) = log.save(&path) {
+                            eprintln!("cut log: {e}");
+                        }
+                    })
+                    .ok();
             }
         }
         if !running && !matches!(s.mode, Mode::Probing) && s.paused.is_none() {
             if let Some((path, mut log)) = self.log.take() {
+                if let Some(h) = self.log_saving.take() {
+                    let _ = h.join();
+                }
                 if !log.lines.is_empty() {
                     // where it chattered: a speed to try next time (in the log for rCAD; never changed here)
                     log.suggest(s.config.spindle_max_rpm.max(1.0));
                     let _ = log.save(&path);
                 }
             }
-            if let Some((path, rec)) = self.recording.take() {
-                if !rec.is_empty() {
-                    let _ = listen::write_wav(&path, &rec, src.rate());
+            if let Some(rec) = self.recording.take() {
+                if let Err(e) = rec.finish() {
+                    eprintln!("recording: {e}");
                 }
             }
         }
@@ -475,6 +505,9 @@ impl Ears {
 }
 
 /// Seconds between analysis windows (half a window: 8192 samples at 32 kHz and up, else 4096).
+/// How often a running program's cut log is written out, s.
+const LOG_SAVE_S: f64 = 10.0;
+
 fn samples_per_frame_s(rate: u32) -> f64 {
     let n = if rate >= 32_000 { 8192 } else { 4096 };
     (n / 2) as f64 / rate.max(1) as f64

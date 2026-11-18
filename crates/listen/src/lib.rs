@@ -108,6 +108,55 @@ pub fn read_wav(path: &std::path::Path) -> Result<(Vec<f32>, u32), String> {
     Ok((all.iter().step_by(ch).copied().collect(), spec.sample_rate))
 }
 
+/// A run's recording, written as it comes (16-bit mono WAV) and flushed every few seconds, so a crash keeps
+/// all but the last few seconds of it: the file is a complete WAV after every flush.
+pub struct WavRecorder {
+    w: hound::WavWriter<std::io::BufWriter<std::fs::File>>,
+    samples: usize,
+    cap: usize,
+    flushed: std::time::Instant,
+}
+
+impl WavRecorder {
+    /// How often the file is brought up to date, s.
+    pub const FLUSH_S: f64 = 5.0;
+
+    /// Start a recording at `path`; at most `max_s` seconds of it are kept.
+    pub fn create(path: &std::path::Path, rate: u32, max_s: f64) -> Result<WavRecorder, String> {
+        let spec = hound::WavSpec { channels: 1, sample_rate: rate, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+        let w = hound::WavWriter::create(path, spec).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut r = WavRecorder { w, samples: 0, cap: (rate as f64 * max_s) as usize, flushed: std::time::Instant::now() };
+        r.w.flush().map_err(|e| e.to_string())?;
+        Ok(r)
+    }
+
+    pub fn push(&mut self, samples: &[f32]) -> Result<(), String> {
+        let room = self.cap.saturating_sub(self.samples);
+        for s in &samples[..samples.len().min(room)] {
+            self.w.write_sample((s.clamp(-1.0, 1.0) * 32767.0) as i16).map_err(|e| e.to_string())?;
+        }
+        self.samples += samples.len().min(room);
+        if self.flushed.elapsed().as_secs_f64() >= Self::FLUSH_S {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    /// Bring the file up to date now (`push` does every `FLUSH_S`).
+    pub fn flush(&mut self) -> Result<(), String> {
+        self.flushed = std::time::Instant::now();
+        self.w.flush().map_err(|e| e.to_string())
+    }
+
+    pub fn samples(&self) -> usize {
+        self.samples
+    }
+
+    pub fn finish(self) -> Result<(), String> {
+        self.w.finalize().map_err(|e| e.to_string())
+    }
+}
+
 /// Write mono f32 samples as a 16-bit WAV (tests, and saving a tap test's recording).
 pub fn write_wav(path: &std::path::Path, samples: &[f32], rate: u32) -> Result<(), String> {
     let spec = hound::WavSpec { channels: 1, sample_rate: rate, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };

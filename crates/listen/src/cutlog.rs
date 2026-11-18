@@ -240,9 +240,15 @@ impl CutLog {
         p.into()
     }
 
+    /// Write the log to `path`, through a temporary file beside it, so a crash mid-write leaves the last
+    /// complete one.
     pub fn save(&self, path: &std::path::Path) -> Result<(), String> {
         let s = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(path, s).map_err(|e| format!("{}: {e}", path.display()))
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(".part");
+        let tmp = std::path::PathBuf::from(tmp);
+        std::fs::write(&tmp, s).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     pub fn load(path: &std::path::Path) -> Result<CutLog, String> {
