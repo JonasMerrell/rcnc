@@ -27,7 +27,7 @@ Then say so.
 | Travel | X 343, Y 234, Z 150 mm. +Y moves the bed back. |
 | Feeds | Max feed 3000 mm/min, Z rapid 3000. |
 | Tool changes | Manual, ER16. No tool changer yet (the ATC design is in ~/dmc2). |
-| Spindle | VFD, 1.5 kW input. **Measured: it pulls out (stalls) at about 645 W of rCAD's model watts at 24 000 rpm** (2026-11-17). Never plan over 550 W; aim at 450–500 W. Constant torque below 24k is assumed, not measured. Max 24 000 rpm. |
+| Spindle | 2.2 kW 220 V spindle (2-pole, 400 Hz at 24k) on an H100 VFD that outputs only 110 V. **The VFD's F004 (reference frequency) is 150**: full torque up to 9000 rpm, weaker above (the 110 V ceiling). **9k is the strong speed** (2026-11-18): see the table below. At 24k it carries only about 450 W. Max 24 000 rpm. |
 | Coolant | Flood, low pressure. Throws chips poorly out of deep pockets, and thin light chips worst of all **(Jonas)**. |
 | Controller | rcnc (the rCAD post is `rcnc`). Mach3 macros don't apply. |
 | Board | BlueSkyT USB. The probe and the tool setter share input 11, so rcnc refuses M3 with the probe loaded. |
@@ -36,14 +36,32 @@ The rCAD machine block is the `M` dict in a job's `cam.py`:
 
 ```json
 {"name": "DMC2", "model": "DMC2", "travel": [343, 234, 150], "max_feed": 3000, "rapid_z": 3000,
- "tool_changer": false, "spin_up": 4, "spindle_power": 1500, "spindle_efficiency": 0.43, "spindle_rated_rpm": 24000,
- "spindle_never_exceed": 0.85, "spindle_caution": 0.775}
+ "tool_changer": false, "spin_up": 4, "spindle_power": 2600, "spindle_efficiency": 0.43, "spindle_rated_rpm": 9000,
+ "spindle_above_rated": 0.76, "spindle_never_exceed": 0.85, "spindle_caution": 0.76}
 ```
 
-Use `"post": "rcnc"` and `"probe": {"z_reference": "Vise"}` with `create_cam`. With rCAD PR #152, 100% is the
-spindle's pull-out, a cut over 85% (550 W) is a problem and over 77.5% (500 W) a caution (`loads[].power_rating`).
+Use `"post": "rcnc"` and `"probe": {"z_reference": "Vise"}` with `create_cam`, and `"stay_down": true` (rCAD
+`tighten_links`) on the setup before posting. With rCAD PR #152/#154 the power the spindle has falls above 9000
+rpm as (9000 / rpm)^0.76: never-exceed **950 W at 9k, about 765 at 12k, 450 at 24k**; caution **850 / 684 / 403 W**
+(`loads[].power_rating`).
 
-### What the spindle can take (measured 2026-11-17) **(Jonas)**
+### What the spindle can take (measured 2026-11-17/18) **(Jonas)**
+
+**Since 2026-11-18 the VFD is at F004 = 150** (it was 400: the spindle got half its flux at every speed). The
+1/4" 3-flute (T24, 24 out), 12 deep, F004 = 150, sag over the no-load speed:
+
+| rpm | Model W -> sag |
+|---|---|
+| **9000** | 484 3.2%, 589 3.6%, 676 4.2%, 759 5.0%, 850 6.5%, 949 6.6%, 1049 9.0%: **all steady** |
+| 12000 | 590 5.2%, 676 5.7%, 759 7%, 839 9% (no runaway) |
+| 24000 | 446 4.3-4.7% settled; 494-499 crept: the edge |
+
+- **Rough at S9000** with the 1/4", up to about **650-700 W** (caution 850, never-exceed 950). 24k is for light
+  finishing only (≤ 400 W).
+- **Top-surface roughing at S12000** where the load fits (≤ 684 W): the chips fling better than at 9k **(Jonas)**.
+- After the first long 9k job, feel the spindle body: F004 = 150 over-fluxes it a little under 9k (no-load 2.7 A).
+
+The older table below is for F004 = 400 (before 2026-11-18): 24k only.
 
 The 1/4" 3-flute DLC end mill (T24) at 24 000 rpm, 24 mm stick-out, in 6061. The speed is heard from the
 transducer on the spindle head.
@@ -135,7 +153,12 @@ The planning rules that follow:
 - Use **adaptive** (constant engagement) for pockets, around plinths and at corners. Don't let a contour
   plough into corners: that bogged the spindle.
 - Leave **0.3 mm** on walls and **0.2 mm** on floors, more if a re-locate follows (see above).
-- Roughing peak spindle power **≤ 550 W (85% of pull-out) and ≤ 18 cm³/min**, bulk 450–500 W. Read it from `loads[].power_w` / `power_rating`.
+- Roughing peak spindle power: **under the caution at its speed** (F004 = 150: 850 W at 9k, 684 at 12k, 403 at 24k),
+  never over the never-exceed. Read it from `loads[].power_w` / `power_rating`.
+- **Depth at 9k: moderate, 5-7 mm**, with a wider step over for the same watts **(Jonas)**: 11-13 deep strips at
+  9k packed chips on top of the bar, and at 9k the chips "don't really get flung at all". Prefer thick short chips.
+- Every S change is followed by **3 s in air** (G4 P3) before the tool goes near the work: the bog guard learns
+  that speed's no-load speed there (`add_dwell.py` in jobs/stickout-gauge).
 - Keep air cutting low (`air[].air_pct`), but not at the cost of overload spikes.
 - rCAD's adaptive still has open bugs: links over "cleared" bands that aren't cleared, and wall bands wider
   than the stepover. Check the worst-load location (`loads[].at`, `width`) every time.
@@ -158,6 +181,7 @@ The planning rules that follow:
 ### Chips
 
 - Deep, narrow pockets and grooves pack chips (low-pressure flood, thin chips).
+- **A chip-clearing M0 pause (with a MSG) before any finishing pass that follows 9k roughing** **(Jonas)**.
 - Check the simulation's `chips[]` (`chip_fill`). Where the chip model cautions, add a **chip pause** after
   the rough: G53 Z0, M5, M9, an `(MSG,…)` saying what to blow out, M0, restart the spindle and coolant, and
   dwell (see `jobs/phone-stand/add_chip_pause.py`). Re-run the pause script after every re-post.
@@ -189,6 +213,19 @@ The planning rules that follow:
 - **Vertical edges:** give outside vertical corners (and slot mouths at an end face) a small radius or chamfer in the CAD so the wall contour breaks them; a chamfer mill can't reach a vertical edge (stick-out gauge, 2026-11-17).
 - **Measure the stock and confirm it with Jonas before any CAM.** Nominal sizes are not measurements: the stick-out gauge was planned for a "1x1" bar, and the bar was 32 × 32. **(Jonas)**
 - **Keep this file current:** when a cut bogs, chatters, packs chips or leaves a mark, add the lesson here.
+
+### Travel between cuts **(Jonas)**
+
+- Don't waste time in air: op1-top (2026-11-17) spent about 10 of its 40 min feeding down through air from Z34
+  and returning over the full 134 mm between one-way strips.
+- Set `"stay_down": true` on the setup (rCAD `tighten_links`): with the stock simulated, the tool travels between
+  cuts only as high as the stock still there needs (+1 mm), stays down at depth through cleared space or past
+  the stock's end, and rapids down to 1 mm over the stock before an entry, feeding only the rest. Tool changes
+  and speed changes keep the full retract.
+- Cut roughing strips **both ways** (every other one conventional is fine for roughing) so each links to the
+  next at depth off the stock's end. Finishing stays climb only.
+- Report the air time per operation in the review (rapids and feed moves not in material) and check the
+  simulation shows no rapid into stock (`problems`).
 
 ## Checks before handing over
 

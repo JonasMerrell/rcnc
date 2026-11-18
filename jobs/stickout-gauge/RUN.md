@@ -298,35 +298,42 @@ Op 2's program also says so before Find bores.
 - the end lugs (8 thick) with the two Ø8 bores at y ±53.5;
 - beside the walls, the bar from Z0 to Z5.5 (the jaws' grip).
 
-## Op 2: the gauge's bottom side (`op2-bottom.nc`, about 11:40 plus two stops)
+## Op 2: the gauge's bottom side (`op2-bottom.nc`, about 6:30 plus three stops) — FOR REVIEW
 
-Re-planned for the 32 mm bar on the pull-out model, like op 1: straight passes at ≤ 1 mm stepover, **peak
-393 W** by rCAD's sim. It has `(RCNC REQUIRE_GUARD)`.
+Re-planned 2026-11-18 for the VFD at **F004 = 150**: the carrier at **S12000** (the top surface: chips fling better
+than at 9k, Jonas), the lugs and side strips at **S9000**, all shallow (2.8-5.5 deep), straight passes **both
+ways** (every other one conventional: roughing). rCAD's new linking (`stay_down`) keeps the tool down between
+strips where the way is clear (off the bar's ends, beside it) and lifts only as high as the stock still there needs.
 
-1. **Unclamp and flip** the part: op 1's finished top goes down on the ledges.
-   - Turn it over about X (end for end along Y stays). The bores and the part are symmetric, so either way
-     lands the same.
-   - Close the jaws on the **23 mm finished walls**, gripping 4.7.
-   - The lugs stand up past the jaw ends.
-2. Cycle Start. **The program stops first**: blow the chips out of both lug bores and deburr their upper ends
-   (where they broke through in op 1).
+1. **Unclamp and flip** the part: op 1's finished top goes down on the ledges. Turn it over about X. Close the jaws
+   on the **23 mm finished walls**, gripping 4.7. The lugs stand up past the jaw ends.
+2. Cycle Start. **The program stops first**: blow the chips out of both lug bores and deburr their upper ends.
 3. `(RCNC Z_REFERENCE Vise)`, then T99 **Find bores**: `A=0,-53.5 B=0,53.5 D=8 TOP=19 DEPTH=4 TOL=0.1 ROT=0.2`.
-   This sets X/Y from the bores **before any cutting**. If a check fails, rcnc holds with Probe again.
-4. T24 (Tap test), then T1:
+4. T24, then T1. Stops: a **chip pause** after the slot rough, and a **chip pause before the finishing** (blow the
+   slots, the reliefs and the top clear), then the finishing.
 
-| # | Tool | Operation | Passes | Time | Peak W (spindle %) |
-|---|---|---|---|---|---|
-| 1 | T24 | **Carrier off** z19 → 16.2: 1.0 × 2.8 strips across the whole bar, climb | 32 | 2:08 | 248 (38%) |
-| 2 | T24 | **Finish the gauge's bottom**: face z16.2 → 16, one 0.2 level | 1 | 0:53 | 47 |
-| 3 | T24 | Rough the bottom slots and reliefs (1 mm levels, F1000, 0.2 left) | 1 | 0:43 | 242 |
-| — | | **CHIP PAUSE**: blow the chips out of the slots and reliefs (chip index 0.92), then Cycle Start | | | |
-| 4 | T24 | **Lugs off**: lines across X, 0.89 strips 5.5 deep from each lug's free end in, each climbing; the last stops 0.3 off the end face | 36 | 1:48 | 393 (61%) |
-| 5 | T24 | **Side strips** beside the walls z16 → 12.5: what op 1 left over the carrier (it stopped at op 1's Z5.5 = here Z13.5), 1 mm past it, five 0.84 strips a side | 10 | 0:50 | 232 (36%) |
-| 6 | T24 | Rough whatever is left down to Z5 (adaptive, 0.64 stepover, rest) | 1 | 0:55 | 113 |
-| 7 | T24 | Finish the slot walls and relief stop walls, one full-depth pass at **F1200** | 1 | 0:11 | 321 |
-| 8 | T24 | **Finish** the walls and end faces z16 → 10.5, one full-height pass (meets op 1's finish, 3 mm overlap; seam mid −X) | 1 | 0:25 | 169 |
-| 9 | T1 | Engrave the bottom numbers (22, 26) 0.3 deep | 1 | 0:13 | |
-| 10 | T1 | Edge break 0.3 on every edge of the bottom face: outline (includes the end faces' bottom edges), slots, reliefs | 1 | 0:12 | |
+**Before:** F004 = 150. rcnc on guard-slip; Settings -> Listening **1400 rpm / 7%**.
+
+| Step | Passes | Time | Air time (old linking) | Peak W (model) |
+|---|---|---|---|---|
+| Probe lug bore A | 1 | 0:06 | 6 s (was 6) | 0 |
+| Probe lug bore B | 1 | 0:06 | 6 s (was 6) | 0 |
+| Carrier off z19->16.2: 32 strips 1.0 x 2.8, F3000 S12000, both ways | 32 | 1:37 | 20 s (was 51) | 246 |
+| Finish the gauge's bottom: face z 16.2 to 16 | 1 | 0:53 | 12 s (was 12) | 111 |
+| Rough the bottom slots and their end reliefs | 1 | 0:42 | 4 s (was 5) | 242 |
+| Lug passes: 36 lines across X, 0.89 x 5.5, F3000 S9000, both ways | 36 | 0:40 | 18 s (was 86) | 364 |
+| Side strips z16->12.5: 10 lines 0.84 x 3.5, F3000 S9000, both ways | 10 | 0:33 | 15 s (was 32) | 182 |
+| Rough what is left down to Z5 | 1 | 0:47 | 46 s (was 58) | 105 |
+| Finish the slot walls and the relief stop walls | 1 | 0:10 | 4 s (was 5) | 321 |
+| Finish the walls and end faces Z16 to Z10.5 | 1 | 0:25 | 20 s (was 19) | 165 |
+| Engrave the bottom numbers 0.3 deep | 1 | 0:07 | 4 s (was 10) | 0 |
+| Edge break 0.3 on every edge of the bottom face: outline | 1 | 0:13 | 2 s (was 1) | 0 |
+
+- **6:33 in all** by rCAD (was 9:07 with the old linking, and 11:16 before the re-plan); the rcnc simulator runs it
+  in 11:14 with probing and the three stops.
+- Peak **364 W** (a lug pass). The S12000 carrier is 246 W, under 12k's 684 W caution.
+- rCAD simulation: ok, no problems (no rapid into the stock, the part or a fixture); unfinished 1 mm² (the
+  slot/relief corner grid). rcnc simulator: Find bores, started 0.4 / 0.3 mm off, reads both bores 107.000 apart.
 
 **Nothing comes loose:**
 - The carrier goes as chips, strip by strip.
@@ -337,13 +344,6 @@ Re-planned for the 32 mm bar on the pull-out model, like op 1: straight passes a
 
 **Grip and clearance:** the jaws hold the gauge's walls (op 2 Z0 → 4.7); nothing in op 2 goes below Z10.0
 (the slot floors), checked on the posted G-code: 5.3 above the jaw tops. rCAD's fixture clearance is 0.8, no flags.
-
-Check results:
-- **rCAD simulation:** op 2 starts from what op 1 really leaves. No problems; unfinished 1 mm² (the
-  slot/relief corner grid).
-- **rcnc simulator:** runs to the end in 846 s, with the lug bores in the bar started 0.4 / 0.3 mm off on
-  purpose. Find bores reads both bores 107.000 apart and moves G54 onto them.
-  - For the sim only, a Find stock at the start stands in for op 1's G54.
 
 **Sharp edges left for a file (vertical edges: a chamfer mill can't reach them):**
 - the gauge's **4 outside vertical corners**;
