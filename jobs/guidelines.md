@@ -226,6 +226,13 @@ The planning rules that follow:
   next at depth off the stock's end. Finishing stays climb only.
 - Report the air time per operation in the review (rapids and feed moves not in material) and check the
   simulation shows no rapid into stock (`problems`).
+- **Finish one region before moving to the next (Jonas, 2026-11-18).** Within an operation, group the cuts by
+  region and finish one area (all its depth levels) before travelling to the next, taking the nearest area
+  next. Don't bounce around the part: on op1-top the adaptive steps hopped end to end and nearly all the time
+  was air. rCAD's `stay_down` now orders the cuts this way (`order_by_region`): a cut waits only for earlier
+  cuts that overlap its area (so depth levels and rough-before-finish hold), and keeps its direction (climb
+  finishes stay climb). Report the long links (moves over ~20 mm between cuts) per operation alongside the
+  air time, before and after.
 
 ## Checks before handing over
 

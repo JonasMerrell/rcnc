@@ -298,12 +298,14 @@ Op 2's program also says so before Find bores.
 - the end lugs (8 thick) with the two Ø8 bores at y ±53.5;
 - beside the walls, the bar from Z0 to Z5.5 (the jaws' grip).
 
-## Op 2: the gauge's bottom side (`op2-bottom.nc`, about 6:30 plus three stops) — FOR REVIEW
+## Op 2: the gauge's bottom side (`op2-bottom.nc`, about 6:00 plus three stops) — FOR REVIEW
 
 Re-planned 2026-11-18 for the VFD at **F004 = 150**: the carrier at **S12000** (the top surface: chips fling better
 than at 9k, Jonas), the lugs and side strips at **S9000**, all shallow (2.8-5.5 deep), straight passes **both
 ways** (every other one conventional: roughing). rCAD's new linking (`stay_down`) keeps the tool down between
 strips where the way is clear (off the bar's ends, beside it) and lifts only as high as the stock still there needs.
+Since 2026-11-18 06:00 it also finishes one region before moving on (`order_by_region`): the rest rough no longer
+bounces end to end (49 s with 48 s of it air and 34 links over 20 mm, now 16 s, 17 s air, 4 long links).
 
 1. **Unclamp and flip** the part: op 1's finished top goes down on the ledges. Turn it over about X. Close the jaws
    on the **23 mm finished walls**, gripping 4.7. The lugs stand up past the jaw ends.
@@ -314,7 +316,7 @@ strips where the way is clear (off the bar's ends, beside it) and lifts only as 
 
 **Before:** F004 = 150. rcnc on guard-slip; Settings -> Listening **1400 rpm / 7%**.
 
-| Step | Passes | Time | Air time (old linking) | Peak W (model) |
+| Step | Passes | Time | Air time (before) | Peak W (model) |
 |---|---|---|---|---|
 | Probe lug bore A | 1 | 0:06 | 6 s (was 6) | 0 |
 | Probe lug bore B | 1 | 0:06 | 6 s (was 6) | 0 |
@@ -323,14 +325,14 @@ strips where the way is clear (off the bar's ends, beside it) and lifts only as 
 | Rough the bottom slots and their end reliefs | 1 | 0:42 | 4 s (was 5) | 242 |
 | Lug passes: 36 lines across X, 0.89 x 5.5, F3000 S9000, both ways | 36 | 0:40 | 18 s (was 86) | 364 |
 | Side strips z16->12.5: 10 lines 0.84 x 3.5, F3000 S9000, both ways | 10 | 0:33 | 15 s (was 32) | 182 |
-| Rough what is left down to Z5 | 1 | 0:47 | 46 s (was 58) | 105 |
+| Rough what is left down to Z5, region by region | 1 | 0:16 | 17 s (was 46, and 58 with the old links; long links 4, was 34) | 105 |
 | Finish the slot walls and the relief stop walls | 1 | 0:10 | 4 s (was 5) | 321 |
 | Finish the walls and end faces Z16 to Z10.5 | 1 | 0:25 | 20 s (was 19) | 165 |
 | Engrave the bottom numbers 0.3 deep | 1 | 0:07 | 4 s (was 10) | 0 |
 | Edge break 0.3 on every edge of the bottom face: outline | 1 | 0:13 | 2 s (was 1) | 0 |
 
-- **6:33 in all** by rCAD (was 9:07 with the old linking, and 11:16 before the re-plan); the rcnc simulator runs it
-  in 11:14 with probing and the three stops.
+- **6:00 in all** by rCAD (6:33 before the region ordering, 9:07 with the old linking, and 11:16 before the
+  re-plan); the rcnc simulator runs it in 10:59 with probing and the three stops (was 11:14).
 - Peak **364 W** (a lug pass). The S12000 carrier is 246 W, under 12k's 684 W caution.
 - rCAD simulation: ok, no problems (no rapid into the stock, the part or a fixture); unfinished 1 mm² (the
   slot/relief corner grid). rcnc simulator: Find bores, started 0.4 / 0.3 mm off, reads both bores 107.000 apart.
