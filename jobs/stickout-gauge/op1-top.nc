@@ -1,5 +1,5 @@
 (Op 1 top - made by rCAD)
-(STOCK 32 x 32 x 120.7 - 6061 bar as measured 2026-11-17, after op1a v2; NOT for a 25.4 bar)
+(STOCK 32 x 32 x 120.7 - 6061 bar as measured 2026-11-17, after op1a v2-v7 [the ladders]; NOT for a fresh bar)
 (RCNC REQUIRE_GUARD: the bog guard [Settings -> Listening, feed hold on] must be armed: rcnc refuses Cycle Start without it)
 (work zero: part bottom, stock centre [on the vise])
 (carries on from Op 1a calibration: clamp the part it left with its top side up)
@@ -9,444 +9,258 @@
 (T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)
 (T11 6 mm 2FL ball [carbide] - D6 ball end mill, 2 flutes, flute length 18, stickout 21)
 (T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill, flute length 18, stickout 22)
-(estimated time 49:52)
+(estimated time 40:13)
 G21 G17 G40 G49 G80 G90 G91.1 G94 G64
 G54
 (RCNC Z_REFERENCE Vise)
 
-(Band z32-26, strip x +5.55..+6.40 [0.85 x 6, F2100] - Trace)
+(Band x +0.25..+1.13, z32.1-19.2 [0.88 x 12.9, F1860 S9000] - Trace)
 G53 G0 Z0
 T24 M6
-S24000 M3
+S9000 M3
+G4 P3
 M8
 G0 Z37
-X8.728 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x +4.71..+5.55 [0.85 x 6, F2100] - Trace)
-X7.88 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x +3.86..+4.71 [0.85 x 6, F2100] - Trace)
-X7.033 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x +3.01..+3.86 [0.85 x 6, F2100] - Trace)
-X6.186 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x +2.16..+3.01 [0.85 x 6, F2100] - Trace)
-X5.338 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x +1.32..+2.16 [0.85 x 6, F2100] - Trace)
-X4.491 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x +0.47..+1.32 [0.85 x 6, F2100] - Trace)
-X3.643 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x -0.38..+0.47 [0.85 x 6, F2100] - Trace)
-X2.796 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x -1.23..-0.38 [0.85 x 6, F2100] - Trace)
-X1.949 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x -2.07..-1.23 [0.85 x 6, F2100] - Trace)
-X1.101 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x -2.92..-2.07 [0.85 x 6, F2100] - Trace)
-X0.254 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x -3.77..-2.92 [0.85 x 6, F2100] - Trace)
-X-0.593 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x -4.62..-3.77 [0.85 x 6, F2100] - Trace)
-X-1.441 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x -5.46..-4.62 [0.85 x 6, F2100] - Trace)
-X-2.288 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x -6.31..-5.46 [0.85 x 6, F2100] - Trace)
-X-3.136 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x -7.16..-6.31 [0.85 x 6, F2100] - Trace)
-X-3.983 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x -8.01..-7.16 [0.85 x 6, F2100] - Trace)
-X-4.83 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x -8.85..-8.01 [0.85 x 6, F2100] - Trace)
-X-5.678 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z32-26, strip x -9.70..-8.85 [0.85 x 6, F2100] - Trace)
-X-6.525 Y-67
-Z34
-G1 Z26 F330
-Y67 F2100
-G0 Z37
-
-(Band z26-19.2, strip x +15.27..+16.00 [0.73 x 6.8, F2100] - Trace)
-X18.441 Y-67
+X-2.046 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F1860
 G0 Z37
 
-(Band z26-19.2, strip x +14.53..+15.27 [0.73 x 6.8, F2100] - Trace)
-X17.706 Y-67
+(Band x +1.13..+2.01, z32.1-19.2 [0.88 x 12.9, F1860 S9000] - Trace)
+X-1.168 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F1860
 G0 Z37
 
-(Band z26-19.2, strip x +13.80..+14.53 [0.73 x 6.8, F2100] - Trace)
-X16.972 Y-67
+(Band x +2.01..+2.89, z32.1-19.2 [0.88 x 12.9, F1860 S9000] - Trace)
+X-0.289 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F1860
 G0 Z37
 
-(Band z26-19.2, strip x +13.06..+13.80 [0.73 x 6.8, F2100] - Trace)
-X16.238 Y-67
+(Band x +2.89..+3.76, z32.1-19.2 [0.88 x 12.9, F1860 S9000] - Trace)
+X0.589 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F1860
 G0 Z37
 
-(Band z26-19.2, strip x +12.33..+13.06 [0.73 x 6.8, F2100] - Trace)
-X15.504 Y-67
+(Band x +3.76..+4.64, z32.1-19.2 [0.88 x 12.9, F1860 S9000] - Trace)
+X1.468 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F1860
 G0 Z37
 
-(Band z26-19.2, strip x +11.59..+12.33 [0.73 x 6.8, F2100] - Trace)
-X14.769 Y-67
+(Band x +4.64..+5.52, z32.1-19.2 [0.88 x 12.9, F1860 S9000] - Trace)
+X2.346 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F1860
 G0 Z37
 
-(Band z26-19.2, strip x +10.86..+11.59 [0.73 x 6.8, F2100] - Trace)
-X14.035 Y-67
+(Band x +5.52..+6.40, z32.1-19.2 [0.88 x 12.9, F1860 S9000] - Trace)
+X3.225 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F1860
 G0 Z37
 
-(Band z26-19.2, strip x +10.13..+10.86 [0.73 x 6.8, F2100] - Trace)
-X13.301 Y-67
+(Band x +6.40..+7.36, z26-19.2 [0.96 x 6.8, F3000 S9000] - Trace)
+X4.185 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x +9.39..+10.13 [0.73 x 6.8, F2100] - Trace)
-X12.566 Y-67
+(Band x +7.36..+8.32, z26-19.2 [0.96 x 6.8, F3000 S9000] - Trace)
+X5.145 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x +8.66..+9.39 [0.73 x 6.8, F2100] - Trace)
-X11.832 Y-67
+(Band x +8.32..+9.28, z26-19.2 [0.96 x 6.8, F3000 S9000] - Trace)
+X6.105 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x +7.92..+8.66 [0.73 x 6.8, F2100] - Trace)
-X11.098 Y-67
+(Band x +9.28..+10.24, z26-19.2 [0.96 x 6.8, F3000 S9000] - Trace)
+X7.065 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x +7.19..+7.92 [0.73 x 6.8, F2100] - Trace)
-X10.364 Y-67
+(Band x +10.24..+11.20, z26-19.2 [0.96 x 6.8, F3000 S9000] - Trace)
+X8.025 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x +6.45..+7.19 [0.73 x 6.8, F2100] - Trace)
-X9.629 Y-67
+(Band x +11.20..+12.16, z26-19.2 [0.96 x 6.8, F3000 S9000] - Trace)
+X8.985 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x +5.72..+6.45 [0.73 x 6.8, F2100] - Trace)
-X8.895 Y-67
+(Band x +12.16..+13.12, z26-19.2 [0.96 x 6.8, F3000 S9000] - Trace)
+X9.945 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x +4.99..+5.72 [0.73 x 6.8, F2100] - Trace)
-X8.161 Y-67
+(Band x +13.12..+14.08, z26-19.2 [0.96 x 6.8, F3000 S9000] - Trace)
+X10.905 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x +4.25..+4.99 [0.73 x 6.8, F2100] - Trace)
-X7.426 Y-67
+(Band x +14.08..+15.04, z26-19.2 [0.96 x 6.8, F3000 S9000] - Trace)
+X11.865 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x +3.52..+4.25 [0.73 x 6.8, F2100] - Trace)
-X6.692 Y-67
+(Band x +15.04..+16.00, z26-19.2 [0.96 x 6.8, F3000 S9000] - Trace)
+X12.825 Y67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y-67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x +2.78..+3.52 [0.73 x 6.8, F2100] - Trace)
-X5.958 Y-67
+(Band x -0.71..+0.25, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X2.469
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x +2.05..+2.78 [0.73 x 6.8, F2100] - Trace)
-X5.224 Y-67
+(Band x -1.66..-0.71, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X1.513 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x +1.31..+2.05 [0.73 x 6.8, F2100] - Trace)
-X4.489 Y-67
+(Band x -2.62..-1.66, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X0.557 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x +0.58..+1.31 [0.73 x 6.8, F2100] - Trace)
-X3.755 Y-67
+(Band x -3.57..-2.62, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X-0.399 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x -0.15..+0.58 [0.73 x 6.8, F2100] - Trace)
-X3.021 Y-67
+(Band x -4.53..-3.57, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X-1.354 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x -0.89..-0.15 [0.73 x 6.8, F2100] - Trace)
-X2.286 Y-67
+(Band x -5.49..-4.53, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X-2.31 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x -1.62..-0.89 [0.73 x 6.8, F2100] - Trace)
-X1.552 Y-67
+(Band x -6.44..-5.49, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X-3.266 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x -2.36..-1.62 [0.73 x 6.8, F2100] - Trace)
-X0.818 Y-67
+(Band x -7.40..-6.44, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X-4.222 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x -3.09..-2.36 [0.73 x 6.8, F2100] - Trace)
-X0.084 Y-67
+(Band x -8.35..-7.40, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X-5.178 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x -3.83..-3.09 [0.73 x 6.8, F2100] - Trace)
-X-0.651 Y-67
+(Band x -9.31..-8.35, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X-6.134 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x -4.56..-3.83 [0.73 x 6.8, F2100] - Trace)
-X-1.385 Y-67
+(Band x -10.26..-9.31, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X-7.09 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x -5.29..-4.56 [0.73 x 6.8, F2100] - Trace)
-X-2.119 Y-67
+(Band x -11.22..-10.26, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X-8.046 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x -6.03..-5.29 [0.73 x 6.8, F2100] - Trace)
-X-2.854 Y-67
+(Band x -12.18..-11.22, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X-9.002 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x -6.76..-6.03 [0.73 x 6.8, F2100] - Trace)
-X-3.588 Y-67
+(Band x -13.13..-12.18, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X-9.957 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x -7.50..-6.76 [0.73 x 6.8, F2100] - Trace)
-X-4.322 Y-67
+(Band x -14.09..-13.13, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X-10.913 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x -8.23..-7.50 [0.73 x 6.8, F2100] - Trace)
-X-5.056 Y-67
+(Band x -15.04..-14.09, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
+X-11.869 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2100
+Y67 F3000
 G0 Z37
 
-(Band z26-19.2, strip x -8.97..-8.23 [0.73 x 6.8, F2100] - Trace)
-X-5.791 Y-67
-Z34
-G1 Z19.2 F330
-Y67 F2100
-G0 Z37
-
-(Band z26-19.2, strip x -9.70..-8.97 [0.73 x 6.8, F2100] - Trace)
-X-6.525 Y-67
-Z34
-G1 Z19.2 F330
-Y67 F2100
-G0 Z37
-
-(Band z20-19.2, strip x -10.60..-9.70 [0.90 x 0.8, F2400] - Trace)
-X-7.425 Y-67
-Z34
-G1 Z19.2 F330
-Y67 F2400
-G0 Z37
-
-(Band z20-19.2, strip x -11.50..-10.60 [0.90 x 0.8, F2400] - Trace)
-X-8.325 Y-67
-Z34
-G1 Z19.2 F330
-Y67 F2400
-G0 Z37
-
-(Band z20-19.2, strip x -12.40..-11.50 [0.90 x 0.8, F2400] - Trace)
-X-9.225 Y-67
-Z34
-G1 Z19.2 F330
-Y67 F2400
-G0 Z37
-
-(Band z20-19.2, strip x -13.30..-12.40 [0.90 x 0.8, F2400] - Trace)
-X-10.125 Y-67
-Z34
-G1 Z19.2 F330
-Y67 F2400
-G0 Z37
-
-(Band z20-19.2, strip x -14.20..-13.30 [0.90 x 0.8, F2400] - Trace)
-X-11.025 Y-67
-Z34
-G1 Z19.2 F330
-Y67 F2400
-G0 Z37
-
-(Band z20-19.2, strip x -15.10..-14.20 [0.90 x 0.8, F2400] - Trace)
-X-11.925 Y-67
-Z34
-G1 Z19.2 F330
-Y67 F2400
-G0 Z37
-
-(Band z20-19.2, strip x -16.00..-15.10 [0.90 x 0.8, F2400] - Trace)
+(Band x -16.00..-15.04, z20-19.2 [0.96 x 0.8, F3000 S9000] - Trace)
 X-12.825 Y-67
 Z34
 G1 Z19.2 F330
-Y67 F2400
+Y67 F3000
 G0 Z37
 
 (Finish the gauge's top: face z 19.2 to 19, one 0.2 level - Face)
+S24000 M3
+G4 P3
 X-20.175 Y-60.35
 Z21.2
 G1 Z19 F330
@@ -549,651 +363,333 @@ Y60.35
 X20.175
 G0 Z37
 
-(Lug +Y, line y +62.62, down to Z13.5 - Trace)
+(Lug +Y, line y +62.62, down to Z8 [F2270 S9000] - Trace)
+S9000 M3
+G4 P3
 X23 Y62.625
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +62.62, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +61.73, down to Z13.5 - Trace)
+(Lug +Y, line y +61.73, down to Z8 [F2270 S9000] - Trace)
 X23 Y61.734
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +61.73, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +60.84, down to Z13.5 - Trace)
+(Lug +Y, line y +60.84, down to Z8 [F2270 S9000] - Trace)
 X23 Y60.843
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +60.84, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +59.95, down to Z13.5 - Trace)
+(Lug +Y, line y +59.95, down to Z8 [F2270 S9000] - Trace)
 X23 Y59.952
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +59.95, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +59.06, down to Z13.5 - Trace)
+(Lug +Y, line y +59.06, down to Z8 [F2270 S9000] - Trace)
 X23 Y59.06
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +59.06, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +58.17, down to Z13.5 - Trace)
+(Lug +Y, line y +58.17, down to Z8 [F2270 S9000] - Trace)
 X23 Y58.169
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +58.17, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +57.28, down to Z13.5 - Trace)
+(Lug +Y, line y +57.28, down to Z8 [F2270 S9000] - Trace)
 X23 Y57.278
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +57.28, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +56.39, down to Z13.5 - Trace)
+(Lug +Y, line y +56.39, down to Z8 [F2270 S9000] - Trace)
 X23 Y56.387
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +56.39, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +55.50, down to Z13.5 - Trace)
+(Lug +Y, line y +55.50, down to Z8 [F2270 S9000] - Trace)
 X23 Y55.496
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +55.50, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +54.60, down to Z13.5 - Trace)
+(Lug +Y, line y +54.60, down to Z8 [F2270 S9000] - Trace)
 X23 Y54.604
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +54.60, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +53.71, down to Z13.5 - Trace)
+(Lug +Y, line y +53.71, down to Z8 [F2270 S9000] - Trace)
 X23 Y53.713
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +53.71, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +52.82, down to Z13.5 - Trace)
+(Lug +Y, line y +52.82, down to Z8 [F2270 S9000] - Trace)
 X23 Y52.822
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +52.82, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +51.93, down to Z13.5 - Trace)
+(Lug +Y, line y +51.93, down to Z8 [F2270 S9000] - Trace)
 X23 Y51.931
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +51.93, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +51.04, down to Z13.5 - Trace)
+(Lug +Y, line y +51.04, down to Z8 [F2270 S9000] - Trace)
 X23 Y51.04
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +51.04, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +50.15, down to Z13.5 - Trace)
+(Lug +Y, line y +50.15, down to Z8 [F2270 S9000] - Trace)
 X23 Y50.149
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +50.15, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +49.26, down to Z13.5 - Trace)
+(Lug +Y, line y +49.26, down to Z8 [F2270 S9000] - Trace)
 X23 Y49.257
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +49.26, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +48.37, down to Z13.5 - Trace)
+(Lug +Y, line y +48.37, down to Z8 [F2270 S9000] - Trace)
 X23 Y48.366
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +48.37, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug +Y, line y +47.48, down to Z13.5 - Trace)
+(Lug +Y, line y +47.48, down to Z8 [F2270 S9000] - Trace)
 X23 Y47.475
 Z34
-G1 Z13.5 F330
-X-23 F2400
-G0 Z37
-
-(Lug +Y, line y +47.48, down to Z8 - Trace)
-X23
-Z34
 G1 Z8 F330
-X-23 F2400
+X-23 F2270
 G0 Z37
 
-(Lug -Y, line y -62.62, down to Z13.5 - Trace)
+(Lug -Y, line y -62.62, down to Z8 [F2270 S9000] - Trace)
 Y-62.625
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -62.62, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -61.73, down to Z13.5 - Trace)
+(Lug -Y, line y -61.73, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-61.734
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -61.73, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -60.84, down to Z13.5 - Trace)
+(Lug -Y, line y -60.84, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-60.843
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -60.84, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -59.95, down to Z13.5 - Trace)
+(Lug -Y, line y -59.95, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-59.952
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -59.95, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -59.06, down to Z13.5 - Trace)
+(Lug -Y, line y -59.06, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-59.06
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -59.06, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -58.17, down to Z13.5 - Trace)
+(Lug -Y, line y -58.17, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-58.169
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -58.17, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -57.28, down to Z13.5 - Trace)
+(Lug -Y, line y -57.28, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-57.278
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -57.28, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -56.39, down to Z13.5 - Trace)
+(Lug -Y, line y -56.39, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-56.387
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -56.39, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -55.50, down to Z13.5 - Trace)
+(Lug -Y, line y -55.50, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-55.496
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -55.50, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -54.60, down to Z13.5 - Trace)
+(Lug -Y, line y -54.60, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-54.604
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -54.60, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -53.71, down to Z13.5 - Trace)
+(Lug -Y, line y -53.71, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-53.713
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -53.71, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -52.82, down to Z13.5 - Trace)
+(Lug -Y, line y -52.82, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-52.822
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -52.82, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -51.93, down to Z13.5 - Trace)
+(Lug -Y, line y -51.93, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-51.931
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -51.93, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -51.04, down to Z13.5 - Trace)
+(Lug -Y, line y -51.04, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-51.04
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -51.04, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -50.15, down to Z13.5 - Trace)
+(Lug -Y, line y -50.15, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-50.149
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -50.15, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -49.26, down to Z13.5 - Trace)
+(Lug -Y, line y -49.26, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-49.257
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -49.26, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -48.37, down to Z13.5 - Trace)
+(Lug -Y, line y -48.37, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-48.366
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -48.37, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Lug -Y, line y -47.48, down to Z13.5 - Trace)
+(Lug -Y, line y -47.48, down to Z8 [F2270 S9000] - Trace)
 X-23 Y-47.475
 Z34
-G1 Z13.5 F330
-X23 F2400
-G0 Z37
-
-(Lug -Y, line y -47.48, down to Z8 - Trace)
-X-23
-Z34
 G1 Z8 F330
-X23 F2400
+X23 F2270
 G0 Z37
 
-(Side +X, line x +18.34, down to Z13.75 - Trace)
+(Side +X, line x +18.34, down to Z8.5 [F2580 S9000] - Trace)
 X18.335 Y-67
 Z34
-G1 Z13.75 F330
-Y67 F2400
-G0 Z37
-
-(Side +X, line x +18.34, down to Z8.5 - Trace)
-Y-67
-Z34
 G1 Z8.5 F330
-Y67 F2400
+Y67 F2580
 G0 Z37
 
-(Side +X, line x +17.50, down to Z13.75 - Trace)
+(Side +X, line x +17.50, down to Z8.5 [F2580 S9000] - Trace)
 X17.495 Y-67
 Z34
-G1 Z13.75 F330
-Y67 F2400
-G0 Z37
-
-(Side +X, line x +17.50, down to Z8.5 - Trace)
-Y-67
-Z34
 G1 Z8.5 F330
-Y67 F2400
+Y67 F2580
 G0 Z37
 
-(Side +X, line x +16.66, down to Z13.75 - Trace)
+(Side +X, line x +16.66, down to Z8.5 [F2580 S9000] - Trace)
 X16.655 Y-67
 Z34
-G1 Z13.75 F330
-Y67 F2400
-G0 Z37
-
-(Side +X, line x +16.66, down to Z8.5 - Trace)
-Y-67
-Z34
 G1 Z8.5 F330
-Y67 F2400
+Y67 F2580
 G0 Z37
 
-(Side +X, line x +15.81, down to Z13.75 - Trace)
+(Side +X, line x +15.81, down to Z8.5 [F2580 S9000] - Trace)
 X15.815 Y-67
 Z34
-G1 Z13.75 F330
-Y67 F2400
-G0 Z37
-
-(Side +X, line x +15.81, down to Z8.5 - Trace)
-Y-67
-Z34
 G1 Z8.5 F330
-Y67 F2400
+Y67 F2580
 G0 Z37
 
-(Side +X, line x +14.97, down to Z13.75 - Trace)
+(Side +X, line x +14.97, down to Z8.5 [F2580 S9000] - Trace)
 X14.975 Y-67
 Z34
-G1 Z13.75 F330
-Y67 F2400
-G0 Z37
-
-(Side +X, line x +14.97, down to Z8.5 - Trace)
-Y-67
-Z34
 G1 Z8.5 F330
-Y67 F2400
+Y67 F2580
 G0 Z37
 
-(Side -X, line x -18.34, down to Z13.75 - Trace)
+(Side -X, line x -18.34, down to Z8.5 [F2580 S9000] - Trace)
 X-18.335
 Z34
-G1 Z13.75 F330
-Y-67 F2400
-G0 Z37
-
-(Side -X, line x -18.34, down to Z8.5 - Trace)
-Y67
-Z34
 G1 Z8.5 F330
-Y-67 F2400
+Y-67 F2580
 G0 Z37
 
-(Side -X, line x -17.50, down to Z13.75 - Trace)
+(Side -X, line x -17.50, down to Z8.5 [F2580 S9000] - Trace)
 X-17.495 Y67
 Z34
-G1 Z13.75 F330
-Y-67 F2400
-G0 Z37
-
-(Side -X, line x -17.50, down to Z8.5 - Trace)
-Y67
-Z34
 G1 Z8.5 F330
-Y-67 F2400
+Y-67 F2580
 G0 Z37
 
-(Side -X, line x -16.66, down to Z13.75 - Trace)
+(Side -X, line x -16.66, down to Z8.5 [F2580 S9000] - Trace)
 X-16.655 Y67
 Z34
-G1 Z13.75 F330
-Y-67 F2400
-G0 Z37
-
-(Side -X, line x -16.66, down to Z8.5 - Trace)
-Y67
-Z34
 G1 Z8.5 F330
-Y-67 F2400
+Y-67 F2580
 G0 Z37
 
-(Side -X, line x -15.81, down to Z13.75 - Trace)
+(Side -X, line x -15.81, down to Z8.5 [F2580 S9000] - Trace)
 X-15.815 Y67
 Z34
-G1 Z13.75 F330
-Y-67 F2400
-G0 Z37
-
-(Side -X, line x -15.81, down to Z8.5 - Trace)
-Y67
-Z34
 G1 Z8.5 F330
-Y-67 F2400
+Y-67 F2580
 G0 Z37
 
-(Side -X, line x -14.97, down to Z13.75 - Trace)
+(Side -X, line x -14.97, down to Z8.5 [F2580 S9000] - Trace)
 X-14.975 Y67
 Z34
-G1 Z13.75 F330
-Y-67 F2400
-G0 Z37
-
-(Side -X, line x -14.97, down to Z8.5 - Trace)
-Y67
-Z34
 G1 Z8.5 F330
-Y-67 F2400
+Y-67 F2580
 G0 Z37
 
 (Rough the thumb dish - Adaptive)
+S24000 M3
+G4 P3
 X-1.138 Y-47.797
 Z21
 G1 Z18 F3000
@@ -6885,6 +6381,7 @@ M9
 (MSG,Blow the chips out of the two slots and their end reliefs [spindle and coolant are off], then press Cycle Start)
 M0
 S24000 M3
+G4 P3
 M8
 G4 P4
 (END CHIP PAUSE)
@@ -17967,6 +17464,7 @@ M5
 M9
 T11 M6
 S24000 M3
+G4 P3
 M8
 G0 Z37
 X-12 Y-31.096
@@ -23623,6 +23121,7 @@ M5
 M9
 T1 M6
 S24000 M3
+G4 P3
 M8
 G0 Z37
 X6.824 Y32.67

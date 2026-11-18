@@ -8,9 +8,12 @@ op 1 follows it in the same clamping and doesn't probe again (G54 stays).
 """
 import json
 
+# the spindle as measured with the VFD at F004 = 150 (op1a v4-v7, 2026-11-18): full torque to 9000 rpm, the power
+# falling as (9000 / rpm)^0.76 above; 2600 W x 0.43 = 1118 W at 9000; never-exceed 950 W at 9k, about 765 at 12k,
+# 450 at 24k; caution 850 / 684 / 403 (rCAD PR 154)
 M = {"name": "DMC2", "model": "DMC2", "travel": [343, 234, 150], "max_feed": 3000, "rapid_z": 3000, "tool_changer": False, "spin_up": 4,
-     "spindle_power": 1500, "spindle_efficiency": 0.43, "spindle_rated_rpm": 24000,
-     "spindle_never_exceed": 0.85, "spindle_caution": 0.775}
+     "spindle_power": 2600, "spindle_efficiency": 0.43, "spindle_rated_rpm": 9000, "spindle_above_rated": 0.76,
+     "spindle_never_exceed": 0.85, "spindle_caution": 0.76}
 JAW_T, JAW_H, JAW_L = 12.7, 4.7, 95.5
 FIXED_R, TABLE_X, LEDGE_Z = 25.5, 47.8, 23.195
 BAR, BAR_L = 32.0, 120.7   # measured: 32 x 32, not 1"
@@ -73,27 +76,31 @@ S += [op(1, "probe", "Probe stock top", tool=99, probing={"cycle": "z", "depth":
 for sid, pid, what, w, d, f, rpm, xc, depth, seam_y in CAL:
     S.append(op(1, "trace", f"{pid} {what}: {w:g} x {d:g} F{f} S{rpm}", tool=24, sketches=[sid], side="both", top=BAR, depth=depth, stepdown=depth,
                 rpm=rpm, feed=f, seam=[0, seam_y]))
+# the 12k and 9k ladders that ran after it (op1a v5 passes 1-7, v6 passes 1-4): -X side, 12 deep at Z20
+SP_ = json.load(open("straight_passes.json"))
+for k, (sid, x) in enumerate(SP_["ladders"]):
+    S.append(op(1, "trace", f"Ladder {k + 1} (ran): x {x:+.3f}, 12 deep", tool=24, sketches=[sid], side="both", top=BAR, depth=12.0, stepdown=12.0, seam=[x, 1000.0]))
 S += out(1, "op1a-calibrate")
 
 # ---- op 1: the gauge's top side (studio 3: gauge 3 up on the carrier, end lugs with bores), no probing ----
 S += [setup("Op 1 top", 3, follows="Op 1a calibration")]
 S += [tool(2, 11)]   # the tool table is the document's: T1 and T24 are there from op 1a
 # straight passes (passes.py): step over <= 1 mm, bulk <= ~430 W by the model, each climbing (material on the left)
+# the bulk at S9000 (the spindle's strongest speed with the VFD at F004 = 150): straight passes, step over <= 1 mm,
+# about 620 W by the model (caution 650, never-exceed 760 at 9k); each climbs (material on the left)
 SP = json.load(open("straight_passes.json"))
-for sid, x, top_, dep, w, seam, label in SP["band"]:
-    fb = 2100 if dep > 1 else 2400   # F2100: the sim's grid reads the 0.85 / 0.73 strips about 0.1 wider; this keeps them <= ~430 W
-    S.append(op(2, "trace", f"{label} ({w:.2f} x {dep:g}, F{fb})", tool=24, sketches=[sid], side="both", top=top_, depth=dep, stepdown=dep, seam=[x, seam], feed=fb))
+for sid, x, top_, dep, w, seam, label in SP["band9k"]:
+    fb = 1860 if dep > 10 else 3000
+    S.append(op(2, "trace", f"{label} ({w:.2f} x {dep:g}, F{fb} S9000)", tool=24, sketches=[sid], side="both", top=top_, depth=dep, stepdown=dep, seam=[x, seam], rpm=9000, feed=fb))
 S += [op(2, "face", "Finish the gauge's top: face z 19.2 to 19, one 0.2 level", tool=24, top=19.2, stepdown=0.2, stepover=0.4)]
-# the end lugs down to 8 thick: lines across X from each free end in, two 5.5 levels each (+Y lug runs -X, -Y lug +X: climb)
+# the end lugs down to 8 thick: lines across X from each free end in, one 11 deep level (+Y lug runs -X, -Y lug +X: climb)
 for sid, e, y in SP["lug"]:
-    for d in (5.5, 11.0):
-        S.append(op(2, "trace", f"Lug {'+' if e > 0 else '-'}Y, line y {y:+.2f}, down to Z{19 - d:g}", tool=24, sketches=[sid], side="both", top=19.0, depth=d, stepdown=d,
-                    seam=[1000.0 * e, y]))
-# the side strips beside the gauge down to Z8.5: five 0.84 strips a side from the bar's edge in, two levels
+    S.append(op(2, "trace", f"Lug {'+' if e > 0 else '-'}Y, line y {y:+.2f}, down to Z8 (F2270 S9000)", tool=24, sketches=[sid], side="both", top=19.0, depth=11.0, stepdown=11.0,
+                seam=[1000.0 * e, y], rpm=9000, feed=2270))
+# the side strips beside the gauge down to Z8.5: five 0.84 strips a side from the bar's edge in, one 10.5 deep level
 for sid, sgn, x, w in SP["side"]:
-    for d in (5.25, 10.5):
-        S.append(op(2, "trace", f"Side {'+' if sgn > 0 else '-'}X, line x {x:+.2f}, down to Z{19 - d:g}", tool=24, sketches=[sid], side="both", top=19.0, depth=d, stepdown=d,
-                    seam=[x, -1000.0 * sgn]))
+    S.append(op(2, "trace", f"Side {'+' if sgn > 0 else '-'}X, line x {x:+.2f}, down to Z8.5 (F2580 S9000)", tool=24, sketches=[sid], side="both", top=19.0, depth=10.5, stepdown=10.5,
+                seam=[x, -1000.0 * sgn], rpm=9000, feed=2580))
 S += [
     op(2, "adaptive", "Rough the thumb dish", tool=24, top=19.0, bottom=15.3, stepdown=1.0, stepover=0.1, leave=0.2, leave_floor=0.2, rest=True),
     op(2, "trace", "Rough the top slots and their end reliefs, 0.2 left on the walls (1 mm levels, F1000: the first lap is a full-width cut; floors to depth)", tool=24, sketches=[3], side="inside", top=19.0, depth=6.0, stepdown=1.0, leave=0.2, feed=1000, plunge_feed=250),

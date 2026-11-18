@@ -203,48 +203,46 @@ and wall W.
 
     python3 analyse.py op1a-calibrate-v2.nc.cutlog.json op1a-calibrate-v2.nc.air.cutlog.json predicted.json wall_watts.json
 
-## Op 1: the gauge's top side (`op1-top.nc`, about 50 min plus one chip pause)
+## Op 1: the gauge's top side (`op1-top.nc`, about 40 min plus one chip pause) — FOR REVIEW
 
-Re-planned for the **32 × 32 bar** and the spindle pull-out model (645 W stall at 24k):
-- every bulk cut is a **straight pass at ≤ 1 mm stepover**;
-- **peak 432 W** by rCAD's sim; nothing over 450.
+Re-planned 2026-11-18 for the spindle as measured with the VFD at **F004 = 150**: full torque up to 9000 rpm (9k
+carried 850-1049 W by rCAD's model steady in op1a v7), weak above (24k: never over about 450 W). The bulk is now
+**straight passes at S9000**, about 620 W each (caution 850 W, never-exceed 950 W at 9k); the finishing, the ball
+and the chamfer stay at 24k as before. Peak **778 W** (the first band strip: it also takes the 0.8 layer under the
+already-cut -X side). Every S change is followed by 3 s in air (G4 P3): the bog guard learns that speed's no-load
+speed there.
 
-Run it straight after op1a v2, **without unclamping**:
-- It doesn't probe: G54 stays from op 1a.
-- Its stock model is what op1a v2 leaves: z 32 in the middle, the +X side at z 26 in to x +6.4, the −X side at
-  z 20 in to x −9.7.
-- It has `(RCNC REQUIRE_GUARD)`: keep Listening on with the feed hold armed.
+The stock it starts from: the bar as op1a v2-v6 left it (the -X side cut down to Z20 in to x +0.25; a rib
+x 0.25..6.4 up to Z32.09; the +X side at Z26 from x 6.4). v7 then cut x 0.25..3.45 down to Z20 too: the first band
+strips run partly in air, lighter than the simulation shows.
 
-| # | Tool | Operation | Passes | Time | Peak W (spindle %) |
-|---|---|---|---|---|---|
-| 1 | T24 | **Band z32 → 26** (the middle, x +6.4 → −9.7): 0.85 × 6 strips, **F2100**, climb along +Y | 19 | 1:54 | 427 (66%) |
-| 2 | T24 | **Band z26 → 19.2** (x +16 → −9.7): 0.73 × 6.8, **F2100** | 35 | 4:05 | 423 (66%) |
-| 3 | T24 | Band −X side z20 → 19.2: 0.9 × 0.8 | 7 | 0:42 | 63 |
-| 4 | T24 | **Finish the gauge's top**: face z19.2 → 19, one 0.2 level | 1 | 0:54 | 47 |
-| 5 | T24 | **Lugs** z19 → 8: lines across X, 0.89 strips from each free end in, two 5.5 levels each; last line 0.3 off the end face | 72 | 7:12 | 432 (67%) |
-| 6 | T24 | **Side strips** beside the gauge z19 → 8.5: five 0.84 strips a side from the bar's edge in, two 5.25 levels | 20 | 2:50 | 413 (64%) |
-| 7 | T24 | Rough the thumb dish (adaptive, 0.64 stepover, 1 mm levels) | 1 | 7:35 | 299 |
-| 8 | T24 | Rough the slots and reliefs: traced inside, 1 mm levels, F1000, 0.2 left on the walls | 1 | 0:46 | 242 |
-| — | | **CHIP PAUSE**: spindle and coolant stop. Blow the chips out of the two slots and their reliefs, then Cycle Start. | | | |
-| 9 | T24 | Rough the walls z8.5 → **5.5** beside the jaws (adaptive, 0.64 stepover, 1.5 levels, 0.3 left) | 1 | 7:14 | 258 |
-| 10 | T24 | **Finish the slot walls and relief stop walls**: one full-depth 6 mm pass at **F1200** (the relief corners carry more) | 1 | 0:15 | 321 |
-| 11 | T24 | **Finish** the walls and end faces z19 → 8, one full-height pass (seam mid −X side) | 1 | 0:47 | 254 |
-| 12 | T24 | Finish the walls z8 → **5.5** (lugs' outsides too), F1200 | 1 | 0:43 | 225 |
-| 13 | T24 | Two Ø8 bores through the lugs at **y ±53.5** (op 2 finds them), to Z−0.5 | 1 | 0:28 | 190 |
-| 14 | T11 | Finish the thumb dish: scallop, **0.2 stepover (0.033 D)** | 1 | 8:55 | 5 |
-| 15 | T1 | Engrave the numbers 0.3 deep | 1 | 0:28 | |
-| 16 | T1 | Edge break 0.3 on the two bore mouths | 1 | 0:08 | |
-| 17 | T1 | Edge break 0.3 on every edge of the gauge's top: outline, slots, reliefs, dish rim | 1 | 0:16 | |
+**Before:** F004 = 150. rcnc on guard-slip; Settings -> Listening **1400 rpm / 7%**. Don't unclamp: G54 from v2
+(home, check machine X120.472 Y387.240).
 
-**Loads:**
-- The band passes are F2100, not F2400. rCAD's sim grid (0.134 cells) reads the 0.85 / 0.73 strips about 0.1
-  wider; at F2400 the sim read 472 W. The plan model (true width) gives 431 W at F2400 and about 400 at F2100.
-- Each pass runs y −67 → +67: plunge and exit are in air past the sawn ends.
-- Every straight pass climbs, with the material on the tool's left.
-- The bog guard is the backstop on all of it.
+| Step | Passes | Time | Peak W (model) |
+|---|---|---|---|
+| Band set 1: x 0.25..6.4, z32.1->19.2, 0.88 x 12.9 F1860 S9000 | 7 | 0:49 | 778 |
+| Band set 2: x 6.4..16, z26->19.2, 0.96 x 6.8 F3000 S9000 | 10 | 1:00 | 557 |
+| Band set 3: the -X skin z20->19.2, 0.96 x 0.8 F3000 S9000 | 17 | 1:42 | 66 |
+| Finish the gauge's top: face z 19.2 to 19, one 0.2 level | 1 | 0:54 | 228 |
+| Lugs z19->8: 0.89 x 11 F2270 S9000, 36 lines | 36 | 4:12 | 649 |
+| Side strips z19->8.5: 0.84 x 10.5 F2580 S9000, 10 lines | 10 | 1:20 | 683 |
+| Rough the thumb dish | 1 | 7:35 | 299 |
+| Rough the top slots and their end reliefs, 0.2 left on the walls | 1 | 0:46 | 242 |
+| Rough the walls Z8.5 to Z5.5 beside the jaws | 1 | 7:14 | 258 |
+| Finish the slot walls and the relief stop walls, one full-depth 6 mm pass round their outl | 1 | 0:15 | 321 |
+| Finish the walls and end faces Z19 to Z8, one full-height pass | 1 | 0:47 | 254 |
+| Finish the walls Z8 to Z5.5 | 1 | 0:43 | 225 |
+| Two Ø8 bores through the lugs | 1 | 0:28 | 190 |
+| Finish the thumb dish | 1 | 8:55 | 5 |
+| Engrave the top numbers 0.3 deep | 1 | 0:28 | 0 |
+| Edge break 0.3 on the two bore mouths in the lugs | 1 | 0:08 | 0 |
+| Edge break 0.3 on every edge of the gauge's top: outline | 1 | 0:16 | 0 |
 
-**Chips:** chip index at most 0.21 on the straight passes. The slot rough is 0.71, so the pause stays after it.
-Bores 0.50.
+- **CHIP PAUSE** after the slot rough (chip index 0.71), as before.
+- rCAD simulation: ok, no problems. The "unfinished" 792 mm² is the carrier's top beside the gauge, as before.
+- rcnc simulator: runs to the end in 2189 s (36:29): T24, the chip pause, T11, T1; S9000 / S24000 changes each
+  with a 3 s dwell.
 
 **Jaw clearance:**
 - The jaws grip the bar's bottom 4.7 (4.13 in the CAD), so nothing in op 1 goes below **Z5.5** within

@@ -95,3 +95,20 @@ if __name__ == "__main__":
     show("op 2 carrier", wc, 2.8)
     show("op 2 lug (5 deep real)", LUG_W, 5.5)
     print([y for e, y in LUG])
+
+# ---- op 1 re-planned for S9000 (2026-11-18, the VFD at F004 = 150): the bar after op1a v2-v6 (and maybe v7) ----
+# above Z20 the bar's -X side is gone to x +0.25; between Z20 and Z26 solid from x +0.25 to +16; above Z26 a rib
+# x 0.25..6.4 to Z32.09. Band to Z19.2 in three sets, then the face finish; worst case without v7 (more stock).
+OP1_9K = []   # (x, top, depth, w, seam_y, label)
+# set 1: x 0.25 -> 6.4, the rib and the layer under it, 12.9 deep, material on the +X side (runs -Y)
+st, w1 = strips(0.25, 6.4, 0.9)
+for lo, hi in st:
+    OP1_9K.append((y_line(lo, hi, False), 32.1, 12.9, w1, 1000.0, f"Band x {lo:+.2f}..{hi:+.2f}, z32.1-19.2"))
+# set 2: x 6.4 -> 16, z26 -> 19.2, material on the +X side
+st, w2b = strips(6.4, 16.0, 1.0)
+for lo, hi in st:
+    OP1_9K.append((y_line(lo, hi, False), 26.0, 6.8, w2b, 1000.0, f"Band x {lo:+.2f}..{hi:+.2f}, z26-19.2"))
+# set 3: the -X side's last 0.8 (z20 -> 19.2), from x 0.25 out to -16, material on the -X side (runs +Y)
+st, w3b = strips(0.25, -16.0, 1.0)
+for lo, hi in st:
+    OP1_9K.append((y_line(lo, hi, True), 20.0, 0.8, w3b, -1000.0, f"Band x {lo:+.2f}..{hi:+.2f}, z20-19.2"))
