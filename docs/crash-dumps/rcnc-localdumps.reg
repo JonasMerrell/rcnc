@@ -1,0 +1,8 @@
+Windows Registry Editor Version 5.00
+
+; Keep a crash dump of cnc-controller.exe in C:\rcnc-dumps (the newest 5), so a crash can be looked into.
+; DumpType 1 = minidump (stacks, the loaded modules: a few MB). Double-click to import, as an administrator.
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\cnc-controller.exe]
+"DumpFolder"="C:\\rcnc-dumps"
+"DumpType"=dword:00000001
+"DumpCount"=dword:00000005

@@ -135,11 +135,8 @@ impl App {
                         ui.add_space(tw + ui.spacing().item_spacing.x);
                         let photo = if t.image.is_empty() { format!("Photo: tools/T{n}.png if there is one") } else { format!("Photo: {}", t.image) };
                         ui.label(RichText::new(photo).size(12.0).color(MUTED));
-                        if ui.small_button("Pick…").clicked() {
-                            if let Some(path) = rfd::FileDialog::new().add_filter("Image", &["png", "jpg", "jpeg"]).pick_file() {
-                                t.image = path.display().to_string();
-                                changed = true;
-                            }
+                        if ui.add_enabled(self.can_open_dialogs(), egui::Button::new("Pick…").small()).clicked() {
+                            self.pick(super::Picking::ToolPhoto(*n));
                         }
                         if !t.image.is_empty() && ui.small_button("Clear").clicked() {
                             t.image.clear();
@@ -651,13 +648,11 @@ impl App {
         }
     }
 
-    fn import_profile(&mut self, current: &MachineConfig) {
-        if !self.can_open_dialogs() {
-            return;
-        }
-        let Some(path) = rfd::FileDialog::new().add_filter("Mach3 profile", &["xml"]).pick_file() else {
-            return;
-        };
+    fn import_profile(&mut self, _current: &MachineConfig) {
+        self.pick(super::Picking::Profile);
+    }
+
+    pub(super) fn import_profile_from(&mut self, path: &std::path::Path, current: &MachineConfig) {
         let result = std::fs::read(&path)
             .map_err(|e| e.to_string())
             .and_then(|b| mach3::import(&String::from_utf8_lossy(&b), current));
