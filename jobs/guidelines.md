@@ -145,6 +145,21 @@ The planning rules that follow:
   - Find stock touches the top and both sides at DEPTH below the top. DEPTH must be within what the stylus
     can reach: 10 mm, not 20.
   - `JAWX=-1 JAWZ=` takes X from the fixed jaw, but only when the stock is shorter than the jaws.
+- **Op 2 starts with Find stock, then the precise feature probe (Jonas, 2026-11-18).** After the flip the
+  op 1 work offset no longer fits (the gauge sat 4.5 mm over in X and 5.8 mm in Y), and Find bores alone came
+  down on the top beside the bore. So: `FIND_STOCK ... KEEPZ=1` for a coarse X/Y, then `FIND_BORES` (or the
+  notch probe) for the exact one. The header comment tells Jonas to jog the probe over the middle of the part;
+  Find stock finds the sides only if it starts within about 8 mm of centre.
+  - **The Find stock SIZE is what op 1 really left at the height the probe touches**, not the nominal bar:
+    the gauge's bar measured 119.04 long there against 120.45 in the job (one sawn end was 1.25 mm out over the
+    height) and Find stock refused twice. rCAD (PR 156) now takes the size from op 1's simulated stock; sawn
+    ends still are not square, so ask Jonas for a measurement at that height or give TOL 1.5.
+  - **Rotation:** Find bores reports the part's turn but rcnc so far only shifts X/Y. The gauge sat -0.094 deg
+    (about 0.16 mm per 100 mm, probably the vise's squareness to Y), which put about 0.07 mm of step at the
+    ends of the walls. Rotation compensation after Find bores is being added to rcnc; until it is on the mill
+    PC, expect that error on anything op 2 cuts that must meet op 1.
+  - The probe reads bores about 0.05 mm large (8.045 / 8.055 for 8.000): uncalibrated trigger travel, not the
+    bore. Don't use probed diameters as measurements yet.
 - **Op 2: locate from a feature op 1 cut, before roughing.**
   - **(Jonas)** Prefer a small **notch op 1 cuts into the carrier** (stock op 2 removes) over bores or other
     features in the finished part.
@@ -165,6 +180,19 @@ The planning rules that follow:
 
 - Use **adaptive** (constant engagement) for pockets, around plinths and at corners. Don't let a contour
   plough into corners: that bogged the spindle.
+- **Climb only, in laps all the way round the part (Jonas, 2026-11-18).** Adaptive clearing and contours cut
+  climb, never conventional, and outside roughing goes as full laps round the part stepping inward (contour
+  offset loops, or adaptive that follows the outline), not as separate straight strips per side built from
+  trace ops on sketch lines (that is what the gauge's jobs did).
+  - With M3 (clockwise) climb means the material is on the RIGHT of the direction of travel: clockwise round an
+    outside profile, counter-clockwise round the inside of a pocket. rCAD's adaptive had this backwards until
+    2026-11-18 (branch climb-loops): the gauge's adaptive roughing all ran conventional. rCAD now has a test
+    that checks the side of the material for contour, adaptive and pocket; check the direction in the render
+    anyway.
+  - **Corners:** roll round outside corners on an arc (no stop and turn). Where a lap would take more than the
+    load check allows (square stock corners over a rounded part corner, inside corners), add corner-clearing
+    laps or relief passes so the engagement stays bounded; never a full-width bite. Check the worst-load
+    location after any change of direction or corner handling.
 - Leave **0.3 mm** on walls and **0.2 mm** on floors, more if a re-locate follows (see above).
 - Roughing peak spindle power: **under the caution at its speed** (F004 = 150: 850 W at 9k, 684 at 12k, 403 at 24k),
   never over the never-exceed. Read it from `loads[].power_w` / `power_rating`.
@@ -234,6 +262,16 @@ The planning rules that follow:
   the finer ball stepover.
 - **Vertical edges:** give outside vertical corners (and slot mouths at an end face) a small radius or chamfer in the CAD so the wall contour breaks them; a chamfer mill can't reach a vertical edge (stick-out gauge, 2026-11-17).
 - **Measure the stock and confirm it with Jonas before any CAM.** Nominal sizes are not measurements: the stick-out gauge was planned for a "1x1" bar, and the bar was 32 × 32. **(Jonas)**
+- **No file dialogs while a program runs or is paused (2026-11-17).** rcnc crashed 6 minutes into the ball
+  finish of the gauge's op 1 with a Windows file dialog open: a shell plug-in (OneDrive's) inside the dialog
+  took the whole program down, and the run's cut log and recording were lost because they were written only at
+  the end. Fix: rcnc PR 17 (dialogs in a helper process, cut log saved every 10 s); OneDrive is being removed
+  from the mill PC. rcnc lives in `C:\src\rcnc` there, not in OneDrive.
+- **After a crash or an rcnc restart:** home first, then check G54 on screen against the logged value before
+  judging it wrong, and prove it over a known feature (MDI to a bore centre) before cutting. Restart from the
+  tool change of the tool that was cutting; re-cutting a finished surface at the same depth is harmless.
+- **A tool being "well above the part" does not show its section finished:** 3D finishing lifts to the
+  clearance height after every pass. Look at the surface.
 - **Keep this file current:** when a cut bogs, chatters, packs chips or leaves a mark, add the lesson here.
 
 ### Travel between cuts **(Jonas)**
@@ -244,8 +282,9 @@ The planning rules that follow:
   cuts only as high as the stock still there needs (+1 mm), stays down at depth through cleared space or past
   the stock's end, and rapids down to 1 mm over the stock before an entry, feeding only the rest. Tool changes
   and speed changes keep the full retract.
-- Cut roughing strips **both ways** (every other one conventional is fine for roughing) so each links to the
-  next at depth off the stock's end. Finishing stays climb only.
+- **No two-way strips (Jonas, 2026-11-18).** The both-ways strips tried on op 2 of the stick-out gauge are
+  withdrawn: every cutting pass is climb (see Roughing). Link full laps to the next lap with a short tangent
+  step-in at depth instead.
 - Report the air time per operation in the review (rapids and feed moves not in material) and check the
   simulation shows no rapid into stock (`problems`).
 - **Finish one region before moving to the next (Jonas, 2026-11-18).** Within an operation, group the cuts by
