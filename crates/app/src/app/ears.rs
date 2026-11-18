@@ -224,6 +224,9 @@ impl Ears {
             self.adaptive_sent = want;
         }
         if let Some((_, log)) = &mut self.log {
+            if s.rotation != 0.0 {
+                log.rotation_deg = Some(s.rotation);
+            }
             for (i, f) in frames.iter().enumerate() {
                 log.add_at(now - (n - 1 - i) as f64 * step, f);
                 if let Some(m) = log.timeline.last_mut() {

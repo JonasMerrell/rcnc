@@ -735,6 +735,10 @@ impl App {
             }
             ui.add_space(12.0);
             pill(ui, &format!("G{}", 54 + s.coord_system));
+            if s.rotation != 0.0 {
+                // Find bores measured the part turned: the program's X/Y turn with it for this run
+                pill(ui, &format!("Rotated {:+.3}°", s.rotation));
+            }
             // During a change the interpreter already has the new tool; show what's in the spindle.
             let tool = s.tool_change.as_ref().map_or(s.tool, |t| t.from);
             pill(ui, &format!("T{tool}"));

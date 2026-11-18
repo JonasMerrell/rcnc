@@ -18,6 +18,10 @@ pub struct CutLog {
     /// next run with; rcnc never changes the speed itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggestions: Vec<RpmSuggestion>,
+    /// The work rotation rcnc applied in the run (degrees, Find bores compensating the part's turn): the
+    /// moments' positions are machine positions of the turned program.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_deg: Option<f64>,
 }
 
 /// An operation that chattered, and the speed to try instead.
@@ -109,7 +113,7 @@ pub struct Line {
 
 impl CutLog {
     pub fn new(program: &str, input: &str) -> CutLog {
-        CutLog { program: program.into(), input: input.into(), lines: BTreeMap::new(), timeline: vec![], suggestions: vec![] }
+        CutLog { program: program.into(), input: input.into(), lines: BTreeMap::new(), timeline: vec![], suggestions: vec![], rotation_deg: None }
     }
 
     /// Add a window heard `t` seconds into the run.

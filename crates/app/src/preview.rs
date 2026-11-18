@@ -108,8 +108,11 @@ impl Toolpath {
                 break;
             }
             // Work coordinates of the offsets in force after this line.
-            let off = interp.program_offset();
-            let work = |p: &Axes| [p[0] - off[0], p[1] - off[1], p[2] - off[2]];
+            let (off, rot) = (interp.program_offset(), interp.rotation());
+            let work = |p: &Axes| {
+                let w = gcode::interp::work_of(&off, rot, p);
+                [w[0], w[1], w[2]]
+            };
             for op in &step.ops {
                 if let Op::Probe { to, .. } = op {
                     interp.probe_result(*to);
