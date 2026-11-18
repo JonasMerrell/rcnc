@@ -1,0 +1,177 @@
+(Op 1 top RESTART from the T1 chamfer mill - made from op1-top.nc 67c1009 after the rcnc crash 2026-11-17)
+(Only for when the T11 ball finish of the thumb dish is complete. Engrave + edge breaks. No probing: uses the stored G54. Home the machine first.)
+(STOCK 32 x 32 x 120.7 - 6061 bar as measured 2026-11-17, after op1a v2-v7 [the ladders]; NOT for a fresh bar)
+(RCNC REQUIRE_GUARD: the bog guard [Settings -> Listening, feed hold on] must be armed: rcnc refuses Cycle Start without it)
+(work zero: part bottom, stock centre [on the vise])
+(carries on from Op 1a calibration: clamp the part it left with its top side up)
+(fixture fixed jaw [centre block, -X]: X-28.7 to -16, Y-47.75 to 47.75, Z0 to 4.7 [work])
+(fixture moving jaw [+X]: X16 to 28.7, Y-47.75 to 47.75, Z0 to 4.7 [work])
+(retracts use G53 G0 Z0 - home the machine first)
+(T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)
+(T11 6 mm 2FL ball [carbide] - D6 ball end mill, 2 flutes, flute length 18, stickout 21)
+(T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill, flute length 18, stickout 22)
+(estimated time 40:13)
+G21 G17 G40 G49 G80 G90 G91.1 G94 G64
+G54
+(RCNC Z_REFERENCE Vise)
+
+(Engrave the top numbers 0.3 deep - Trace)
+G53 G0 Z0
+M5
+M9
+T1 M6
+S24000 M3
+G4 P3
+M8
+G0 Z37
+X6.824 Y32.67
+Z34
+G1 Z18.7 F200
+G3 X6.017 Y33.555 I-0.938 J-0.045 F1850
+G3 X5.148 Y33.493 I-0.331 J-1.491
+G3 X4.598 Y33.131 I0.458 J-1.292
+G1 X4.795 Y32.871
+G2 X5.873 Y33.226 I0.876 J-0.845
+G2 X6.332 Y32.927 I-0.109 J-0.668
+G2 X6.422 Y32.37 I-0.904 J-0.431
+G2 X6.069 Y31.674 I-1.248 J0.194
+G2 X5.29 Y30.911 I-15.667 J15.233
+G3 X4.705 Y29.984 I1.54 J-1.618
+G3 X4.668 Y29.5 I1.412 J-0.354
+G1 X6.971
+Y29.829
+X5.083
+G2 X5.259 Y30.312 I0.839 J-0.032
+G2 X5.993 Y31.11 I4.403 J-3.31
+G3 X6.578 Y31.761 I-2.679 J3.002
+G3 X6.824 Y32.67 I-1.022 J0.764
+G0 Z37
+X8.235 Y31.79
+Z34
+G1 Z18.7 F200
+G3 X7.744 Y30.816 I5.206 J-3.237 F1850
+G1 Y30.585
+X9.556
+Y29.5
+X9.926
+Y30.585
+X10.422
+Y30.891
+X9.926
+Y33.5
+X9.533
+G3 X8.235 Y31.79 I6.68 J-6.418
+G0 Z37
+X8.513 Y31.647
+Z34
+G1 Z18.7 F200
+G2 X9.556 Y33.079 I6.687 J-3.779 F1850
+G1 Y30.891
+X8.131
+G2 X8.513 Y31.647 I5.756 J-2.434
+G0 Z37
+X5.847 Y-32.421
+Z34
+G1 Z18.7 F200
+G3 X4.598 Y-32.869 I-0.18 J-1.464 F1850
+G1 X4.795 Y-33.129
+G2 X5.873 Y-32.774 I0.876 J-0.845
+G2 X6.332 Y-33.073 I-0.109 J-0.668
+G2 X6.422 Y-33.63 I-0.904 J-0.431
+G2 X6.069 Y-34.326 I-1.248 J0.194
+G2 X5.29 Y-35.089 I-15.667 J15.233
+G3 X4.705 Y-36.016 I1.54 J-1.618
+G3 X4.668 Y-36.5 I1.412 J-0.354
+G1 X6.971
+Y-36.171
+X5.083
+G2 X5.259 Y-35.688 I0.839 J-0.032
+G2 X5.993 Y-34.89 I4.403 J-3.31
+G3 X6.578 Y-34.239 I-2.679 J3.002
+G3 X6.824 Y-33.33 I-1.022 J0.764
+G3 X6.017 Y-32.445 I-0.938 J-0.045
+G1 X5.847 Y-32.421
+G0 Z37
+X8.073 Y-33.32
+Z34
+G1 Z18.7 F200
+X8.183 Y-33.608 F1850
+G3 X9.096 Y-33.095 I-0.796 J2.482
+G1 X9.118 Y-33.071
+Y-36.5
+X9.493
+Y-32.5
+X9.227
+G2 X8.073 Y-33.32 I-1.916 J1.476
+G0 Z37
+
+(Edge break 0.3 on the two bore mouths in the lugs [op 2 probes these bores] - Deburr)
+X-2.174 Y-55.568
+Z11.003
+G1 Z6.703 F200
+G2 X-1.096 Y-56.292 Z6.7 I2.171 J2.07 F1850
+G2 X-2.225 Y-55.514 Z6.703 I1.11 J2.819
+G0 Z37
+X-2.174 Y51.432
+Z11.003
+G1 Z6.703 F200
+G2 X-1.096 Y50.708 Z6.7 I2.171 J2.07 F1850
+G2 X-2.225 Y51.486 Z6.703 I1.11 J2.819
+G0 Z37
+
+(Edge break 0.3 on every edge of the gauge's top: outline [op 2 sits it on the 1.9 ledges], slots, reliefs, dish rim - Chamfer)
+X-12.484 Y44.179
+Z21
+G1 Z17.7 F200
+G2 X-11.5 Y45 I0.984 J-0.179 F1850
+G1 X-3.6
+G2 X-2.6 Y44 I0 J-1
+G1 Y28.597
+G2 X-3.302 Y27.005 I-0.799 J-0.599
+G3 X-5.235 Y26.235 I-0.06 J-2.662
+G3 X-6 Y24.351 I1.862 J-1.853
+G1 Y23.649
+G3 X-3.351 Y21 I2.612 J-0.037
+G1 X3.351
+G3 X6 Y23.649 I0.037 J2.612
+G1 Y24.351
+G3 X3.906 Y26.945 I-2.605 J0.04
+G1 X3.302 Y27.005
+G2 X2.6 Y28.594 I0.095 J0.992
+G1 Y44
+G2 X3.6 Y45 I1 J0
+G1 X11.5
+G2 X12.5 Y44 I0 J-1
+G1 Y-44
+G2 X11.5 Y-45 I-1 J0
+G1 X3.6
+G2 X2.6 Y-44 I0 J1
+G1 Y-31.597
+G2 X3.302 Y-30.005 I0.799 J0.599
+G3 X5.235 Y-29.235 I0.06 J2.662
+G3 X6 Y-27.351 I-1.862 J1.853
+G1 Y-26.649
+G3 X3.351 Y-24 I-2.612 J0.037
+G1 X-3.351
+G3 X-6 Y-26.649 I-0.037 J-2.612
+G1 Y-27.351
+G3 X-3.906 Y-29.945 I2.605 J-0.04
+G1 X-3.302 Y-30.005
+G2 X-2.6 Y-31.594 I-0.095 J-0.992
+G1 Y-44
+G2 X-3.6 Y-45 I-1 J0
+G1 X-11.5
+G2 X-12.5 Y-44 I0 J1
+G1 X-12.484 Y44.179
+G0 Z37
+X-2.061 Y6.68
+Z21
+G1 Z17.7 F200
+G3 X-1.556 Y6.815 I2.061 J-6.68 F1850
+G1 X-2.061 Y6.68
+G0 Z37
+
+G53 G0 Z0
+M5
+M9
+M30
