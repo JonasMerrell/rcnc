@@ -16,8 +16,8 @@ s = s.replace(mark, stop + mark, 1)
 # from Z13.5 to its top at Z19 (op 1 cut the sides only down to its Z5.5, and kept the carrier and the lugs at
 # full width), so its sides and sawn ends are touched 3 below the top (Z16), well clear of the jaws (Z4.7).
 probe = "T99 M6\n"
-fs = """(rcnc Find stock: coarse X/Y from the bar's outline left above the jaws [31.9 x 120.45, Z13.5 to Z19], sides and ends touched at Z16; Z stays on the Vise reference. Jog the probe over the middle of the part, a few mm above it)
-(RCNC FIND_STOCK SIZE=31.9,120.45,19 AT=0,0,19 DEPTH=3 TOL=1 KEEPZ=1)
+fs = """(rcnc Find stock: coarse X/Y from the bar's outline left above the jaws [31.9 x 119 as measured by Jonas after op 1, Z13.5 to Z19], sides and ends touched at Z16; Z stays on the Vise reference. Jog the probe over the middle of the part, a few mm above it)
+(RCNC FIND_STOCK SIZE=31.9,119,19 AT=0,0,19 DEPTH=3 TOL=1.5 KEEPZ=1)
 """
 i = s.index(mark)
 j = s.index(probe, i) + len(probe)

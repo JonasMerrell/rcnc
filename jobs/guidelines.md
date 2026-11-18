@@ -124,6 +124,19 @@ The planning rules that follow:
   face breaks the Z rule below. Otherwise add the shim's thickness to the Vise reference.
 - **Fixtures in rCAD:** put the jaws in `create_cam` as `fixtures` boxes so the simulation checks them.
   Give the vise its `on_table` position.
+- **Two-op parts: the whole outside profile in op 1 (Jonas, 2026-11-18).** The stick-out gauge's walls were
+  finished partly in op 1 and partly in op 2; the blend between them was very good but still just felt with a
+  fingernail. Don't split a wall between ops:
+  - Op 1 finishes the part's **entire outside profile, full height**, the walls running on past the part's
+    bottom into the carrier stock below it. Op 2 then only takes the carrier off, faces the bottom and cuts
+    the bottom-side features: no wall seam between ops.
+  - That needs the stock held **below the part's bottom**: a carrier taller than the vise's 4.7 grip plus
+    the 5.0 jaw clearance (e.g. a 16 mm part needs about 16 + 1 overrun + 5 = 22 mm above the parallels), or
+    the part held some other way that leaves the full wall reachable.
+  - The flute must cover the wall plus the overrun: a 16 mm wall + 1 mm with the 19.05 mm flute of T24 is
+    fine, deeper walls need a longer tool or a stepped finish (and then the seam is in op 1, on one setup).
+  - Op 2 grips the finished walls: soft jaws or protected jaws, and the walls are its X/Y reference
+    (probe them or bores op 1 made) — don't re-cut them.
 
 ## Locating each setup
 
@@ -177,6 +190,15 @@ The planning rules that follow:
 - **Deburr every edge.** Use the chamfer mill (deburr or chamfer ops, with a tip offset), or a ~0.2 mm edge
   break with the ball where the chamfer mill can't reach. This includes bore and pocket mouths and the edges
   op 2 creates.
+  - **The chamfer mill only where the face beside the edge falls away at least as steeply as its cone**
+    (45° for a 90° mill): walls, holes, steps. Next to a shallower face (a dish's rim, a gentle slope) the cone
+    and the tip offset cut into that face all along the edge: op 1 of the stick-out gauge (2026-11-18) gouged
+    its thumb dish round the rim this way. Break those edges with the ball. rCAD's chamfer op now leaves such
+    an edge out with a warning ("left out the edge near …"); read the warnings.
+- **No ramp entries on finish contours (Jonas, 2026-11-18).** Enter in space that's already cleared (straight
+  down there, then the arc lead-in at full depth) or from outside the stock; ramp or helix only where the
+  entry really has to go into material, and then rather start off the part's or the stock's edge. Same for
+  lead-outs. Op 2's wall finish ramped down 5.5 mm in ~36 small arcs where the roughing had already cleared.
 
 ### Chips
 
@@ -236,6 +258,13 @@ The planning rules that follow:
 
 ## Checks before handing over
 
+0. **Never hand over a program without the SIM OK stamp.** rCAD's `export_gcode` simulates the exact
+   toolpaths it writes and refuses when the simulation finds any problem; a clean program carries
+   `(SIM OK: 0 problems in rCAD's stock simulation of these toolpaths, hash …)` under its title.
+   `allow_problems` only writes a `<name>.UNSAFE.nc` to look at — never hand that over. After the
+   post-processing scripts (pauses, dwells, Find stock), run `verify_gcode` on the final file: it simulates
+   the file's own moves on the setup and must say `ok`. Hand over only that file, from that run: op2-bottom
+   9080c8d was picked up from a different rCAD run than the one that simulated clean.
 1. `simulate_cam` for every setup reports no problems. Read the following for each op, and quote them in
    RUN.md:
    - time;
