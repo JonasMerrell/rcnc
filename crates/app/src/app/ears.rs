@@ -345,7 +345,14 @@ impl Ears {
                 set.max * 100.0
             ));
         }
-        let what = format!("Feed hold when the spindle bogs: over {:.0}% slow for {:.1} s, or still slowing down after {:.1} s (Settings -> Listening)", self.settings.guard.limit * 100.0, self.settings.guard.time, self.settings.guard.rising_time);
+        let g = self.settings.guard;
+        let what = format!(
+            "Feed hold when the spindle bogs: over {:.0} rpm of slip (or {:.0}%) for {:.1} s, or still slowing down past {:.0} rpm a second into a cut (Settings -> Listening)",
+            g.slip_rpm,
+            g.cap * 100.0,
+            g.time,
+            g.rising_rpm
+        );
         let (gtext, gcolor, why) = match self.arm_state() {
             Ok(true) => ("hold armed", GREEN, "the spindle is heard and its no-load speed learned".to_string()),
             Ok(false) => ("hold ready", TEXT, format!("listening ({:.0} dB now); it arms once it has heard the spindle run a few seconds in air", self.last.as_ref().map(|f| f.loud_db).unwrap_or(f64::NEG_INFINITY))),
@@ -407,12 +414,14 @@ impl Ears {
             "While cutting: when the heard speed is more than the limit under its no-load speed for longer than the time, hold the feed (the spindle stays on; Cycle Start carries on)",
         );
         ui.horizontal(|ui| {
-            let mut pct = g.limit * 100.0;
             ui.label("over");
-            ui.add(egui::DragValue::new(&mut pct).range(2.0..=15.0).speed(0.1).suffix(" % slow"));
+            ui.add(egui::DragValue::new(&mut g.slip_rpm).range(200.0..=4000.0).speed(10.0).suffix(" rpm of slip"));
+            ui.label("or");
+            let mut pct = g.cap * 100.0;
+            ui.add(egui::DragValue::new(&mut pct).range(2.0..=20.0).speed(0.1).suffix(" %"));
             ui.label("for");
             ui.add(egui::DragValue::new(&mut g.time).range(0.1..=2.0).speed(0.01).suffix(" s"));
-            g.limit = pct / 100.0;
+            g.cap = pct / 100.0;
         });
         if g != self.settings.guard {
             self.settings.guard = g;
