@@ -22,7 +22,36 @@ REQUIRE_GUARD) and (RCNC RECORD_AUDIO).
 
 At each change, use **Tap test** in the tool change window (Settings → Listening on).
 
-## Op 1a v6: a 9k mini-ladder with F004 = 150 (`op1a-calibrate-v6.nc`, about 2:00 plus a tool change)
+## Op 1a v7: the 9k ladder on (`op1a-calibrate-v7.nc`, about 1:30 plus a tool change)
+
+v6 (F004 = 150, S9000): 484/589/676/759 W by the model ran flat at 3.2/3.6/4.2/5.0% sag, no holds. v7 goes on at
+9k: three single passes 12 deep (Z32 -> Z20) from the -X wall (x +0.25). All waste above the gauge.
+
+| Pass | Step over | Feed | Model W | N·m | MRR cm³/min | Chip (max) mm | Tool stress MPa | Bend mm | Rib left |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 1 | F2660 | 850 | 0.90 | 32.2 | 0.072 | 397 | 0.028 | 5.15 |
+| 2 | 1.05 | F2910 | 949 | 1.01 | 36.9 | 0.08 | 443 | 0.031 | 4.1 |
+| 3 | 1.15 | F2990 | 1049 | 1.11 | 41.6 | 0.085 | 490 | 0.035 | 2.95 |
+
+- The feed tops out at 3000 mm/min, so passes 2 and 3 widen a little instead (1.05, 1.15).
+- Chips are thick: 0.07-0.085 mm (0.10-0.11 mm a tooth). Fine for carbide in 6061, but it's the top of the range.
+- The tool stays under 600 of its 800 MPa (at most 490).
+- **Three passes, not four:** above Z26 the cuts eat into a rib (x +0.25..+6.4). After pass 3 it's 2.95 mm wide and
+  6 mm tall; a fourth at about 1150 W would leave 1.65 mm, too thin to cut against. To go higher, the next stock
+  is the 4.45 mm of waste beside the gauge (x 11.5-16, Z5.5-Z19, both sides): op 1 takes it anyway.
+
+**Before:**
+- **VFD F004 = 150.**
+- rcnc on **guard-slip** (the hold in rpm). In Settings -> Listening set **"over 1400 rpm of slip or 12 %"**, for
+  0.3 s. The default 7% is only 610 rpm at 9k, and these passes should slip about 500-700 rpm.
+- Don't unclamp. Home, check **G54 X/Y = machine X120.472 Y387.240**.
+
+**If the hold trips: stop the program and note the pass. No Cycle Start retries** (the new hold doesn't trip on
+the start of a cut that settles).
+
+**After:** copy `op1a-calibrate-v7.nc.cutlog.json`, `.wav` and rcnc's `log.txt`. Then set the cap back to 7%.
+
+## Op 1a v6 (RAN 2026-11-18; in old-do-not-use/): a 9k mini-ladder with F004 = 150
 
 v5 (2026-11-18, F004 = 200) ran passes 1-7 at 12k: 484 W 3.8% sag, 590 W 5.2%, 676 W 5.7%, 759 W about 6.9% (held at
 6%), 839 W about 9% (held), no runaway. The VFD is now at **F004 = 150** (no-load at 9k: 108 V, 2.7 A). v6 cuts the

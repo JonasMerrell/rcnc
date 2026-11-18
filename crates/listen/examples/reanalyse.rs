@@ -1,7 +1,7 @@
 //! Re-analyse a run's recording with this build's analysis and bog guard, each window given what the machine
 //! was doing then from the run's own cut log timeline (line, position, speed along the path, programmed rpm):
 //!
-//!     cargo run --release -p cnc-listen --example reanalyse -- run.wav run.cutlog.json > windows.tsv
+//!     cargo run --release -p cnc-listen --example reanalyse -- run.wav run.cutlog.json [--slip 1400 --cap 7] > windows.tsv
 //!
 //! Prints a row per window: t, line, x, y, z, mm/min, rpm, heard droop, sag over the guard's no-load sag,
 //! teeth's beat dB, level dB, chatter Hz, and the guard's hold (1) if it would hold there.
@@ -14,7 +14,15 @@ fn main() {
     let log = CutLog::load(std::path::Path::new(&args[1])).expect("read the cut log");
     let tl = &log.timeline;
     let mut a = Analyzer::new(rate);
-    let mut g = Guard::new(GuardSettings::default());
+    let get = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).map(|v| v.parse::<f64>().unwrap());
+    let mut gs = GuardSettings::default();
+    if let Some(v) = get("--slip") {
+        gs.slip_rpm = v;
+    }
+    if let Some(v) = get("--cap") {
+        gs.cap = v / 100.0;
+    }
+    let mut g = Guard::new(gs);
     let chunk = rate as usize / 10;
     let hop = if rate >= 32_000 { 4096 } else { 2048 } as f64 / rate as f64;
     let mut fed = 0;
