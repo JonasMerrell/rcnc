@@ -20,8 +20,8 @@ M0
 (Probe lug bore A - Probe)
 G53 G0 Z0
 T99 M6
-(rcnc Find stock: coarse X/Y from the bar's outline left above the jaws [31.9 x 120.45, Z13.5 to Z19], sides and ends touched at Z16; Z stays on the Vise reference. Jog the probe over the middle of the part, a few mm above it)
-(RCNC FIND_STOCK SIZE=31.9,120.45,19 AT=0,0,19 DEPTH=3 TOL=1 KEEPZ=1)
+(rcnc Find stock: coarse X/Y from the bar's outline left above the jaws [31.9 x 119 as measured by Jonas after op 1, Z13.5 to Z19], sides and ends touched at Z16; Z stays on the Vise reference. Jog the probe over the middle of the part, a few mm above it)
+(RCNC FIND_STOCK SIZE=31.9,119,19 AT=0,0,19 DEPTH=3 TOL=1.5 KEEPZ=1)
 (rcnc Find bores: the probe finds the locating bores and sets X/Y from them)
 (RCNC FIND_BORES A=0,-53.5 B=0,53.5 D=8 TOP=19 DEPTH=4 TOL=0.1 ROT=0.2)
 
