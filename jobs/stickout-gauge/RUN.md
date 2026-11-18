@@ -1,13 +1,15 @@
 # Stick-out gauge: how to run op 1
 
-The stock is the 1" (25.4) 6061 bar, sawn to **120.7 mm**. It lies along Y in the **right station**:
-- fixed jaw on the left (−X), jaws closed on the bar's 25.4 width;
+The stock is a **32 × 32** 6061 bar (measured; Find stock read 31.90 × 120.45), sawn to **120.7 mm**. It lies
+along Y in the **right station**:
+- fixed jaw on the left (−X), jaws closed on the bar's 32 width;
 - bottom on the vise's built-in ledges, so **Z0 = the Vise reference**;
 - the jaws grip the bottom 4.7 mm;
 - about 12.5 mm of bar hangs past each end of the 95.5 mm jaws, with nothing under it.
 
-**rcnc build:** mill/stickout-gauge 85c58d3 or later. It has the listening additions, (RCNC RECORD_AUDIO),
-the `.air.cutlog.json` naming, and the wait after a spindle speed change.
+**rcnc build:** fix/guard-arm **af90c74** or later: the bog guard that hears the spindle at every speed, no level
+check at Cycle Start (status "hold ready", then "hold armed" once the spindle has run in air), (RCNC
+REQUIRE_GUARD) and (RCNC RECORD_AUDIO).
 
 **Tools** (all carbide; the program headers fill rcnc's tool table):
 
@@ -33,8 +35,11 @@ That leaves the bar exactly as op 1 (`op1-top.nc`) was planned for.
 
 **Before:**
 - **Don't unclamp the bar.** v3 has no Find stock (the bar's -X side is cut down to Z20, so it can't measure the
-  32 width any more): it uses v2's G54. Home the machine, check G54 is still the one v2 set. If the bar has been
-  unclamped, stop and ask for a re-plan.
+  32 width any more): it uses v2's G54. rcnc keeps work offsets in its data folder (state.json) across restarts
+  and rebuilds; they are machine coordinates, good again once the machine is homed.
+- Home the machine, then check **G54 X/Y = machine X120.472 Y387.240** (what v2 run 1's Find stock set,
+  2026-11-18 01:06; Z from the Vise reference). If it isn't, or the bar has been unclamped, stop and ask for a
+  re-plan.
 - rcnc on the build with the listening fixes (fix/guard-arm 5f03e41 or later): it hears the spindle at every
   speed now; status "hold ready", then "hold armed" once the spindle has run in air.
 - T24 stays the same tool (re-measured at the tool change).
