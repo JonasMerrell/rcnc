@@ -289,11 +289,11 @@ impl Ears {
             Some(_) => Ok(()),
         };
         let rpm = self.last.as_ref().map(|f| f.ctx.rpm).unwrap_or(0.0);
-        arm(input, self.settings.guard.on, self.last.as_ref().map(|f| f.loud_db), rpm, rpm > 0.0 && self.guard.air_droop(rpm).is_some())
+        arm(input, self.settings.guard.on, rpm, rpm > 0.0 && self.guard.air_droop(rpm).is_some())
     }
 
-    /// Whether a program that needs the hold may start: a live input and the hold on (the spindle is off
-    /// then; whether it hears the spindle is checked at the program's first move with the spindle on).
+    /// Whether a program that needs the hold may start: listening, with an input open, and the hold on (the
+    /// spindle is off then; whether it hears the spindle is checked at the program's first move with it on).
     pub fn guard_ready(&self) -> Result<(), String> {
         self.arm_state().map(|_| ())
     }
@@ -344,7 +344,7 @@ impl Ears {
         let what = format!("Feed hold when the spindle bogs: over {:.0}% slow for {:.1} s, or still slowing down after {:.1} s (Settings -> Listening)", self.settings.guard.limit * 100.0, self.settings.guard.time, self.settings.guard.rising_time);
         let (gtext, gcolor, why) = match self.arm_state() {
             Ok(true) => ("hold armed", GREEN, "the spindle is heard and its no-load speed learned".to_string()),
-            Ok(false) => ("hold ready", TEXT, "the input is live; it arms once it has heard the spindle run a few seconds in air".to_string()),
+            Ok(false) => ("hold ready", TEXT, format!("listening ({:.0} dB now); it arms once it has heard the spindle run a few seconds in air", self.last.as_ref().map(|f| f.loud_db).unwrap_or(f64::NEG_INFINITY))),
             Err(_) if !self.settings.guard.on => ("hold off", MUTED, "switched off".to_string()),
             Err(why) => ("hold NOT armed", AMBER, why),
         };
@@ -467,22 +467,17 @@ fn samples_per_frame_s(rate: u32) -> f64 {
     (n / 2) as f64 / rate.max(1) as f64
 }
 
-/// Under this the input is dead: unplugged or muted reads digital silence (about -165 dB); a connected
-/// transducer on the DMC2 reads about -97 dB with the spindle off.
-pub const LIVE_INPUT_DB: f64 = -130.0;
-
-/// The hold's state from what it knows: the input (Err why), the hold switched on, the last window's level,
-/// the spindle speed then, and whether the no-load speed is learned there. Ok(true) armed, Ok(false) ready.
-pub fn arm(input: Result<(), String>, on: bool, level_db: Option<f64>, rpm: f64, learned: bool) -> Result<bool, String> {
+/// The hold's state from what it knows: the input (Err why), the hold switched on, the spindle speed and
+/// whether its no-load speed is learned there. Ok(true) armed, Ok(false) ready. The level isn't judged here:
+/// on the DMC2 a connected transducer with the spindle off reads -143 to -172 dB, the same as no signal at
+/// all, so the level can't tell a dead input before the spindle runs; a program that needs the hold is held
+/// at its first move with the spindle on instead, if the hold hasn't heard the spindle by then.
+pub fn arm(input: Result<(), String>, on: bool, rpm: f64, learned: bool) -> Result<bool, String> {
     input?;
     if !on {
         return Err("the feed hold is switched off".into());
     }
-    match level_db {
-        None => Err("nothing has come in from the input yet".into()),
-        Some(db) if db <= LIVE_INPUT_DB => Err(format!("the input is dead ({db:.0} dB: check the transducer and its cable)")),
-        Some(_) => Ok(rpm > 0.0 && learned),
-    }
+    Ok(rpm > 0.0 && learned)
 }
 
 /// Whether to hold the feed before a move: the program needs the hold, the hold is on, the machine is moving
@@ -545,17 +540,14 @@ pub fn records_audio(program: &str) -> bool {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn cycle_start_needs_a_live_input_not_a_running_spindle() {
-        // the gauge programs start with the probe, spindle off: a connected transducer reads about -97 dB
-        assert_eq!(super::arm(Ok(()), true, Some(-97.0), 0.0, false), Ok(false));
-        // unplugged: digital silence
-        assert!(super::arm(Ok(()), true, Some(-165.0), 0.0, false).unwrap_err().contains("dead"));
-        assert!(super::arm(Ok(()), true, None, 0.0, false).is_err());
-        assert!(super::arm(Err("listening is off".into()), true, Some(-60.0), 0.0, false).is_err());
-        assert!(super::arm(Ok(()), false, Some(-60.0), 0.0, false).unwrap_err().contains("switched off"));
+    fn cycle_start_needs_listening_and_the_hold_not_a_running_spindle() {
+        // the gauge programs start with the probe, spindle off (the mill PC read -143 to -172 dB then): ready
+        assert_eq!(super::arm(Ok(()), true, 0.0, false), Ok(false));
+        assert!(super::arm(Err("listening is off".into()), true, 0.0, false).is_err());
+        assert!(super::arm(Ok(()), false, 0.0, false).unwrap_err().contains("switched off"));
         // the spindle heard and its no-load speed learned: armed
-        assert_eq!(super::arm(Ok(()), true, Some(-60.0), 24_000.0, true), Ok(true));
-        assert_eq!(super::arm(Ok(()), true, Some(-60.0), 24_000.0, false), Ok(false));
+        assert_eq!(super::arm(Ok(()), true, 24_000.0, true), Ok(true));
+        assert_eq!(super::arm(Ok(()), true, 24_000.0, false), Ok(false));
     }
 
     #[test]
