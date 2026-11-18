@@ -22,7 +22,33 @@ REQUIRE_GUARD) and (RCNC RECORD_AUDIO).
 
 At each change, use **Tap test** in the tool change window (Settings → Listening on).
 
-## Op 1a v5: the 12k ladder (`op1a-calibrate-v5.nc`, about 3:30 plus a tool change)
+## Op 1a v6: a 9k mini-ladder with F004 = 150 (`op1a-calibrate-v6.nc`, about 2:00 plus a tool change)
+
+v5 (2026-11-18, F004 = 200) ran passes 1-7 at 12k: 484 W 3.8% sag, 590 W 5.2%, 676 W 5.7%, 759 W about 6.9% (held at
+6%), 839 W about 9% (held), no runaway. The VFD is now at **F004 = 150** (no-load at 9k: 108 V, 2.7 A). v6 cuts the
+same model watts as v5's passes 3-6, at **S9000**, to compare: four single passes 12 deep (Z32 -> Z20) from the -X
+wall (x -3.75), 1.0 mm each; the wall ends at x +0.25, a 6.15 mm core left. All waste above the gauge.
+
+| Pass | Step over | Feed | Model W | N·m | MRR cm³/min | Chip (max) mm | Tool stress MPa | Strip x |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 1.0 | F1270 | 484 | 0.51 | 15.2 | 0.034 | 226 | -3.75 .. -2.75 |
+| 2 | 1.0 | F1650 | 589 | 0.63 | 19.8 | 0.045 | 276 | -2.75 .. -1.75 |
+| 3 | 1.0 | F1980 | 676 | 0.72 | 23.8 | 0.053 | 316 | -1.75 .. -0.75 |
+| 4 | 1.0 | F2310 | 759 | 0.80 | 27.7 | 0.062 | 355 | -0.75 .. +0.25 |
+
+- At 9k the same watts are 1.33 x the torque of 12k, so the force and the chip are bigger: chips 0.034-0.062 mm
+  (slightly over 0.05 in the last two: fine for carbide in 6061), the tool at most 355 of 800 MPa.
+- **If F004 = 150 helps:** fewer rpm of slip per watt than v5 (v5 at 12k: 484 W 443 rpm, 590 W 595, 676 W 680).
+- **The hold at 9k:** 6% is only about 520 rpm of slip, so it will stop early. Same rule as v5: a hold that says
+  "over 6.0%" = stop the program; "still slowing down" in a pass's first second = one Cycle Start allowed, a second
+  hold on that pass = stop.
+
+**Before:** **F004 = 150** on the VFD. Don't unclamp. Home, check **G54 X/Y = machine X120.472 Y387.240**.
+Listening on, hold on.
+
+**After:** copy `op1a-calibrate-v6.nc.cutlog.json`, `.wav` and rcnc's `log.txt`.
+
+## Op 1a v5 (RAN 2026-11-18, passes 1-7; in old-do-not-use/): the 12k ladder
 
 v4 (2026-11-18) repeated run 1's 12k cut with the VFD's **F004 = 200**: it didn't bog at all. v5 finds how much the
 spindle carries at 12000 rpm now: ten single passes, all at **S12000**, 12 deep (Z32 -> Z20) from the bar's -X wall
