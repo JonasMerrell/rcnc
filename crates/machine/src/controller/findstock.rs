@@ -80,6 +80,8 @@ pub(crate) struct Accept {
     off: String,
     set: Vec<(usize, f64, f64)>,
     report: String,
+    /// The work rotation to apply with it (Find bores, compensating the part's turn).
+    rotation: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -399,6 +401,8 @@ impl Controller {
 
     /// Run `steps` as a routine in place of the program until they end.
     fn run_probe_routine(&mut self, name: &str, steps: Vec<Step>, again: ProbeAgain, safe_z: f64) {
+        // probing again starts from the machine as it is, unturned: it measures afresh
+        self.clear_rotation();
         self.sync_position();
         self.probe_again = Some(again);
         self.probe_accept = None;
@@ -523,7 +527,13 @@ impl Controller {
             fmt(turn)
         );
         let mid = [(ca[0] + cb[0]) / 2.0, (ca[1] + cb[1]) / 2.0];
-        let set = vec![(0, mid[0], (r.a[0] + r.b[0]) / 2.0), (1, mid[1], (r.a[1] + r.b[1]) / 2.0)];
+        // with the turn compensated, the work axes turn with the part about the work origin: the bores' middle
+        // (work m) sits at the origin plus m turned
+        let rotation = if r.rotate { turn } else { 0.0 };
+        let m = [(r.a[0] + r.b[0]) / 2.0, (r.a[1] + r.b[1]) / 2.0];
+        let (sn, cs) = rotation.to_radians().sin_cos();
+        let mt = [cs * m[0] - sn * m[1], sn * m[0] + cs * m[1]];
+        let set = vec![(0, mid[0], mt[0]), (1, mid[1], mt[1])];
         // a bore reading small has something in it: a chip or a burr pushes the touch in, and its middle
         let small = (0..2).filter(|&i| size(i) < r.diameter - 0.1).count();
         let hint = match small {
@@ -543,15 +553,17 @@ impl Controller {
             self.probe_accept = Some(Accept {
                 off,
                 set,
-                report: format!("Bores found: {summary}; accepted outside the tolerance: work X/Y set from their middle"),
+                report: format!("Bores found: {summary}; accepted outside the tolerance: work X/Y set from their middle{}", rotated(rotation)),
+                rotation,
             });
             return Err(format!("Find bores: {summary}: {why}. Nothing was set{hint}"));
         }
         for (axis, machine, work) in set {
             self.set_work_axis(axis, machine, work);
         }
+        self.interp.set_rotation(rotation);
         let warn = if small > 0 { format!(". Warning: a bore reads more than 0.1 mm under Ø{}: if something was in it, X/Y are off", fmt(r.diameter)) } else { String::new() };
-        self.report(format!("Bores found: {summary}; work X/Y set from their middle{warn}"));
+        self.report(format!("Bores found: {summary}; work X/Y set from their middle{}{warn}", rotated(rotation)));
         Ok(vec![])
     }
 
@@ -639,10 +651,20 @@ impl Controller {
         for (axis, machine, work) in accept.set {
             self.set_work_axis(axis, machine, work);
         }
+        self.interp.set_rotation(accept.rotation);
         self.report(format!("{} ({})", accept.report, accept.off));
         if let Some(exec) = &mut self.exec {
             exec.wait = Wait::None;
         }
+    }
+}
+
+/// The log's words for a work rotation applied (none for 0).
+fn rotated(degrees: f64) -> String {
+    if degrees == 0.0 {
+        String::new()
+    } else {
+        format!("; rotation applied: the program's X/Y turned {}° with the part", fmt(degrees))
     }
 }
 
