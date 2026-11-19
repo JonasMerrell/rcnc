@@ -90,8 +90,8 @@ def out(c, stem, only=None):
     """Simulate, render and post setup c; `only`: for a job's lead, just these of its setups (op 1 alone)."""
     k = {"stations": only} if only else {}
     return [{"tool": "cam_info", "args": {"cam": c}},
-            {"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem}-sim.png", "resolution": 900, **k}},
-            {"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem}-sim-top.png", "view": "top", "resolution": 900, **k}},
+            {"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem}-sim.png", "resolution": 500, **k}},
+            {"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem}-sim-top.png", "view": "top", "resolution": 500, **k}},
             {"tool": "render_cam", "args": {"cam": c, "path": f"{stem}-paths.png"}},
             {"tool": "export_gcode", "args": {"cam": c, "path": f"{stem}.nc", **k}},
             {"tool": "export_setup_sheet", "args": {"cam": c, "path": f"{stem}.html", **k}},
@@ -100,10 +100,19 @@ def out(c, stem, only=None):
 
 def cycle(c, stem):
     """The whole job c leads: both stations in one program, simulation, sheet and playback."""
-    return [{"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem}-sim.png", "resolution": 1200}},
+    return [{"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem}-sim.png", "resolution": 500}},
             {"tool": "export_gcode", "args": {"cam": c, "path": f"{stem}.nc"}},
             {"tool": "export_setup_sheet", "args": {"cam": c, "path": f"{stem}.html"}},
             {"tool": "export_cam_simulation", "args": {"cam": c, "path": f"{stem}-sim.html", "resolution": 700}}]
+
+
+def first_last(c, stem, first, last):
+    """The batch's first program (op 1 alone) and last (op 2 and what follows it), posted from job c with stations."""
+    S = []
+    for which, st in (("first", first), ("last", last)):
+        S += [{"tool": "export_gcode", "args": {"cam": c, "stations": st, "path": f"{stem}-{which}.nc"}},
+              {"tool": "export_setup_sheet", "args": {"cam": c, "stations": st, "path": f"{stem}-{which}.html"}}]
+    return S
 
 
 def setup(name, studio, stock=None, follows=None, orient="top", origin="part_bottom_center", station_x=0.0, fixtures=(), z=LEDGE_Z,
@@ -169,7 +178,7 @@ S += tools(1, AL) + probe(1, 3, 1.5) + find_bores(1, 1.0) + [
     op(1, "deburr", "Edge break 0.3: channel edges, floor ends, pocket rims", tool=1, chamfer=0.3, tip_offset=0.7,
        edges=[[s * 10.0, cy, BASE_T] for s in (1, -1) for cy in (-26.5, 26.5)] + [[0, cy + s * 22.5, 6.0] for s in (1, -1) for cy in (-26.5, 26.5)]
        + [[4.025, cy + m, 6.0] for m in (-15, 0, 15) for cy in (-26.5, 26.5)]),
-] + out(1, "base-op2") + cycle(0, "base-cycle")
+] + out(1, "base-op2") + cycle(0, "base-cycle") + first_last(0, "base", ["Base op1 bottom"], ["Base op2 top"])
 
 # ======================= C360 sliders =======================
 W, H = BAR_BR
@@ -209,7 +218,7 @@ S += tools(3, BR) + probe(3, 3, 1.5) + find_bores(3, 1.5) + [
 S += [setup("Slider op2 engrave", 4, follows="Slider op2 top", z=LEDGE_Z - FACE_BR, station_x=FIXED_R + SW / 2, fixtures=jaws(SW, -1),
             model="DMC2-twostation-slider", wcs=2)]
 S += [tools(4, BR)[0],
-      op(4, "trace", "Engrave the crosshatch 0.4 deep (chamfer mill tip)", tool=1, sketches=[9, 10], depth=0.4, stepdown=0.4)] + out(4, "slider-engrave") + cycle(2, "slider-cycle")
+      op(4, "trace", "Engrave the crosshatch 0.4 deep (chamfer mill tip)", tool=1, sketches=[9, 10], depth=0.4, stepdown=0.4)] + out(4, "slider-engrave") + cycle(2, "slider-cycle") + first_last(2, "slider", ["Slider op1 bottom"], ["Slider op2 top", "Slider op2 engrave"])
 S += [{"tool": "save_document", "args": {"path": "slider-cam.json"}}]
 # toolpaths are made once per setup, by cam_info at its end, not again after every operation added
 for st in S:

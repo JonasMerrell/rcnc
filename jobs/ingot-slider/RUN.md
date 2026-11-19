@@ -270,9 +270,11 @@ Notes on the checks:
   required. Listen on the first part.
 - **Depth at 9k:** the base op 1 rough is two levels of 3.75 (7.5 in all). The guidelines prefer 5–7 per level,
   and one 7.5 level would be over 7.
-- **How long a re-plan takes now:** rCAD branch `cam-build-cache` caches each setup's toolpaths between calls, and
-  `cam.py` adds operations with `build: false`. The whole slider re-run (op 1, op 2, the engraving and the cycle)
-  took 5.0 min, down from about 30. `verify_gcode` on all 7 files took 3.6 min, and the rcnc simulator 7 s.
+- **How long a re-plan takes now:** `./replan.sh slider` (or `base`, `all`) re-plans one part: CAM, the first
+  and last programs, post-processing and `verify_gcode` on that part's programs, in two parallel processes. It
+  needs rCAD PRs #165 and #166 (build cache, shared simulation). A shim-only change took **226 s end to end**
+  (CAM 119 s, verify 89 s), and the programs came out byte-identical. Before those PRs it took about 35 min. The rcnc
+  simulator then takes about 2 s per program.
 - **verify_gcode on every final file** (`verify.json`, after pauses, dwells and the guard line): all 7 ok, 0
   problems, stamps match the setups. The cycles were read station by station and simulated together on the
   machine. As a check, a cycle with one Z changed to dig into station 2 was caught as a gouge.
