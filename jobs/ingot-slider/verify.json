@@ -1,0 +1,63 @@
+[
+ {
+  "tool": "open_document",
+  "args": {
+   "path": "slider-cam.json"
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 0,
+   "path": "base-op1.nc",
+   "stations": [
+    "Base op1 bottom"
+   ]
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 1,
+   "path": "base-op2.nc"
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 2,
+   "path": "slider-op1.nc",
+   "stations": [
+    "Slider op1 bottom"
+   ]
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 3,
+   "path": "slider-op2.nc"
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 4,
+   "path": "slider-engrave.nc"
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 0,
+   "path": "base-cycle.nc"
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 2,
+   "path": "slider-cycle.nc"
+  }
+ }
+]
