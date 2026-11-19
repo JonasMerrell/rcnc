@@ -404,7 +404,7 @@ impl App {
                 check(ui, v.tapped, "Tap the stylus with a finger");
                 let (text, color) = if s.probe_active { ("ON", AMBER) } else { ("off", MUTED) };
                 ui.label(RichText::new(format!("      Probe input: {text}")).size(15.0).color(color).strong());
-                check(ui, false, "Jog it over the middle of the centre block, 2–10 mm above its top");
+                check(ui, false, "Jog it over the middle of the centre block, between the two jaw bars, 2–10 mm above the web");
                 ui.add_space(6.0);
                 self.find_stock_jog(ui);
                 ui.add_space(10.0);
@@ -418,13 +418,13 @@ impl App {
             FindViseStage::Probing => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(RichText::new("Touching the top, the Y ends, then both jaw faces twice…").size(17.0).color(ACCENT));
+                    ui.label(RichText::new("Touching the web, a jaw top, the jaw ends, then both jaw faces twice…").size(17.0).color(ACCENT));
                 });
                 ui.add_space(10.0);
                 stop(ui, self, "Stop");
             }
             FindViseStage::Result => {
-                let new = v.new.unwrap_or(machine::ViseLocation { faces: [0.0; 2], y: 0.0, angle: 0.0, setter_above_top: 0.0, gap: 0.0, length: None });
+                let new = v.new.unwrap_or(machine::ViseLocation { faces: [0.0; 2], y: 0.0, angle: 0.0, setter_above_top: 0.0, gap: 0.0, length: None, web_below_top: 0.0 });
                 let row = |ui: &mut egui::Ui, name: &str, old: String, new: String| {
                     ui.label(RichText::new(name).size(15.0).color(MUTED));
                     ui.label(RichText::new(old).size(17.0).color(TEXT));
@@ -443,6 +443,7 @@ impl App {
                     row(ui, "Middle Y", was(&|o| o.y), format!("{:.3}", new.y));
                     row(ui, "Turned, °", was(&|o| o.angle), format!("{:.4}", new.angle));
                     row(ui, "Jaw top below setter", was(&|o| o.setter_above_top), format!("{:.3}", new.setter_above_top));
+                    row(ui, "Jaw top above ledges", was(&|o| o.web_below_top), format!("{:.3}", new.web_below_top));
                 });
                 for w in &v.warnings {
                     ui.label(RichText::new(w).size(14.0).color(AMBER));

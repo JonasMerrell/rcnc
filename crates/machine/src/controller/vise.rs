@@ -3,12 +3,14 @@
 //! repeats to a few µm, so it holds until the vise is moved).
 //!
 //! The operator empties the vise (or opens both stations well clear of the
-//! centre block), taps the stylus, jogs it over the middle of the block's
-//! top, a few mm above it, and presses Continue. rcnc touches the top, both
-//! Y ends of the block, then both fixed jaw faces at two places along Y, and
-//! shows what it found beside what is stored: the X of both faces (the left
+//! centre block), taps the stylus, jogs it over the middle of the block, a
+//! few mm above the web between the two insert bars, and presses Continue.
+//! rcnc touches the web, then the top of the +X insert bar, both Y ends of
+//! the bars, then both fixed jaw faces at two places along Y, just below the
+//! bar top so the ball stays above the ledges outside the faces. It shows
+//! what it found beside what is stored: the X of both faces (the left
 //! station's fixed jaw is the block's -X face, the right station's its +X
-//! face), the block's Y middle, the faces' angle to the Y axis and the jaw
+//! face), the bars' Y middle, the faces' angle to the Y axis and the jaw
 //! top's height. Save keeps it; Find stock with `VISE=` then takes X from it.
 
 use super::{Controller, Mode, Wait};
@@ -39,8 +41,12 @@ pub struct FindViseView {
 
 /// Faces leaning more than this over the jaw length (mm) get a tramming warning.
 const TRAM_WARN: f64 = 0.02;
-/// The jaw length the lean is quoted over, mm.
-const JAW_LENGTH: f64 = 95.5;
+/// From the web, rise this far to cross to the bar top (which stands 4 to 5 mm higher).
+const WEB_RISE: f64 = 10.0;
+/// A bar top less than this above the first touch: the probe didn't start over the web.
+const WEB_RISE_MIN: f64 = 2.0;
+/// Keep the ball's bottom this far above the ledges when touching the faces.
+const LEDGE_MARGIN: f64 = 0.5;
 
 impl Controller {
     pub(super) fn start_find_vise(&mut self) {
@@ -54,11 +60,15 @@ impl Controller {
                 Some("the spindle is on".into())
             } else {
                 let v = &self.config.probing.vise;
-                if !(v.gap > 0.0 && v.length > 0.0 && v.depth > 0.0 && v.spread > 0.0) {
-                    Some("the vise's gap, length, depth and spread must be more than zero (Probe page)".into())
+                if !(v.gap > 0.0 && v.jaw_thickness > 0.0 && v.jaw_length > 0.0 && v.face_depth > 0.0 && v.spread > 0.0) {
+                    Some("the vise's gap, jaw thickness, jaw length, face depth and spread must be more than zero (Probe page)".into())
+                } else if v.jaw_thickness >= v.gap / 2.0 {
+                    Some("the jaw thickness must be less than half the gap between the faces (Probe page)".into())
+                } else if v.ends && v.spread >= v.jaw_length / 2.0 {
+                    Some("the faces are touched off the ends of the jaws: make the spread less than half the jaw length (Probe page)".into())
                 } else {
-                    self.stylus_too_short(v.depth + self.config.probing.stylus_diameter / 2.0)
-                        .map(|e| format!("the faces would be touched {} mm below the jaw top, {e}", fmt(v.depth)))
+                    self.stylus_too_short(v.face_depth + self.config.probing.stylus_diameter / 2.0)
+                        .map(|e| format!("the faces would be touched {} mm below the jaw top, {e}", fmt(v.face_depth)))
                 }
             }
         });
@@ -74,7 +84,7 @@ impl Controller {
         });
         self.info(
             "Find vise location: empty the vise (or open both stations well clear of the fixed centre block) and take any work stops off, \
-             tap the probe's stylus, jog it over the middle of the centre block, a few mm above its top, then press Continue",
+             tap the probe's stylus, jog it over the middle of the centre block (between the two jaw bars), a few mm above it, then press Continue",
         );
         self.sync_position();
         self.routine = Some(Routine {
@@ -124,7 +134,8 @@ impl Controller {
         }
     }
 
-    /// Touch the top, the Y ends about the start, then each face at two Y's about the middle found.
+    /// Touch the web, a bar top, the bar ends about the start, then each face at two Y's about
+    /// the middle found.
     fn find_vise_probe(&mut self) -> Result<Vec<Step>, String> {
         self.find_vise_stage(FindViseStage::Probing);
         if let Some(r) = &mut self.routine {
@@ -134,44 +145,70 @@ impl Controller {
         let v = s.vise.clone();
         let fs = s.find_stock.clone();
         let start = self.machine_position();
+        // over the middle of the +X bar, if the probe started over the middle of the web
+        let bar_x = start[0] + v.gap / 2.0 - v.jaw_thickness / 2.0;
         self.info(format!(
-            "Find vise location: probing down from machine Z{}; ends and faces {} mm below the jaw top",
+            "Find vise location: probing down from machine Z{} onto the web between the jaws, then the jaw top at X{}",
             fmt(start[2]),
-            fmt(v.depth)
+            fmt(bar_x)
         ));
         let mut steps = probing::touch(&s, 2, false, fs.z_search);
         steps.push(Step::Then(Box::new(move |c, hits| {
-            let top = hits[0] + c.probe_z_offset();
-            let mut more = vec![probing::guarded_to(&s, 2, top + fs.z_clearance)];
-            if v.ends {
-                more.extend(super::findstock::sides(&s, 1, start[1], v.length, top, v.depth));
-            }
-            let s2 = s.clone();
-            more.push(Step::Then(Box::new(move |_, hits| {
-                let y0 = if v.ends { (hits[1] + hits[2]) / 2.0 } else { start[1] };
-                let ys = [y0 - v.spread, y0 + v.spread];
-                let mut more = vec![];
-                for y in ys {
-                    more.push(probing::guarded_to(&s2, 1, y));
-                    more.extend(super::findstock::sides(&s2, 0, start[0], v.gap, top, v.depth));
+            let web = hits[0] + c.probe_z_offset();
+            let mut more = vec![probing::guarded_to(&s, 2, web + WEB_RISE), probing::guarded_to(&s, 0, bar_x)];
+            more.extend(probing::touch(&s, 2, false, 2.0 * WEB_RISE));
+            more.push(Step::Then(Box::new(move |c, hits| {
+                let top = hits[1] + c.probe_z_offset();
+                let step = top - web;
+                if step < WEB_RISE_MIN {
+                    return Err(format!(
+                        "the jaw top at X{} was {} mm above the first touch at X{}, not the 2 to 10 mm a jaw bar stands above the web:                          start over the middle of the centre block, between the two jaw bars",
+                        fmt(bar_x),
+                        fmt(step),
+                        fmt(start[0])
+                    ));
                 }
-                more.push(probing::guarded_to(&s2, 0, start[0]));
-                more.push(probing::guarded_to(&s2, 1, y0));
-                more.push(Step::Then(Box::new(move |c, hits| c.find_vise_done(hits, top, ys))));
+                let r = s.stylus_diameter / 2.0;
+                if v.face_depth + r > step - LEDGE_MARGIN {
+                    return Err(format!(
+                        "the ledges outside the faces are {} mm below the jaw top, so the ball would touch them {} mm down:                          make the face depth less than {} mm (Probe page)",
+                        fmt(step),
+                        fmt(v.face_depth),
+                        fmt((step - LEDGE_MARGIN - r).max(0.0))
+                    ));
+                }
+                c.info(format!("Find vise location: jaw top at machine Z{}, {} mm above the web", fmt(top), fmt(step)));
+                let mut more = vec![probing::guarded_to(&s, 2, top + fs.z_clearance)];
+                if v.ends {
+                    more.extend(super::findstock::sides(&s, 1, start[1], v.jaw_length, top, v.face_depth));
+                }
+                let s2 = s.clone();
+                more.push(Step::Then(Box::new(move |_, hits| {
+                    let y0 = if v.ends { (hits[2] + hits[3]) / 2.0 } else { start[1] };
+                    let ys = [y0 - v.spread, y0 + v.spread];
+                    let mut more = vec![];
+                    for y in ys {
+                        more.push(probing::guarded_to(&s2, 1, y));
+                        more.extend(super::findstock::sides(&s2, 0, start[0], v.gap, top, v.face_depth));
+                    }
+                    more.push(probing::guarded_to(&s2, 0, start[0]));
+                    more.push(probing::guarded_to(&s2, 1, y0));
+                    more.push(Step::Then(Box::new(move |c, hits| c.find_vise_done(hits, top, step, ys))));
+                    Ok(more)
+                })));
                 Ok(more)
             })));
-            c.info(format!("Find vise location: jaw top at machine Z{}", fmt(top)));
             Ok(more)
         })));
         Ok(steps)
     }
 
     /// Work out the block from the touches and wait for Save or Cancel.
-    /// hits: top, (Y low end, Y high end,) then -X face and +X face at each of `ys`.
-    fn find_vise_done(&mut self, hits: &[f64], top: f64, ys: [f64; 2]) -> Result<Vec<Step>, String> {
+    /// hits: web, bar top, (Y low end, Y high end,) then -X face and +X face at each of `ys`.
+    fn find_vise_done(&mut self, hits: &[f64], top: f64, web_below_top: f64, ys: [f64; 2]) -> Result<Vec<Step>, String> {
         let s = self.config.probing.clone();
         let v = &s.vise;
-        let f = if v.ends { 3 } else { 1 };
+        let f = if v.ends { 4 } else { 2 };
         if hits.len() < f + 4 {
             return Err("not every face was touched".into());
         }
@@ -185,11 +222,11 @@ impl Controller {
         let slope = (slopes[0] + slopes[1]) / 2.0;
         let y_mid = (ys[0] + ys[1]) / 2.0 + oy;
         let faces = [(low[0] + low[1]) / 2.0, (high[0] + high[1]) / 2.0];
-        let length = v.ends.then(|| (hits[2] - ry) - (hits[1] + ry));
+        let length = v.ends.then(|| (hits[3] - ry) - (hits[2] + ry));
         let gap = faces[1] - faces[0];
         let work_top = top - self.interp.program_offset()[2];
         let setter_above_top = s.setter.top() - work_top;
-        let loc = ViseLocation { faces, y: y_mid, angle: slope.atan().to_degrees(), setter_above_top, gap, length };
+        let loc = ViseLocation { faces, y: y_mid, angle: slope.atan().to_degrees(), setter_above_top, gap, length, web_below_top };
 
         let mut warnings = vec![];
         if (gap - v.gap).abs() > v.tolerance {
@@ -200,19 +237,19 @@ impl Controller {
                 fmt(v.gap)
             ));
         }
-        if let Some(l) = length.filter(|l| (l - v.length).abs() > v.tolerance) {
-            warnings.push(format!("The centre block is {} mm long, {} mm from the {} set on the Probe page", fmt(l), fmt(l - v.length), fmt(v.length)));
+        if let Some(l) = length.filter(|l| (l - v.jaw_length).abs() > v.tolerance) {
+            warnings.push(format!("The jaws are {} mm long, {} mm from the {} set on the Probe page", fmt(l), fmt(l - v.jaw_length), fmt(v.jaw_length)));
         }
-        let lean = slope * JAW_LENGTH;
+        let lean = slope * v.jaw_length;
         if lean.abs() > TRAM_WARN {
             warnings.push(format!(
                 "The jaws are turned {}° from the Y axis ({} mm over the {} mm jaw): tram the vise if parts must be square to the machine",
                 fmt(loc.angle),
                 fmt(lean),
-                fmt(JAW_LENGTH)
+                fmt(v.jaw_length)
             ));
         }
-        let skew = (slopes[1] - slopes[0]) * JAW_LENGTH;
+        let skew = (slopes[1] - slopes[0]) * v.jaw_length;
         if skew.abs() > TRAM_WARN {
             warnings.push(format!("The two faces aren't parallel: {} mm over the jaw length (chips or a burr on a face?)", fmt(skew)));
         }
@@ -220,7 +257,7 @@ impl Controller {
         let floor = vise_floor.map(|h| format!(", {} mm above the Vise Z reference", fmt(h))).unwrap_or_default();
         self.info(format!(
             "Find vise location: fixed jaw faces at machine X{} (left station) and X{} (right station), {} mm apart; \
-             block middle Y{}{}; jaws turned {}°; jaw top {} mm below the setter top{floor}. Save or Cancel",
+             jaw middle Y{}{}; jaws turned {}°; jaw top {} mm below the setter top{floor}, {} mm above the ledges. Save or Cancel",
             fmt(faces[0]),
             fmt(faces[1]),
             fmt(gap),
@@ -228,6 +265,7 @@ impl Controller {
             length.map(|l| format!(", {} mm long", fmt(l))).unwrap_or_default(),
             fmt(loc.angle),
             fmt(setter_above_top),
+            fmt(web_below_top),
         ));
         for w in &warnings {
             self.info(format!("Find vise location: {w}"));
@@ -268,7 +306,12 @@ impl Controller {
     pub(super) fn end_find_vise(&mut self, result: &Result<(), String>) {
         if self.find_vise.take().is_some() {
             if let Err(e) = result {
-                self.info(format!("Find vise location stopped: {e}; nothing was changed"));
+                let hint = if e.contains("without touching") {
+                    " (it must start over the middle of the centre block, between the two jaw bars)"
+                } else {
+                    ""
+                };
+                self.info(format!("Find vise location stopped: {e}{hint}; nothing was changed"));
             }
             if let Some(exec) = &mut self.exec {
                 if matches!(exec.wait, Wait::Routine) {
