@@ -484,12 +484,17 @@ impl App {
                 // Always shown, so the buttons below never move under a finger.
                 let (text, color) = if s.probe_active { ("ON", AMBER) } else { ("off", MUTED) };
                 ui.label(RichText::new(format!("      Probe input: {text}")).size(15.0).color(color).strong());
-                check(ui, false, "Jog it over the middle of the stock, 2–10 mm above the top");
-                if let (Some(side), true) = (f.request.vise, s.config.probing.vise.location.is_some()) {
+                let from_vise = f.request.vise.is_some() && s.config.probing.vise.location.is_some();
+                if from_vise && !f.positioned {
+                    check(ui, false, "Press Continue: rcnc moves over the stock from the saved vise location and probes it");
+                } else {
+                    check(ui, f.positioned, "Jog it over the middle of the stock, 2–10 mm above the top");
+                }
+                if let (Some(side), true) = (f.request.vise, from_vise) {
                     let station = if side < 0.0 { "right" } else { "left" };
                     ui.horizontal(|ui| {
                         let go = ui.add_enabled(f.stage == FindStockStage::Locate && !s.probe_active, Button::new(RichText::new("Over the stock").size(16.0)).min_size(Vec2::new(160.0, 40.0)));
-                        if go.on_hover_text("Move over where the stock should be, from the saved vise location").clicked() {
+                        if go.on_hover_text("Move over where the stock should be, from the saved vise location, and stop there to fine-tune before Continue").clicked() {
                             self.machine.send(Command::FindStockOverStock);
                         }
                         ui.label(RichText::new(format!("X from the {station} station's fixed jaw (saved)")).size(14.0).color(MUTED));

@@ -5308,6 +5308,23 @@ mod tests {
         (view, s.config.probing.vise.location.unwrap())
     }
 
+    /// Find stock with VISE=, the operator only tapping the stylus where the probe stands and
+    /// pressing Continue: rcnc moves over the stock from the saved vise location and probes it.
+    fn run_find_stock_on_vise_hands_off(c: &mut Controller, clock: &ManualClock, program: &str) -> Snapshot {
+        c.handle(Command::Load { name: "t".into(), text: program.into() });
+        c.handle(Command::CycleStart);
+        run_until(c, clock, 300.0, "the Find stock wizard", |s| s.find_stock.is_some() || s.mode == Mode::Alarm);
+        assert!(c.snapshot().find_stock.is_some(), "{:?}", c.snapshot().log);
+        // a finger on the stylus, without moving the machine
+        c.find_stock.as_mut().unwrap().tapped = true;
+        c.handle(Command::FindStockContinue);
+        run_until(c, clock, 600.0, "the end of Find stock", |s| {
+            s.find_stock.as_ref().is_some_and(|f| f.stage == FindStockStage::Mismatch && s.mode == Mode::Probing) || s.find_stock.is_none()
+        });
+        tick(c, clock, 400);
+        c.snapshot()
+    }
+
     fn run_find_stock_on_vise(c: &mut Controller, clock: &ManualClock, program: &str, top: f64) -> Snapshot {
         c.handle(Command::Load { name: "t".into(), text: program.into() });
         c.handle(Command::CycleStart);
@@ -5411,6 +5428,21 @@ mod tests {
         let s = c.snapshot();
         assert!(s.find_vise.is_none() && s.config.probing.vise.location.is_none(), "{:?}", s.log);
         assert!(s.log.iter().any(|l| l.contains("between the two jaw bars") && l.contains("nothing was changed")), "{:?}", s.log);
+    }
+
+    /// With a saved vise location, Find stock VISE= needs no jogging: Continue from wherever the
+    /// probe is goes over the stock and finds it.
+    #[test]
+    fn find_stock_from_the_vise_needs_no_jog() {
+        let (mut c, clock, truth) = vise_setup(&crate::sim::dmc2_sim_config(), false, 0.5, 0.0);
+        let (_, loc) = find_vise(&mut c, &clock, truth);
+        let (mut c, clock, _) = vise_setup(&c.snapshot().config, true, 0.5, 0.0);
+        let s = run_find_stock_on_vise_hands_off(&mut c, &clock, "T99 M6\n(RCNC FIND_STOCK SIZE=39,77,20 AT=0,0,20 KEEPZ=1 VISE=-1)\nG0 Z5\nM30");
+        assert!(s.log.iter().any(|l| l.starts_with("Find stock: moving over the stock")), "{:?}", s.log);
+        run_until_idle(&mut c, &clock, 300.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?}", s.log);
+        assert!(close(loc.faces[1] - s.work_offsets[0][0], -19.5), "jaw at work X{}", loc.faces[1] - s.work_offsets[0][0]);
     }
 
     #[test]
