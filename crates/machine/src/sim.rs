@@ -82,6 +82,10 @@ pub struct SimWorld {
     /// Chips (or a burr): boxes the probe touches like the block, even inside a bore, each knocked
     /// off after it has been touched that many times.
     pub chips: Vec<(([i64; 2], [i64; 2], i64), u32)>,
+    /// How far every box in `blocks` leans: its X range shifts by this many X steps for every Y
+    /// step away from `lean_about` (a vise that isn't trammed square).
+    pub lean: f64,
+    pub lean_about: i64,
 }
 
 pub struct Simulator {
@@ -174,6 +178,8 @@ impl Simulator {
             blocks: Vec::new(),
             touch_shifts: VecDeque::new(),
             chips: Vec::new(),
+            lean: 0.0,
+            lean_about: 0,
         };
         let physical = [36_000, 26_000, 30_000, 0, 0, 0];
         let last_time = clock.now();
@@ -209,7 +215,10 @@ impl Simulator {
             });
             let inside = |(x, y, top): ([i64; 2], [i64; 2], i64)| (x[0]..=x[1]).contains(&p[0]) && (y[0]..=y[1]).contains(&p[1]) && p[2] <= top;
             let in_block = (!in_bore && self.world.block.is_some_and(inside))
-                || self.world.blocks.iter().any(|b| inside(*b))
+                || self.world.blocks.iter().any(|&(x, y, top)| {
+                    let shift = ((p[1] - self.world.lean_about) as f64 * self.world.lean).round() as i64;
+                    inside(([x[0] + shift, x[1] + shift], y, top))
+                })
                 || self.world.chips.iter().any(|(b, _)| inside(*b));
             return self.probe_override || p[2] <= self.world.probe_z || in_block;
         }

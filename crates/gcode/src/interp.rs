@@ -226,11 +226,15 @@ pub struct StockRequest {
     /// stock, touched beside the stock at work Z `JAWZ` (between the parallels
     /// and the jaw's top): the stock's face against it is X `AT - SIZE/2`.
     pub jaw: Option<(f64, f64)>,
-    /// `JAWAT=x` (with `JAWX`): work X of the face that lies against the fixed
+    /// `JAWAT=x` (with `JAWX` or `VISE`): work X of the face that lies against the fixed
     /// jaw when it isn't the stock's own `AT - SIZE/2` face, e.g. a wall an
     /// earlier setup machined, gripped below a wider raw band the sides are
     /// touched on.
     pub jaw_at: Option<f64>,
+    /// `VISE=-1` (or 1): like `JAWX`, the stock lies against the fixed jaw on
+    /// that side of it, but the jaw's X comes from the saved Find vise
+    /// location instead of a touch; the stock's face is checked against it.
+    pub vise: Option<f64>,
 }
 
 /// The reference named in an `(RCNC Z_REFERENCE <name>)` comment.
@@ -371,7 +375,7 @@ impl StockRequest {
         if rest.len() < Self::KEYWORD.len() || !rest[..Self::KEYWORD.len()].eq_ignore_ascii_case(Self::KEYWORD) {
             return None;
         }
-        let mut r = StockRequest { size: [0.0; 3], top_centre: [0.0; 3], tolerance: None, depth: None, keep_z: false, jaw: None, jaw_at: None };
+        let mut r = StockRequest { size: [0.0; 3], top_centre: [0.0; 3], tolerance: None, depth: None, keep_z: false, jaw: None, jaw_at: None, vise: None };
         let (mut jaw_side, mut jaw_z) = (None, None);
         let mut sized = false;
         let nums = |v: &str| -> Result<Vec<f64>, String> {
@@ -397,6 +401,7 @@ impl StockRequest {
                 "JAWX" => nums(v).map(|n| jaw_side = n.first().map(|v| v.signum())),
                 "JAWZ" => nums(v).map(|n| jaw_z = n.first().copied()),
                 "JAWAT" => nums(v).map(|n| r.jaw_at = n.first().copied()),
+                "VISE" => nums(v).map(|n| r.vise = n.first().map(|v| v.signum()).filter(|v| *v != 0.0)),
                 _ => Err(format!("FIND_STOCK: unknown setting {k}")),
             };
             if let Err(e) = res {
@@ -411,8 +416,11 @@ impl StockRequest {
             (None, None) => None,
             _ => return Some(Err("FIND_STOCK: JAWX=-1 or 1 needs JAWZ= (the height to touch the jaw at)".into())),
         };
-        if r.jaw_at.is_some() && r.jaw.is_none() {
-            return Some(Err("FIND_STOCK: JAWAT= goes with JAWX= and JAWZ=".into()));
+        if r.vise.is_some() && r.jaw.is_some() {
+            return Some(Err("FIND_STOCK: VISE= (the saved vise location) or JAWX= with JAWZ= (touch the jaw), not both".into()));
+        }
+        if r.jaw_at.is_some() && r.jaw.is_none() && r.vise.is_none() {
+            return Some(Err("FIND_STOCK: JAWAT= goes with VISE=, or JAWX= and JAWZ=".into()));
         }
         Some(Ok(r))
     }
@@ -2305,12 +2313,15 @@ M30");
         let (_, ops) = run("(RCNC FIND_STOCK SIZE=39,20,77 AT=0,0,-1.5 TOL=0.8)\nM30");
         assert_eq!(
             ops[0],
-            Op::FindStock(StockRequest { size: [39.0, 20.0, 77.0], top_centre: [0.0, 0.0, -1.5], tolerance: Some(0.8), depth: None, keep_z: false, jaw: None, jaw_at: None })
+            Op::FindStock(StockRequest { size: [39.0, 20.0, 77.0], top_centre: [0.0, 0.0, -1.5], tolerance: Some(0.8), depth: None, keep_z: false, jaw: None, jaw_at: None, vise: None })
         );
         assert!(StockRequest::parse("rcnc find_stock size=1,2,3 depth=2").unwrap().is_ok());
         let r = StockRequest::parse("RCNC FIND_STOCK SIZE=25.4,98,12.2 AT=0,0,12.2 JAWX=-1 JAWZ=2.5 JAWAT=-12.5").unwrap().unwrap();
         assert_eq!((r.jaw, r.jaw_at), (Some((-1.0, 2.5)), Some(-12.5)));
         assert!(StockRequest::parse("RCNC FIND_STOCK SIZE=1,2,3 JAWAT=-1").unwrap().is_err());
+        let v = StockRequest::parse("RCNC FIND_STOCK SIZE=32,77,20 AT=0,0,20 KEEPZ=1 VISE=-1 JAWAT=-12").unwrap().unwrap();
+        assert_eq!((v.vise, v.jaw, v.jaw_at), (Some(-1.0), None, Some(-12.0)));
+        assert!(StockRequest::parse("RCNC FIND_STOCK SIZE=1,2,3 VISE=1 JAWX=1 JAWZ=2").unwrap().is_err());
         assert!(StockRequest::parse("RCNC FIND_STOCK AT=0,0,0").unwrap().is_err());
         assert!(StockRequest::parse("RCNC FIND_STOCK SIZE=1,2").unwrap().is_err());
         assert!(StockRequest::parse("just a comment").is_none());

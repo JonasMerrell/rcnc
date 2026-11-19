@@ -43,6 +43,70 @@ pub struct ProbeSettings {
     pub find_stock: FindStockSettings,
     /// What the Calibrate probe wizard measured; nothing until it has run.
     pub calibration: ProbeCalibration,
+    /// The two-station vise's fixed centre block, and where Find vise location found it.
+    pub vise: ViseSettings,
+}
+
+/// How Find vise location touches the vise's fixed centre block (the fixed
+/// jaw of both stations), and what it found. The jaws clamp along X, so the
+/// block's -X face is the left station's fixed jaw and its +X face the right
+/// station's; Find stock (`VISE=`) takes X from the saved faces instead of
+/// touching a jaw every time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ViseSettings {
+    /// Between the two fixed jaw faces (the insert bars' faces), X.
+    pub gap: f64,
+    /// The centre block's length along Y, between the ends that are touched.
+    pub length: f64,
+    /// Touch the block's Y ends for the vise's Y middle (off: the middle is
+    /// where the probe was started).
+    pub ends: bool,
+    /// Below the jaw top to touch the faces and ends.
+    pub depth: f64,
+    /// Each face is touched this far either side of the middle in Y, for its angle.
+    pub spread: f64,
+    /// Measured gap and length further than this from the above are flagged.
+    pub tolerance: f64,
+    /// Where the block was found; None until Find vise location has been saved.
+    pub location: Option<ViseLocation>,
+}
+
+impl Default for ViseSettings {
+    fn default() -> Self {
+        // From vise.step in the DMC2 rCAD machine: insert bar faces 33.3 apart,
+        // centre block 144.5 long, jaws 95.5 long (so ±30 stays on the bars).
+        ViseSettings { gap: 33.3, length: 144.5, ends: true, depth: 3.0, spread: 30.0, tolerance: 1.0, location: None }
+    }
+}
+
+/// The fixed centre block as Find vise location found it, in machine
+/// coordinates, which homing repeats to a few µm.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ViseLocation {
+    /// Machine X of the block's -X face (left station's fixed jaw) and +X face
+    /// (right station's), at Y `y`.
+    pub faces: [f64; 2],
+    /// Machine Y of the block's middle along the jaws.
+    pub y: f64,
+    /// The faces' lean off the machine Y axis, degrees: X grows by
+    /// tan(angle) for every mm of Y (0 for a vise trammed square).
+    pub angle: f64,
+    /// How far the tool setter's top is above the jaw top (like a Z reference).
+    pub setter_above_top: f64,
+    /// Measured X between the faces and Y length of the block.
+    pub gap: f64,
+    pub length: Option<f64>,
+}
+
+impl ViseLocation {
+    /// Machine X of the fixed jaw face a stock lies against at machine Y `y`:
+    /// `side` -1 for a jaw on the stock's -X side (the block's +X face, right
+    /// station), 1 for one on its +X side (the block's -X face, left station).
+    pub fn jaw_x(&self, side: f64, y: f64) -> f64 {
+        let face = if side < 0.0 { self.faces[1] } else { self.faces[0] };
+        face + (y - self.y) * self.angle.to_radians().tan()
+    }
 }
 
 /// The touch probe as measured on known references. A probe triggers a
@@ -171,6 +235,7 @@ impl Default for ProbeSettings {
             probe_tool: 99,
             find_stock: FindStockSettings::default(),
             calibration: ProbeCalibration::default(),
+            vise: ViseSettings::default(),
         }
     }
 }

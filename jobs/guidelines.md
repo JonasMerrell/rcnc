@@ -145,6 +145,11 @@ The planning rules that follow:
   - Find stock touches the top and both sides at DEPTH below the top. DEPTH must be within what the stylus
     can reach: 10 mm, not 20.
   - `JAWX=-1 JAWZ=` takes X from the fixed jaw, but only when the stock is shorter than the jaws.
+  - `VISE=-1` (fixed jaw on the stock's -X side, right station) or `VISE=1` (left station) takes X from the
+    vise location saved by Find vise location (Probe page) instead of touching the jaw, works for stock of any
+    length, and refuses (sets nothing) if the stock's face reads more than TOL off that jaw. Its "Over the stock"
+    button moves the probe over the stock, so the operator only taps and presses Continue. Needs Find vise
+    location run once (again whenever the vise is moved); JAWAT= works with it.
 - **Op 2 starts with Find stock, then the precise feature probe (Jonas, 2026-11-18).** After the flip the
   op 1 work offset no longer fits (the gauge sat 4.5 mm over in X and 5.8 mm in Y), and Find bores alone came
   down on the top beside the bore. So: `FIND_STOCK ... KEEPZ=1` for a coarse X/Y, then `FIND_BORES` (or the

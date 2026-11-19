@@ -3,7 +3,7 @@
 //! jogs over the middle of the stock and presses Continue; rcnc does the rest.
 
 use eframe::egui::{self, pos2, Align2, Button, Color32, CornerRadius, FontId, Margin, Rect, RichText, Sense, Stroke, Vec2};
-use machine::{CalibrateStage, CalibrateView, Command, FindStockStage, FindStockView, Mode, ProbeCalShape, ProbeCalStage, ProbeCalTarget, ProbeCalView, ProbeRetryView};
+use machine::{CalibrateStage, CalibrateView, Command, FindStockStage, FindStockView, FindViseStage, FindViseView, Mode, ProbeCalShape, ProbeCalStage, ProbeCalTarget, ProbeCalView, ProbeRetryView};
 
 use super::palette::*;
 use super::{big_button, App};
@@ -357,6 +357,107 @@ impl App {
         }
     }
 
+    /// The Find vise location window, in the same place and style.
+    pub(super) fn find_vise_window(&mut self, ctx: &egui::Context) {
+        let Some(v) = self.snap.find_vise.clone() else { return };
+        egui::Window::new("Find vise location")
+            .title_bar(false)
+            .anchor(Align2::RIGHT_TOP, Vec2::new(-16.0, 64.0))
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size(Vec2::new(500.0, 0.0))
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .fill(PANEL)
+                    .stroke(Stroke::new(2.0_f32, ACCENT))
+                    .corner_radius(CornerRadius::same(14))
+                    .inner_margin(Margin::same(20)),
+            )
+            .show(ctx, |ui| self.find_vise_body(ui, &v));
+    }
+
+    fn find_vise_body(&mut self, ui: &mut egui::Ui, v: &FindViseView) {
+        let s = self.snap.clone();
+        ui.label(RichText::new("FIND VISE LOCATION").size(16.0).color(MUTED).strong());
+        ui.label(RichText::new("Fixed centre block").size(26.0).color(TEXT).strong());
+        let stored = match &v.old {
+            Some(o) => format!("Stored: jaws at X{:.3} / X{:.3}, middle Y{:.3}", o.faces[0], o.faces[1], o.y),
+            None => "Stored: none yet".to_string(),
+        };
+        ui.label(RichText::new(stored).size(15.0).color(MUTED));
+        ui.add_space(8.0);
+        let check = |ui: &mut egui::Ui, done: bool, text: &str| {
+            let (mark, color) = if done { ("✔", GREEN) } else { ("○", MUTED) };
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(mark).size(20.0).color(color));
+                ui.label(RichText::new(text).size(17.0).color(TEXT));
+            });
+        };
+        let stop = |ui: &mut egui::Ui, app: &mut Self, label: &str| {
+            if ui.add(big_button(label, RED).min_size(Vec2::new(150.0, 56.0))).clicked() {
+                app.machine.send(Command::Stop);
+            }
+        };
+        match v.stage {
+            FindViseStage::Locate => {
+                check(ui, false, "Empty the vise (or open both stations wide) and take the work stops off");
+                check(ui, v.tapped, "Tap the stylus with a finger");
+                let (text, color) = if s.probe_active { ("ON", AMBER) } else { ("off", MUTED) };
+                ui.label(RichText::new(format!("      Probe input: {text}")).size(15.0).color(color).strong());
+                check(ui, false, "Jog it over the middle of the centre block, 2–10 mm above its top");
+                ui.add_space(6.0);
+                self.find_stock_jog(ui);
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(v.tapped && !s.probe_active, big_button("Continue", GREEN).min_size(Vec2::new(250.0, 56.0))).clicked() {
+                        self.machine.send(Command::FindViseContinue);
+                    }
+                    stop(ui, self, "Stop");
+                });
+            }
+            FindViseStage::Probing => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(RichText::new("Touching the top, the Y ends, then both jaw faces twice…").size(17.0).color(ACCENT));
+                });
+                ui.add_space(10.0);
+                stop(ui, self, "Stop");
+            }
+            FindViseStage::Result => {
+                let new = v.new.unwrap_or(machine::ViseLocation { faces: [0.0; 2], y: 0.0, angle: 0.0, setter_above_top: 0.0, gap: 0.0, length: None });
+                let row = |ui: &mut egui::Ui, name: &str, old: String, new: String| {
+                    ui.label(RichText::new(name).size(15.0).color(MUTED));
+                    ui.label(RichText::new(old).size(17.0).color(TEXT));
+                    ui.label(RichText::new(new).size(19.0).color(GREEN).strong());
+                    ui.end_row();
+                };
+                let was = |f: &dyn Fn(&machine::ViseLocation) -> f64| v.old.as_ref().map_or("—".to_string(), |o| format!("{:.3}", f(o)));
+                egui::Grid::new("find-vise-result").num_columns(3).spacing([14.0, 6.0]).show(ui, |ui| {
+                    ui.label("");
+                    ui.label(RichText::new("stored").size(13.0).color(MUTED));
+                    ui.label(RichText::new("measured").size(13.0).color(MUTED));
+                    ui.end_row();
+                    row(ui, "Left station jaw X", was(&|o| o.faces[0]), format!("{:.3}", new.faces[0]));
+                    row(ui, "Right station jaw X", was(&|o| o.faces[1]), format!("{:.3}", new.faces[1]));
+                    row(ui, "Between the faces", was(&|o| o.gap), format!("{:.3}", new.gap));
+                    row(ui, "Middle Y", was(&|o| o.y), format!("{:.3}", new.y));
+                    row(ui, "Turned, °", was(&|o| o.angle), format!("{:.4}", new.angle));
+                    row(ui, "Jaw top below setter", was(&|o| o.setter_above_top), format!("{:.3}", new.setter_above_top));
+                });
+                for w in &v.warnings {
+                    ui.label(RichText::new(w).size(14.0).color(AMBER));
+                }
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.add(big_button("Save", GREEN).min_size(Vec2::new(250.0, 56.0))).clicked() {
+                        self.machine.send(Command::FindViseContinue);
+                    }
+                    stop(ui, self, "Cancel");
+                });
+            }
+        }
+    }
+
     fn find_stock_body(&mut self, ui: &mut egui::Ui, f: &FindStockView) {
         let s = self.snap.clone();
         let [sx, sy, sz] = f.request.size;
@@ -383,6 +484,16 @@ impl App {
                 let (text, color) = if s.probe_active { ("ON", AMBER) } else { ("off", MUTED) };
                 ui.label(RichText::new(format!("      Probe input: {text}")).size(15.0).color(color).strong());
                 check(ui, false, "Jog it over the middle of the stock, 2–10 mm above the top");
+                if let (Some(side), true) = (f.request.vise, s.config.probing.vise.location.is_some()) {
+                    let station = if side < 0.0 { "right" } else { "left" };
+                    ui.horizontal(|ui| {
+                        let go = ui.add_enabled(f.stage == FindStockStage::Locate && !s.probe_active, Button::new(RichText::new("Over the stock").size(16.0)).min_size(Vec2::new(160.0, 40.0)));
+                        if go.on_hover_text("Move over where the stock should be, from the saved vise location").clicked() {
+                            self.machine.send(Command::FindStockOverStock);
+                        }
+                        ui.label(RichText::new(format!("X from the {station} station's fixed jaw (saved)")).size(14.0).color(MUTED));
+                    });
+                }
                 ui.add_space(6.0);
                 self.find_stock_jog(ui);
                 ui.add_space(8.0);
