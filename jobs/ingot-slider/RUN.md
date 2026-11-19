@@ -208,10 +208,28 @@ work offset, stock and fixtures. `export_gcode` on the op 1 setup posts the whol
 The times come from the rcnc simulator. They include its tool-change and probing moves, but not the time you
 spend at the pauses (three in the base cycle, one in the slider cycle) or on the tool swaps.
 
+### First and last programs (batch start and end)
+
+A batch runs: **the first program on a raw blank, then the cycle once per blank after it, then the last
+program**. The first and last programs come from the same job as the cycle, posted with `stations` so each has
+only one station's work and one tool change per tool:
+
+| Program | What | Station | Time (rcnc sim) | Sheet |
+|---|---|---|---|---|
+| `base-first.nc` | base op 1 only | left, G54 | 6.2 min | `base-first.html` |
+| `base-last.nc` | base op 2 only (Find stock, BORES PAUSE, Find bores) | right, G55 | 9.4 min | `base-last.html` |
+| `slider-first.nc` | slider op 1 only (bar on the 1.67 mm shims) | left, G54 | 8.7 min | `slider-first.html` |
+| `slider-last.nc` | slider op 2 **and** the engraving in one program (T99, T24, T1 once each) | right, G55 | 7.5 min | `slider-last.html` |
+
+The last programs set G55 themselves (Find stock, then Find bores), so they run on their own. The header of a
+last program still lists station 1 (op 1) in its "stations" comment, but it contains no op 1 moves and no G54.
+`base-first` / `slider-first` have the same toolpaths as `base-op1` / `slider-op1` (same SIM OK hash), and
+`base-last` matches `base-op2`. Each has a SIM OK stamp and passed `verify_gcode` after post-processing.
+
 ### Running batches
 
-1. **First cycle** (right station empty): clamp a raw blank in the left station and run `base-op1.nc` /
-   `slider-op1.nc`. Each is posted from the job with only op 1 and is G54 only.
+1. **First** (right station empty): clamp a raw blank in the left station and run `base-first.nc` /
+   `slider-first.nc` (op 1 only, G54).
 2. **Every cycle after that:**
    - take the finished parts out of the right station;
    - flip the left station's blank into the right station, onto its finished bottom;
@@ -219,7 +237,8 @@ spend at the pauses (three in the base cycle, one in the slider cycle) or on the
    - run `base-cycle.nc` / `slider-cycle.nc`.
 
    Find stock asks you to jog over each station in turn: the left first, then the right.
-3. **Last cycle** (left station empty): run `base-op2.nc` / `slider-op2.nc` and then `slider-engrave.nc` (G55 only).
+3. **Last** (left station empty): run `base-last.nc` / `slider-last.nc` (op 2 only, G55; the slider's includes the
+   engraving).
 
 Within a tool, the program goes up to `G53 G0 Z0` between stations, switches the work offset, travels over at the
 top and comes down over the other station.
