@@ -1,9 +1,10 @@
 # Ingot slider: how to run it
 
-> **PROVISIONAL (2026-11-18).** Planned for the bars as bought, at their nominal sizes: 6061 1/2 × 1 in
-> (12.7 × 25.4) and C360 3/8 × 1 in (9.5 × 25.4). The bars haven't arrived. When they do, measure thickness and
-> width, put the numbers in `BAR_AL` / `BAR_BR` at the top of `cam.py`, then re-run `cam.py`, `rcad run cam.json`,
-> `post.py` and `rcad run verify.json`. The asserts in `cam.py` re-check that every seam is still inside its chamfer.
+> **Brass measured, aluminium PROVISIONAL (2026-11-19).** The C360 is measured: **10.0 × 25.0**, cut into **101 mm**
+> blanks. It lies on Jonas's **1.67 mm** shims in op 1. The 6061 is still planned on its nominal 12.7 × 25.4, also
+> as 101 blanks. When the aluminium is measured, put the numbers in `BAR_AL` at the top of `cam.py`, then re-run
+> `cam.py`, `rcad run cam.json`, `post.py` and `rcad run verify.json`. The asserts in `cam.py` re-check that every
+> seam is still inside its chamfer.
 > **Simulated only: nothing here has been cut.**
 
 Two 6061 bases per 1/2 × 1 in bar blank and two C360 brass sliders per 3/8 × 1 in bar blank. Each part gets two
@@ -20,17 +21,18 @@ are in `DESIGN.md`. Per-operation tools, feeds, times and loads are in `OPS.md`.
   | | Op 1 wall top (op 2 Z) | Chamfer | Chamfer lower edge | Margin | Chamfer tip |
   |---|---|---|---|---|---|
   | Base | Z7.5 | 1.7 on the rail tops (was 1.5) | Z7.3 | 0.2 | Z6.3 |
-  | Slider | Z5.8 | 2.4 ingot chamfer (was 2.0) | Z5.6 | 0.2 | Z5.02 |
+  | Slider | Z6.47 | 2.4 ingot chamfer (was 2.0) | Z5.6 | 0.87 | Z5.02 |
 
   The same holds at the part ends and round the corners (R2.5 base, R3 slider): op 1's contour runs the whole
   outline, and the chamfer runs round the corners. Base rail top: 0.8 of its 2.5 width is left flat, 0.5 after
   the 0.3 inner edge break.
-- **Op 2's band rough** takes the stock above op 1's walls off to 0.2 under their top (Z7.3 / Z5.6), staying
+- **Op 2's band rough** takes the stock above op 1's walls off to 0.2 under their top (Z7.3 / Z6.27), staying
   0.3 off the walls. That leaves no web between the two parts. The chamfer's cone then takes the 0.3 strip
   and the raw skin together.
-- **Brass shims are 1.5 mm (were 1.0).** With 1.5 the slider's op 1 walls reach Z5.8 in op 2, which puts the
-  2.4 chamfer's lower edge 0.2 under them. In op 1 the jaws then grip only **3.2 mm** of the brass bar. The cuts
-  are light: the roughing peak is 378 W, and the rough runs in three levels.
+- **Brass shims: Jonas's 1.67 mm strips.** On the 10.0 bar the slider's op 1 walls then reach Z6.47 in op 2,
+  0.87 over the 2.4 chamfer's lower edge. 1.0 mm is the least that keeps the 0.2 margin. In op 1 the jaws grip
+  **3.0 mm** of the brass bar (4.7 − 1.67). To be kind to that grip, the op 1 rough runs in four levels with its
+  power capped at 400 W. Its peak is 320 W (it was 415 W in three levels).
 - **Aluminium op 1 faces 0.2 (was 0.5).** Its walls go to Z5.0 (was 6.5).
 - **Spindle at F004 = 150:** aluminium is roughed at **S9000** (target 650 W, under the 850 W caution), with top
   facing and finishing at S12000 and the chamfer mill at S24000 (light). Every S change is followed by
@@ -45,33 +47,37 @@ are in `DESIGN.md`. Per-operation tools, feeds, times and loads are in `OPS.md`.
   pauses, dwells and the guard line) and found 0 problems. For the two-station cycles, verify now reads each
   station's stretch with its own setup (rCAD branch `slider-1118`).
 
-The programs were made with rCAD branch `slider-1118`: master + `link_feed` (PR #161) + three commits from this
-re-plan. Those commits are the deburr tip fix, the deburr corner fix and job-aware `verify_gcode`; see the end
+The programs were made with rCAD branch `cam-build-cache` (PR #165, on `slider-1118` = PR #163): master + `link_feed`
+(PR #161) + four commits from this re-plan. Those commits are the deburr tip fix, the deburr corner fix and job-aware `verify_gcode`; see the end
 of this file. Run them on rcnc **main** (branch `mill/ingot-slider` is main plus this folder). Main has the bog
 guard, Find bores with rotation, and per-work-offset Z references.
 
 | Program | Station | Time (rcnc sim) | Before | Peak spindle vs its caution | Sheet |
 |---|---|---|---|---|---|
-| `base-op1.nc` | left | 6.1 min | 7.1 | 734 W at 9k / 850 (rough) | `base-op1.html` |
-| `base-op2.nc` | right | 9.4 min | 12.9 | 673 W at 9k / 850 (channel rough); face 411 W at 12k / 684 | `base-op2.html` |
-| `slider-op1.nc` | left (bar on two 1.5 mm shims) | 8.9 min | 13.4 | 378 W at 18k / 501 (rough) | `slider-op1.html` |
-| `slider-op2.nc` | right | 6.0 min | 9.6 | 359 W at 18k / 501 (band rough) | `slider-op2.html` |
+| `base-op1.nc` | left | 6.2 min | 7.1 | 728 W at 9k / 850 (rough) | `base-op1.html` |
+| `base-op2.nc` | right | 9.4 min | 12.9 | 662 W at 9k / 850 (channel rough); face 415 W at 12k / 684 | `base-op2.html` |
+| `slider-op1.nc` | left (bar on two 1.67 mm shims) | 8.7 min | 13.4 | 320 W at 18k / 400 cap (rough; caution 501) | `slider-op1.html` |
+| `slider-op2.nc` | right | 5.9 min | 9.6 | 311 W at 18k / 501 (band rough); face 217 W | `slider-op2.html` |
 | `slider-engrave.nc` | right, straight after `slider-op2` | 1.5 min (rCAD) | about 2.5 | – | `slider-engrave.html` |
-| `base-cycle.nc` | both (G54 left + G55 right) | **13.2 min** | 17.7 | as the singles | `base-cycle.html` |
-| `slider-cycle.nc` | both, with the engraving | **14.2 min** | 23.2 | as the singles | `slider-cycle.html` |
+| `base-cycle.nc` | both (G54 left + G55 right) | **13.3 min** | 17.7 | as the singles | `base-cycle.html` |
+| `slider-cycle.nc` | both, with the engraving | **13.8 min** | 23.2 | as the singles | `slider-cycle.html` |
 
-Playbacks: `*-sim.html` (rCAD simulation with the machine and the vise closed on the work). Pictures:
-`*-vise-iso.png`, `*-vise-front.png`, `*-cycle-vise-top.png`.
+HTML playbacks (`*-sim.html`) and the screenshots taken from them are no longer made (Jonas, 2026-11-19): each
+was another full simulation. The older ones were removed so they can't be mistaken for these programs.
+`export_cam_simulation` makes one when wanted. The stock pictures are `*-sim.png` / `*-sim-top.png`, and the
+toolpaths are `*-paths.png`.
 
 ## Blanks, shims and tools
 
-- Saw blanks to **100 ± 1 mm**. Find stock accepts ± 1.5. The parts take 98.0 (two 45 mm parts and an 8 mm gap).
-  Op 1 finishes the outer ends full height and op 2's band rough takes the stub beyond them.
-- Aluminium: 6061 1/2 × 1 flat bar (12.7 × 25.4). Brass: C360 3/8 × 1 (9.5 × 25.4).
-- **Shims for brass op 1:** two flat **1.5 mm** strips about **25 × 39**, one under each slider. Put them 12 mm
+- Blanks are sawn to **101 mm** (brass measured). Op 1 Find stock expects 101 ± 1.0. The parts take 98.0 (two
+  45 mm parts and an 8 mm gap), so 1.5 is left at each end. Op 1 roughs and finishes the outer ends down to the
+  jaw limit, and op 2's band rough takes the stub above. Each end sticks out 2.75 past the 95.5 jaws.
+- Aluminium: 6061 1/2 × 1 flat bar (12.7 × 25.4 nominal). Brass: C360, **10.0 × 25.0 measured**. That's 2.7 of
+  stock each side of the 19.6 slider.
+- **Shims for brass op 1:** two flat **1.67 mm** strips about **25 × 39**, one under each slider. Put them 12 mm
   apart, centred on the bar's middle, so the two carrier bores at the middle break through between them. Both
-  strips stay inside the jaws' length. 1.5 is the least that keeps the seam 0.2 inside the 2.4 chamfer. Thicker
-  is fine but costs grip in op 1.
+  strips stay inside the jaws' length (Y ±45 against the jaws' ±47.75). Anything from 1.0 up keeps the seam
+  inside the chamfer, and thicker costs grip in op 1.
 - Tools, with stick-outs from the ER16 nut:
 
   | T | Tool | Stick-out |
@@ -89,7 +95,7 @@ Playbacks: `*-sim.html` (rCAD simulation with the machine and the vise closed on
   | Aluminium | T24 | roughing | **9000** | 3000, feed-scheduled (down to 1185 in the gap) | target 650 W, cap 850 (caution) | 9k is the strong speed (guidelines, F004 = 150) |
   | Aluminium | T24 | top facing, finishing | 12 000 | 3000 face, 2000 finish | under 684 W | chips fling better at 12k |
   | Aluminium | T1 | chamfers, edge breaks | 24 000 | 1850 | light | as guidelines (the "479 m/min" warning is known) |
-  | Brass | T24, T1 | everything | 18 000 | 1350 rough/face, 1000 finish/T1, feed-scheduled | target 300 W, cap 501 (the 18k caution) | Mild on purpose: no C360 measurements yet, and the high-helix DLC cutter can pull into C360. The op 1 rough is in three levels (1.9 deep), which takes its peak from 527 W to 378 W. |
+  | Brass | T24, T1 | everything | 18 000 | 1350 rough/face, 1000 finish/T1; the feed schedule raises light cuts (up to 2850 on a 0.66-wide wall shave) | target 300 W; cap 400 in op 1 (3.0 mm grip), 501 in op 2 (the 18k caution) | Mild on purpose: no C360 measurements yet, and the high-helix DLC cutter can pull into C360. The op 1 rough is in four levels (1.6 deep), with a 320 W peak. |
 
   Links run at 5000 mm/min (`link_feed`), cutting at most 3000, rapids 5000. All roughing is climb, in laps
   (adaptive), with `stay_down`.
@@ -119,7 +125,7 @@ The centre block is the fixed jaw of both stations.
 ## Op 1 (bottom side up), left station
 
 Lay the bar on the ledges, centred along the jaws. Both ends stick out about 2 mm past the jaws. **Brass: the two
-1.5 mm shim strips go under it.** The jaws grip 4.7 of the aluminium bar and 3.2 of the brass.
+1.67 mm shim strips go under it.** The jaws grip 4.7 of the aluminium bar and 3.0 of the brass.
 
 1. Open `base-op1.nc` / `slider-op1.nc`, arm the bog guard, Cycle Start.
 2. T99 + Find stock (TOL 1.5, DEPTH 3): jog over the middle, then Continue.
@@ -129,7 +135,7 @@ Lay the bar on the ledges, centred along the jaws. Both ends stick out about 2 m
 3. T24 cuts, in this order:
    - Faces the top 0.2 at 12k (brass: 18k, with the passes along the slide (Y), since this is the sliding face).
    - Roughs round both parts, the 8 mm gap and the ends to Z5 (aluminium, two levels of 3.75 at 9k) or 3.5 above
-     the blank's bottom (brass, three levels at 18k). Where it enters the gap it is close to slotting (5.95 wide
+     the blank's bottom (brass, four levels at 18k, capped at 400 W). Where it enters the gap it is close to slotting (5.95 wide
      in aluminium). The feed schedule drops to 1185 mm/min there, and that's the 734 W peak.
    - **Aluminium: CHIP PAUSE.** Spindle and coolant stop. Blow the chips off the bar and out of the gap, then
      Cycle Start.
@@ -145,7 +151,7 @@ Lay the bar on the ledges, centred along the jaws. Both ends stick out about 2 m
 
 Turn the blank over, either way (the carrier bores are symmetric about the middle). Wipe the ledges clean first:
 the parts sit on 1.6 mm of land on each 1.9 ledge. The finished bottom goes down on the ledges, with op 1's
-finished walls in the jaws. Those walls reach 7.5 mm (aluminium) / 5.8 mm (brass) above the ledge, and the jaws
+finished walls in the jaws. Those walls reach 7.5 mm (aluminium) / 6.47 mm (brass) above the ledge, and the jaws
 grip 4.7. The raw band above the walls is wider (25.4): make sure the jaws close on the finished walls, not on it.
 Push the bar against the fixed jaw and clamp.
 
@@ -166,8 +172,8 @@ Push the bar against the fixed jaw and clamp.
    - T1 at 24k: the **1.7 rail-top chamfers**, outside, round the R2.5 corners to the channel. The tip is at Z6.3.
      Then the 0.3 edge breaks (channel edges, floor ends, pocket rims).
 6. Slider:
-   - Face to Z8 (1.3 off).
-   - Rough the band above op 1's walls off to Z5.6. The two sliders **separate during this rough**.
+   - Face to Z8 (1.8 off, 217 W).
+   - Rough the band above op 1's walls off to Z6.27. The two sliders **separate during this rough**.
    - T1: the **2.4 ingot chamfer** round the top. The tip is at Z5.02, just over the jaws' Z5.0.
 7. Sliders: without unclamping, open `slider-engrave.nc` and run it. It uses T1 again, the same work offset and
    no probing. To swap the pattern for a custom one or a name:
@@ -196,8 +202,8 @@ work offset, stock and fixtures. `export_gcode` on the op 1 setup posts the whol
 
 | | Separate programs (rcnc sim) | Cycle (rcnc sim) | Before | Tool changes |
 |---|---|---|---|---|
-| Bases | 6.1 + 9.4 = 15.5 min | **13.2 min** | 17.7 | 6 → **3** |
-| Sliders | 8.9 + 6.0 + 1.5 = 16.4 min | **14.2 min** | 23.2 | 7 → **3** |
+| Bases | 6.2 + 9.4 = 15.6 min | **13.3 min** | 17.7 | 6 → **3** |
+| Sliders | 8.7 + 5.9 + 1.5 = 16.1 min | **13.8 min** | 23.2 | 7 → **3** |
 
 The times come from the rcnc simulator. They include its tool-change and probing moves, but not the time you
 spend at the pauses (three in the base cycle, one in the slider cycle) or on the tool swaps.
@@ -230,21 +236,24 @@ and as fixture boxes, and the toolpaths stay 0.3 over them.
 
 | Program | Problems | Peak spindle (where) | cm³/min there | Chatter | Chips | Unfinished |
 |---|---|---|---|---|---|---|
-| base-op1 | none | 734 W at 9k (caution 850): rough entering the gap, X−7.6 Y0.5, 5.95 × 3.75 at F1185 | 26.4 | rough: "expected" (1.62) | ok | none |
-| base-op2 | none | 673 W at 9k (850): channel rough, X−1.7 Y41.6, 3.58 × 2.80 at F3000; face 411 W at 12k (684) | 30.1; face 17.0 | ok | channel rough: caution (0.56) | none |
-| slider-op1 | none | 378 W at 18k (501): rough, X5.7 Y−0.5, 3.26 × 3.87 at F1050 | 13.2 | rough: "expected" (1.54) | ok | none |
-| slider-op2 | none | 359 W at 18k (501): band rough, X−3.2 Y0.4, 5.55 × 2.20 at F1050 | 12.8 | band rough: "expected" (1.34) | ok | none |
+| base-op1 | none | 728 W at 9k (caution 850): rough entering the gap, 5.91 × 3.75 at F1185 | 26.3 | rough: "expected" (1.35) | ok | none |
+| base-op2 | none | 662 W at 9k (850): channel rough, 3.52 × 2.80 at F3000; face 415 W at 12k (684) | 29.6; face 17.1 | ok | channel rough: caution (0.56) | none |
+| slider-op1 | none | 320 W at 18k (cap 400, caution 501): rough, X4.5 Y0.5, 4.30 × 1.62 at F1800 | 12.5 | rough: "expected" (1.28) | ok | none |
+| slider-op2 | none | 311 W at 18k (501): band rough, X−1.3 Y−0.5, 3.72 × 1.53 at F2200 | 12.5 | band rough: "expected" (1.22) | ok | none |
 | slider-engrave | none | – | – | ok | ok | none |
 | base-cycle | none | as the singles | | | | |
 | slider-cycle | none | as the singles | | | | |
 
 Notes on the checks:
-- **Chatter "expected" on the roughs (margins 1.3–1.6, under 1 is stable).** rCAD's model isn't calibrated to the
+- **Chatter "expected" on the roughs (margins 1.2–1.4, under 1 is stable).** rCAD's model isn't calibrated to the
   mill (guidelines), and its advice is 22 500 rpm, which the spindle can't power for these cuts (403 W caution at
   24k). The guidelines say to rough at 9k. I kept 9k (aluminium) and the mild 18k (brass), and the bog guard is
   required. Listen on the first part.
 - **Depth at 9k:** the base op 1 rough is two levels of 3.75 (7.5 in all). The guidelines prefer 5–7 per level,
   and one 7.5 level would be over 7.
+- **How long a re-plan takes now:** rCAD branch `cam-build-cache` caches each setup's toolpaths between calls, and
+  `cam.py` adds operations with `build: false`. The whole slider re-run (op 1, op 2, the engraving and the cycle)
+  took 5.0 min, down from about 30. `verify_gcode` on all 7 files took 3.6 min, and the rcnc simulator 7 s.
 - **verify_gcode on every final file** (`verify.json`, after pauses, dwells and the guard line): all 7 ok, 0
   problems, stamps match the setups. The cycles were read station by station and simulated together on the
   machine. As a check, a cycle with one Z changed to dig into station 2 was caught as a gouge.
@@ -252,10 +261,12 @@ Notes on the checks:
   `RCNC_BORES="-5,0;5,0"` for op 2): all six programs that probe ran to the end with the guard line, Find stock,
   the pauses, Find bores (bores 10.000 apart, 0.000° turn) and three tool changes each. `slider-engrave` alone
   can't run there, because G55 isn't set without op 2 before it. It ran inside `slider-cycle`.
-- **Find stock size in op 2:** the single op 2 programs expect 25.6 × 100.2 (op 1's simulated leftover, on its
-  0.6 mm grid). The cycles expect the setup's 25.4 × 100. Both are inside TOL 1.5.
+- **Find stock size:** op 1 expects the bar (25.0 × 101 brass, 25.4 × 101 aluminium, TOL 1.0). The single op 2
+  programs expect op 1's simulated leftover on its grid (25.2 × 101.2 brass, 25.6 × 101.2 aluminium), and the
+  cycles expect the setup's size. All are inside op 2's TOL 1.5. The rcnc simulator found 25.0 × 101.000 for the
+  brass and 25.4 × 101.000 for the aluminium.
 
-## rCAD changes made for this re-plan (branch `slider-1118`)
+## rCAD changes made for this re-plan (branches `slider-1118`, `cam-build-cache`)
 
 - **Deburr tip fix:** the deburr operation put the chamfer mill's tip a whole chamfer depth deeper than
   `tip_offset` said. For the 1.7 rail chamfer the tip went to Z4.6, clamped at the jaws to 5.0, and the shank cut
@@ -264,3 +275,6 @@ Notes on the checks:
 - **Deburr corner fix:** a picked loop that started mid-edge lost its rounded corner at the start. Two of the four
   rail chamfers missed a corner.
 - **verify_gcode for jobs:** a two-station program is read back station by station.
+- **Build cache:** a setup's toolpaths, and the stock the setups before it leave, are kept between calls. They're
+  keyed by everything they depend on: the chain's setups and the part geometry. Before, every info, picture,
+  export and sheet call rebuilt them, and every call on an op 2 setup re-made and re-simulated op 1.

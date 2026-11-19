@@ -1,6 +1,6 @@
 (Slider op2 engrave - made by rCAD)
 (RCNC REQUIRE_GUARD: the bog guard [Settings -> Listening, feed hold on] must be armed: rcnc refuses Cycle Start without it)
-(SIM OK: 0 problems in rCAD's stock simulation of these toolpaths, hash 0d8b220f5bf4ee43)
+(SIM OK: 0 problems in rCAD's stock simulation of these toolpaths, hash 9a890210d10792ec)
 (work zero: part bottom, stock centre [on the vise])
 (carries on from Slider op2 top: clamp the part it left with its top side up)
 (fixture fixed jaw [centre block] [-X]: X-22.5 to -9.8, Y-47.75 to 47.75, Z0 to 4.7 [work])
@@ -18,9 +18,9 @@ T1 M6
 S18000 M3
 G4 P3
 M8
-G0 Z14.3
+G0 Z14.8
 X1.422 Y7.4
-Z11.3
+Z11.8
 G1 Z7.6 F200
 X-6.4 Y15.222 F1000
 G0 Z9
@@ -281,7 +281,7 @@ G0 Z9
 Y-15.222
 G1 Z7.6 F200
 X1.422 Y-7.4 F1000
-G0 Z14.3
+G0 Z14.8
 
 G53 G0 Z0
 M5

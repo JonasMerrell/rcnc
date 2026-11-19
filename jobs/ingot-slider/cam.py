@@ -17,9 +17,9 @@ import json
 
 # ---- the bar (nominal until Jonas measures it) ----
 BAR_AL = (25.4, 12.7)       # width, height: 6061 1/2 x 1 in
-BAR_BR = (25.4, 9.5)        # C360 3/8 x 1 in
-SHIM_BR = 1.5               # brass op 1 lies on two shim strips this thick (op 1's walls then reach Z5.8 in op 2)
-BLANK_L = 100.0             # sawn 99.5 +- 0.5; op 1 finishes the parts' outer ends 98 apart
+BAR_BR = (25.0, 10.0)       # C360, measured 10.0 x 25.0 (Jonas, 2026-11-19)
+SHIM_BR = 1.67              # brass op 1 lies on two shim strips this thick (Jonas's shims; 10 mm bar: op 1's walls reach Z6.47 in op 2)
+BLANK_L = 101.0             # sawn to 101 (Jonas, 2026-11-19); op 1 finishes the parts' outer ends 98 apart
 FACE_AL, FACE_BR = 0.2, 0.2  # op 1 facing of the bar top (the parts' bottoms)
 BASE_T, SLIDER_T = 9.0, 8.0
 JAW_LIMIT = 5.0             # lowest the tool goes beside the jaws (their top 4.7 + 0.3)
@@ -120,12 +120,12 @@ def setup(name, studio, stock=None, follows=None, orient="top", origin="part_bot
     return {"tool": "create_cam", "args": a}
 
 
-def rough(c, f, name, bottom, stepdown, rpm=None, leave_floor=0.2, **kw):
+def rough(c, f, name, bottom, stepdown, rpm=None, leave_floor=0.2, cap=None, **kw):
     """Adaptive roughing from the power budget: the stepover is picked so the steady cut takes the target at the
     feed, the feed drops only where the engagement rises, capped at the caution at that speed; climb."""
     rpm = rpm or f["rough_rpm"]
     return op(c, "adaptive", name, tool=24, bottom=bottom, stepdown=stepdown, leave=0.3, leave_floor=leave_floor, rpm=rpm, feed=f["feed"],
-              chip_thinning=True, power_target=f["target"], power_cap=CAUTION[rpm], feed_schedule=True, **kw)
+              chip_thinning=True, power_target=f["target"], power_cap=cap or CAUTION[rpm], feed_schedule=True, **kw)
 
 
 S = [{"tool": "open_document", "args": {"path": "slider.json"}},
@@ -139,7 +139,7 @@ wall_top = top1 - JAW_LIMIT         # op 2: how high op 1's walls reach
 assert BASE_T - RAIL_CH <= wall_top - 0.2 + 1e-9, f"rail chamfer lower edge Z{BASE_T - RAIL_CH} not 0.2 under the op 1 wall top Z{wall_top}"
 S += [setup("Base op1 bottom", 3, stock={"size": [W, BLANK_L, H], "bottom": H - FACE_AL - BASE_T, "material": "6061-T6"}, orient="bottom",
             origin="stock_bottom_center", station_x=FIXED_L - W / 2, fixtures=jaws(W, +1), model="DMC2-twostation-base", with_=["Base op2 top"])]
-S += tools(0, AL) + probe(0, 3, 1.5) + [
+S += tools(0, AL) + probe(0, 3, 1.0) + [
     op(0, "face", f"Face the bar top (the bases' bottoms) {FACE_AL}", tool=24, stepdown=FACE_AL, stepover=0.4, rpm=AL["face_rpm"], feed=AL["feed"]),
     rough(0, AL, f"Rough round both bases, the gap and the ends to Z{JAW_LIMIT:g} (laps, power budget)", bottom=JAW_LIMIT,
           stepdown=(top1 - JAW_LIMIT) / 2, leave_floor=0.0),
@@ -183,10 +183,10 @@ shims = [{"name": f"{SHIM_BR} mm shim strip (25 x 39) under the {e} slider, op 1
 S += [setup("Slider op1 bottom", 4, stock={"size": [W, BLANK_L, H], "bottom": H - FACE_BR - SLIDER_T, "material": "Brass C360"}, orient="bottom",
             origin="stock_bottom_center", station_x=FIXED_L - W / 2, fixtures=jaws(W, +1, z0=-SHIM_BR, extra=shims), model="DMC2-twostation-slider",
             with_=["Slider op2 top", "Slider op2 engrave"], zref="")]
-S += tools(2, BR) + probe(2, 3, 1.5) + [
+S += tools(2, BR) + probe(2, 3, 1.0) + [
     op(2, "face", f"Face the bar top (the sliders' bottoms) {FACE_BR}, passes along the slide (Y)", tool=24, stepdown=FACE_BR, angle=90, stepover=0.4),
-    rough(2, BR, f"Rough round both sliders, the gap and the ends to Z{low1:g} (laps, power budget)", bottom=low1, stepdown=(top1 - low1) / 3,
-          leave_floor=0.0),
+    rough(2, BR, f"Rough round both sliders, the gap and the ends to Z{low1:g} (laps, power budget, capped at 400 W: the jaws hold only {4.7 - SHIM_BR:.1f} of the bar)",
+          bottom=low1, stepdown=(top1 - low1) / 4, leave_floor=0.0, cap=400),
     op(2, "contour", f"Finish the walls in one full-height pass, down to Z{low1:g} (op 2 cuts no wall below the chamfer)", tool=24, side="outside",
        bottom=low1, stepdown=20, lead=2, feed=BR["fin_feed"]),
     op(2, "bore", "Magnet pockets 8.05 x 3.15 (helical, finish floor)", tool=24, feed=BR["fin_feed"]),
@@ -211,5 +211,9 @@ S += [setup("Slider op2 engrave", 4, follows="Slider op2 top", z=LEDGE_Z - FACE_
 S += [tools(4, BR)[0],
       op(4, "trace", "Engrave the crosshatch 0.4 deep (chamfer mill tip)", tool=1, sketches=[9, 10], depth=0.4, stepdown=0.4)] + out(4, "slider-engrave") + cycle(2, "slider-cycle")
 S += [{"tool": "save_document", "args": {"path": "slider-cam.json"}}]
+# toolpaths are made once per setup, by cam_info at its end, not again after every operation added
+for st in S:
+    if st["tool"] == "cam_op":
+        st["args"]["build"] = False
 json.dump(S, open("cam.json", "w"), indent=1)
 print(len(S), "steps")

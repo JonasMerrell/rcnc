@@ -59,31 +59,31 @@ operations:** op 1 finishes every outside wall full height down to the jaw limit
 below the top chamfer, and the chamfer's lower edge sits 0.2 under the top of op 1's wall, so the seam between
 them is inside the chamfer, where the chamfer removes it.
 
-The bars are bought: **6061 1/2 × 1 (12.7 × 25.4)** and **C360 3/8 × 1 (9.5 × 25.4)**, nominal until measured
-(`BAR_AL`, `BAR_BR`, `SHIM_BR` in `cam.py`; the asserts there re-check the seam if they change).
+The bars are bought: **6061 1/2 × 1 (12.7 × 25.4, nominal until measured)** and **C360 measured 10.0 × 25.0**,
+both sawn to 101 blanks (`BAR_AL`, `BAR_BR`, `SHIM_BR`, `BLANK_L` in `cam.py`; the asserts there re-check the seam).
 
-| | Base (6061, 12.7 bar) | Slider (C360, 9.5 bar) |
+| | Base (6061, 12.7 bar) | Slider (C360, 10.0 bar) |
 |---|---|---|
-| Op 1 face | 0.2 → 12.5 | 0.2 → 9.3 |
-| Under the bar in op 1 | nothing | two 1.5 mm shim strips (25 × 39, 12 mm apart) |
-| Op 1 walls down to (op 1 Z) | Z5.0 | Z5.0 (3.5 above the blank's bottom) |
-| Op 1 grip on the raw bar | 4.7 | **3.2** (light cuts: roughing peak 378 W at 18k) |
-| Op 1 walls in op 2 reach | Z7.5 | Z5.8 |
-| Op 2 face to | Z9 (3.5 off, two levels) | Z8 (1.3 off) |
+| Op 1 face | 0.2 → 12.5 | 0.2 → 9.8 |
+| Under the bar in op 1 | nothing | two 1.67 mm shim strips (25 × 39, 12 mm apart) |
+| Op 1 walls down to (op 1 Z) | Z5.0 | Z5.0 (3.33 above the blank's bottom) |
+| Op 1 grip on the raw bar | 4.7 | **3.0** (rough capped at 400 W, peak 320 W at 18k) |
+| Op 1 walls in op 2 reach | Z7.5 | Z6.47 |
+| Op 2 face to | Z9 (3.5 off, two levels) | Z8 (1.8 off) |
 | Top chamfer | 1.7 on the rails | 2.4 round the ingot |
-| Chamfer lower edge | **Z7.3** (0.2 under 7.5) | **Z5.6** (0.2 under 5.8) |
+| Chamfer lower edge | **Z7.3** (0.2 under 7.5) | **Z5.6** (0.87 under 6.47) |
 | Chamfer tip (≥ 5.0 beside the jaws) | Z6.3 | Z5.02 |
-| Op 2 grip on op 1's finished walls | 4.7 of 7.5 | 4.7 of 5.8 |
+| Op 2 grip on op 1's finished walls | 4.7 of 7.5 | 4.7 of 6.47 |
 
 Op 2's band rough takes the stock above op 1's walls down to exactly their top, leaving 0.3 off the walls; the
 chamfer's cone removes that 0.3 strip and the raw skin together. The same holds at the part ends and round the
 corners (R2.5 base, R3 slider): op 1's contour runs the whole outline.
 
-- **No 0 mm seam left.** The smallest margin is the 0.2 between each chamfer's lower edge and op 1's wall top.
+- **No 0 mm seam left.** The smallest margin is the base's 0.2 between the chamfer's lower edge and op 1's wall top (the slider has 0.87).
   If the measured bars differ, `cam.py` re-derives the wall tops; the asserts fail if a margin goes under 0.2.
 - **Base gap web:** between the two bases the 8 mm gap is cut by op 1 down to Z5 (op 1), so in op 2 the carrier is
   only the band above Z7.5. The band rough separates the bases; after it each base is held by its own 45 mm of
   4.7 mm grip, and only finishing and T1 follow.
 - Brass op 1 takes Z from the probed bar top (Z0 = the blank's bottom = the shim top), so the shim's thickness
   doesn't change the cut; a thinner shim lowers the wall top in op 2 by the same amount and the assert in
-  `cam.py` catches it (1.5 is the least that keeps 0.2 under the 2.4 chamfer).
+  `cam.py` catches it (on the 10.0 bar, 1.0 is the least that keeps 0.2 under the 2.4 chamfer; Jonas's 1.67 gives 0.87).
