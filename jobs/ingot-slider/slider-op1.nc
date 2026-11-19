@@ -1,6 +1,6 @@
 (Slider op1 bottom - made by rCAD)
 (RCNC REQUIRE_GUARD: the bog guard [Settings -> Listening, feed hold on] must be armed: rcnc refuses Cycle Start without it)
-(SIM OK: 0 problems in rCAD's stock simulation of these toolpaths, hash cbe75573a17cd5c0)
+(SIM OK: 0 problems in rCAD's stock simulation of these toolpaths, hash 4de3e1bd6f0885fa)
 (work zero: stock bottom, centre [on the vise])
 (clamp the part with its bottom side up)
 (fixture moving jaw [-X]: X-25.2 to -12.5, Y-47.75 to 47.75, Z-1.67 to 3.03 [work])
@@ -11,7 +11,7 @@
 (T99 YIDOFENG 3D touch probe - touch probe, D2 stylus ball, flute length 12, stickout 40)
 (T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)
 (T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill, flute length 18, stickout 22)
-(estimated time 5:40)
+(estimated time 5:03)
 G21 G17 G40 G49 G80 G90 G91.1 G94 G64
 G54
 
@@ -20,7 +20,7 @@ G53 G0 Z0
 T99 M6
 (rcnc Find stock: jog the probe over the middle of the stock, a few mm above it, and press Continue)
 (Find stock touches the sides 3 below the top: measure sawn stock there, its ends may not be square)
-(RCNC FIND_STOCK SIZE=25,101,10 AT=0,0,10 TOL=1 DEPTH=3)
+(RCNC FIND_STOCK SIZE=25,101,10 AT=0,0,10 TOL=1 DEPTH=3 VISE=1)
 
 (Probe stock centre - Probe)
 
@@ -3353,71 +3353,6 @@ G2 X13.076 Y47.588 I-0.12 J-6.474
 G0 Z10.8
 X15.005 Y-24.5
 Z10
-Z6.65
-G3 X14.005 Y-24.768 I0 J-2 F5000
-G3 X13.005 Y-26.5 I1 J-1.732 F1000
-G1 Y-46
-G2 X6.8 Y-52.205 I-6.208 J0.003
-G1 X-6.8
-G2 X-13.005 Y-46 I0.003 J6.208
-G1 Y-7
-G2 X-6.8 Y-0.795 I6.208 J-0.003
-G1 X6.8
-G2 X13.005 Y-7 I-0.003 J-6.208
-G1 Y-26.5
-Y-28
-G3 X13.273 Y-29 Z6.817 I2 J0
-G3 X15.005 Y-30 Z7.15 I1.732 J1 F5000
-G0 Y28.5
-Z6.65
-G3 X14.005 Y28.232 I0 J-2
-G3 X13.005 Y26.5 I1 J-1.732 F1000
-G1 Y7
-G2 X6.8 Y0.795 I-6.208 J0.003
-G1 X-6.8
-G2 X-13.005 Y7 I0.003 J6.208
-G1 Y46
-G2 X-6.8 Y52.205 I6.208 J-0.003
-G1 X6.8
-G2 X13.005 Y46 I-0.003 J-6.208
-G1 Y26.5
-Y25
-G3 X13.273 Y24 Z6.817 I2 J0
-G3 X15.005 Y23 Z7.15 I1.732 J1 F5000
-G0 X14.975 Y28.5
-Z6.65
-G3 X13.561 Y27.914 I0 J-2
-G3 X12.975 Y26.5 I1.414 J-1.414 F1000
-G1 Y7
-G2 X6.8 Y0.825 I-6.178 J0.003
-G1 X-6.8
-G2 X-12.975 Y7 I0.003 J6.178
-G1 Y46
-G2 X-6.8 Y52.175 I6.178 J-0.003
-G1 X6.8
-G2 X12.975 Y46 I-0.003 J-6.178
-G1 Y26.5
-Y25
-G3 X13.388 Y23.782 Z6.858 I2 J0
-G3 X14.975 Y23 Z7.15 I1.587 J1.218 F5000
-G0 Y-24.5
-Z6.65
-G3 X13.561 Y-25.086 I0 J-2
-G3 X12.975 Y-26.5 I1.414 J-1.414 F1000
-G1 Y-46
-G2 X6.8 Y-52.175 I-6.178 J0.003
-G1 X-6.8
-G2 X-12.975 Y-46 I0.003 J6.178
-G1 Y-7
-G2 X-6.8 Y-0.825 I6.178 J-0.003
-G1 X6.8
-G2 X12.975 Y-7 I-0.003 J-6.178
-G1 Y-26.5
-Y-28
-G3 X13.388 Y-29.218 Z6.858 I2 J0
-G3 X14.975 Y-30 Z7.15 I1.587 J1.218 F5000
-G0 X15.005 Y-24.5
-Z6.65
 Z4.33
 G1 Z3.33 F250
 G3 X14.005 Y-24.768 I0 J-2 F5000

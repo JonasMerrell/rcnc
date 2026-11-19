@@ -22,6 +22,7 @@ SHIM_BR = 1.67              # brass op 1 lies on two shim strips this thick (Jon
 BLANK_L = 101.0             # sawn to 101 (Jonas, 2026-11-19); op 1 finishes the parts' outer ends 98 apart
 FACE_AL, FACE_BR = 0.2, 0.2  # op 1 facing of the bar top (the parts' bottoms)
 BASE_T, SLIDER_T = 9.0, 8.0
+INGOT_CH_1 = 1.7          # the ingot chamfer's first pass (half the area of the 2.4)
 JAW_LIMIT = 5.0             # lowest the tool goes beside the jaws (their top 4.7 + 0.3)
 RAIL_CH, INGOT_CH = 1.7, 2.4  # the chamfers that hide the seam (build.py BCH / SCH)
 
@@ -98,6 +99,14 @@ def out(c, stem, only=None):
             {"tool": "export_cam_simulation", "args": {"cam": c, "path": f"{stem}-sim.html", "resolution": 500, **k}}]
 
 
+def info(c, stem):
+    """A setup that is only posted as part of its job (no program of its own): its numbers and pictures."""
+    return [{"tool": "cam_info", "args": {"cam": c}},
+            {"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem}-sim.png", "resolution": 500}},
+            {"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem}-sim-top.png", "view": "top", "resolution": 500}},
+            {"tool": "render_cam", "args": {"cam": c, "path": f"{stem}-paths.png"}}]
+
+
 def cycle(c, stem):
     """The whole job c leads: both stations in one program, simulation, sheet and playback."""
     return [{"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem}-sim.png", "resolution": 500}},
@@ -129,12 +138,12 @@ def setup(name, studio, stock=None, follows=None, orient="top", origin="part_bot
     return {"tool": "create_cam", "args": a}
 
 
-def rough(c, f, name, bottom, stepdown, rpm=None, leave_floor=0.2, cap=None, **kw):
+def rough(c, f, name, bottom, stepdown, rpm=None, leave_floor=0.2, cap=None, target=None, **kw):
     """Adaptive roughing from the power budget: the stepover is picked so the steady cut takes the target at the
     feed, the feed drops only where the engagement rises, capped at the caution at that speed; climb."""
     rpm = rpm or f["rough_rpm"]
     return op(c, "adaptive", name, tool=24, bottom=bottom, stepdown=stepdown, leave=0.3, leave_floor=leave_floor, rpm=rpm, feed=f["feed"],
-              chip_thinning=True, power_target=f["target"], power_cap=cap or CAUTION[rpm], feed_schedule=True, **kw)
+              chip_thinning=True, power_target=target or f["target"], power_cap=cap or CAUTION[rpm], feed_schedule=True, **kw)
 
 
 S = [{"tool": "open_document", "args": {"path": "slider.json"}},
@@ -170,7 +179,7 @@ S += tools(1, AL) + probe(1, 3, 1.5) + find_bores(1, 1.0) + [
        rpm=AL["fin_rpm"], feed=AL["fin_feed"]),
     op(1, "bore", "Magnet pockets 8.05 x 3.15 (helical, finish floor)", tool=24, rpm=AL["fin_rpm"], feed=1500),
     rough(1, AL, f"Rough the band above op 1's walls off to Z{wall_top - 0.2:g}, 0.2 under their top Z{wall_top:g} (no web left), 0.3 off them (separates the bases)",
-          bottom=wall_top - 0.2, stepdown=BASE_T - wall_top + 0.2, leave_floor=0.0),
+          bottom=wall_top - 0.2, stepdown=BASE_T - wall_top + 0.2, leave_floor=0.0, target=120, cap=150),
     op(1, "trace", "Finish the rails' channel walls, Z9 to Z6, one pass (traces inside the channel sketch, straight through the cleared gap)", tool=24,
        sketches=[14], side="inside", top=BASE_T, depth=BASE_T - 6.0, stepdown=BASE_T - 6.0, rpm=AL["fin_rpm"], feed=AL["fin_feed"]),
     op(1, "deburr", f"Chamfer {RAIL_CH} the rail tops outside (takes the 0.3 left on the band and hides the op 1 / op 2 seam)", tool=1,
@@ -206,19 +215,23 @@ S += tools(2, BR) + probe(2, 3, 1.0) + [
 
 S += [setup("Slider op2 top", 4, follows="Slider op1 bottom", z=LEDGE_Z - FACE_BR, station_x=FIXED_R + SW / 2, fixtures=jaws(SW, -1),
             model="DMC2-twostation-slider", wcs=2)]
-S += tools(3, BR) + probe(3, 3, 1.5) + find_bores(3, 1.5) + [
+S += tools(3, BR) + probe(3, 3, 1.5) + find_bores(3, 1.0) + [
     op(3, "face", f"Face the top down to Z{SLIDER_T:g} ({top1 - SLIDER_T:g})", tool=24, stepdown=top1 - SLIDER_T, stepover=0.4),
-    rough(3, BR, f"Rough the band above op 1's walls off to Z{wall_top - 0.2:g}, 0.2 under their top Z{wall_top:g} (no web left), 0.3 off them (separates the sliders)",
-          bottom=wall_top - 0.2, stepdown=SLIDER_T - wall_top + 0.2, leave_floor=0.0),
-    op(3, "chamfer", f"Ingot chamfer {INGOT_CH} x 45 round the top (takes the 0.3 left on the band, hides the seam; tip at Z{SLIDER_T - INGOT_CH - 0.58:.2f})",
-       tool=1, chamfer=INGOT_CH, side="outside", tip_offset=0.58),
-] + out(3, "slider-op2")
+    # light: it separates the two sliders, and after that each is held only by its own grip (Jonas's run: one moved)
+    rough(3, BR, f"Rough the band above op 1's walls off to Z{wall_top - 0.2:g}, 0.2 under their top Z{wall_top:g} (no web left), 0.3 off them (separates the sliders, light: 120 W)",
+          bottom=wall_top - 0.2, stepdown=SLIDER_T - wall_top + 0.2, leave_floor=0.0, target=120, cap=150),
+] + info(3, "slider-op2")
 
-# the default engraving: its own program, run straight after op 2 without unclamping (swap it for a name or logo)
+# T1 after op 2 in the same program: the engraving first (the field is still flat and the parts least disturbed),
+# then the ingot chamfer in two passes (Jonas: one pass was too heavy), each the same tip offset
 S += [setup("Slider op2 engrave", 4, follows="Slider op2 top", z=LEDGE_Z - FACE_BR, station_x=FIXED_R + SW / 2, fixtures=jaws(SW, -1),
             model="DMC2-twostation-slider", wcs=2)]
 S += [tools(4, BR)[0],
-      op(4, "trace", "Engrave the crosshatch 0.4 deep (chamfer mill tip)", tool=1, sketches=[9, 10], depth=0.4, stepdown=0.4)] + out(4, "slider-engrave") + cycle(2, "slider-cycle") + first_last(2, "slider", ["Slider op1 bottom"], ["Slider op2 top", "Slider op2 engrave"])
+      op(4, "trace", "Engrave the crosshatch 0.4 deep (chamfer mill tip)", tool=1, sketches=[9, 10], depth=0.4, stepdown=0.4),
+      op(4, "chamfer", f"Ingot chamfer, first pass {INGOT_CH_1:g} x 45 (about half the area of the full one; tip at Z{SLIDER_T - INGOT_CH_1 - 0.58:.2f})",
+         tool=1, chamfer=INGOT_CH_1, side="outside", tip_offset=0.58),
+      op(4, "chamfer", f"Ingot chamfer {INGOT_CH} x 45, second pass to size (takes the 0.3 left on the band, hides the seam; tip at Z{SLIDER_T - INGOT_CH - 0.58:.2f})",
+         tool=1, chamfer=INGOT_CH, side="outside", tip_offset=0.58)] + info(4, "slider-engrave") + cycle(2, "slider-cycle") + first_last(2, "slider", ["Slider op1 bottom"], ["Slider op2 top", "Slider op2 engrave"])
 S += [{"tool": "save_document", "args": {"path": "slider-cam.json"}}]
 # toolpaths are made once per setup, by cam_info at its end, not again after every operation added
 for st in S:

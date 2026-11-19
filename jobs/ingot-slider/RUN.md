@@ -57,8 +57,6 @@ guard, Find bores with rotation, and per-work-offset Z references.
 | `base-op1.nc` | left | 6.2 min | 7.1 | 728 W at 9k / 850 (rough) | `base-op1.html` |
 | `base-op2.nc` | right | 9.4 min | 12.9 | 662 W at 9k / 850 (channel rough); face 415 W at 12k / 684 | `base-op2.html` |
 | `slider-op1.nc` | left (bar on two 1.67 mm shims) | 8.7 min | 13.4 | 320 W at 18k / 400 cap (rough; caution 501) | `slider-op1.html` |
-| `slider-op2.nc` | right | 5.9 min | 9.6 | 311 W at 18k / 501 (band rough); face 217 W | `slider-op2.html` |
-| `slider-engrave.nc` | right, straight after `slider-op2` | 1.5 min (rCAD) | about 2.5 | – | `slider-engrave.html` |
 | `base-cycle.nc` | both (G54 left + G55 right) | **13.3 min** | 17.7 | as the singles | `base-cycle.html` |
 | `slider-cycle.nc` | both, with the engraving | **13.8 min** | 23.2 | as the singles | `slider-cycle.html` |
 
@@ -66,6 +64,47 @@ HTML playbacks (`*-sim.html`) and the screenshots taken from them are no longer 
 was another full simulation. The older ones were removed so they can't be mistaken for these programs.
 `export_cam_simulation` makes one when wanted. The stock pictures are `*-sim.png` / `*-sim-top.png`, and the
 toolpaths are `*-paths.png`.
+
+## After the first slider run (2026-11-19)
+
+Jonas cut the slider. The finish was very clean and the magnets were a perfect press fit. What changed after it:
+
+- **Find bores probed too deep.** rCAD took the bores' top from the part (Z8), but they sit in the carrier between
+  the parts, whose top is the stock's (Z9.8). The probe went 3.3 mm down instead of the planned 1.5. rCAD is fixed
+  (PR #166, 49573d5), and the depth is now **1.0 below the carrier top** on both parts. On the slider the web is
+  Z6.47–9.8, so the ball's contact is 2.3 mm above its bottom; on the base the web is Z7.5–12.5 (3.5 mm margin).
+- **The ingot chamfer was too heavy in one pass.** It now runs in two passes, 1.7 then 2.4, with the same 0.58
+  tip offset and climb. Estimated tangential force in C360 (about 0.7 J/mm³, 18k, F1000): one pass ~10 N; now
+  ~4 N then ~6 N. The base's 1.7 rail chamfer cuts about half the cross-section of the old 2.4, in aluminium, so it
+  stays one pass.
+- **One slider moved in Y (its engraving was off).** Two things changed, with no extra tool change:
+  - The heavier cut after the sliders come apart was the band rough, not the chamfer: 311 W at the gap, about
+    52 N of tangential force, against ~10 N for the old chamfer. It's now targeted at 120 W, with a 225 W peak
+    (~38 N).
+  - The engraving runs before the chamfer, straight after the band rough.
+
+  Each separated part is held by its own 45 mm × 4.7 mm of finished wall on both jaws. With the vise done up by
+  hand (say 2 kN, split between the two parts, steel on brass μ ≈ 0.15 on both faces) that's ~300 N of friction
+  per part, well over these forces. So I suspect one slider wasn't really clamped. Before Cycle Start, check that
+  both parts are tight (try to slide each one by hand), and clean the jaws and ledges.
+  - The chamfer's direction isn't chosen per side: rCAD runs it climb round the outline, so along the long walls
+    it pushes one way on one side and the other way on the other. I didn't change that.
+- **The op 1 wall finish was two depths.** rCAD stopped the outside wall pass at the magnet pockets' floor. Fixed
+  (PR #166, 49573d5): the slider walls now go in one 6.47 mm full-height pass at 89 W, 0.41 wide (T24 at 24
+  stick-out; the flutes are 19). The base's was already one 7.5 mm pass (223 W at 12k).
+- **Find stock from the saved vise location** (rcnc PR 22, `FIND_STOCK VISE=`): no jogging to the stock.
+  - **The mill PC needs rcnc 2a7bb0d** (branch `claude/project-thread-k4skge`, or PR 22 once merged). It is on
+    2eb5ac6, where Find stock with `VISE=` still waits for you to move over the stock. 2a7bb0d still has PR 14
+    (per-offset Z), PR 18 (rotation) and the bog guard (`REQUIRE_GUARD`).
+  - **Once, with the vise empty:** Probe page → Vise → Find vise location, then Save. Do it again if the vise is
+    moved.
+  - **Place each blank across the middle of the jaws** (101 in 95.5 jaws: 2.75 out at each end). Find stock
+    starts at the vise's middle Y and searches about ±8 mm, so by eye is enough; a pencil mark at the jaw middle
+    helps.
+  - op 1 (left station): `VISE=1`. op 2 (right station): `VISE=-1 JAWAT=-12.5` (base) / `-9.8` (slider), because
+    op 1's finished wall lies against the jaw, under the wider raw band.
+- `slider-op2.nc` and `slider-engrave.nc` are gone. `slider-last.nc` (op 2 + engraving + chamfer) and the cycle
+  replace them.
 
 ## Blanks, shims and tools
 
@@ -128,7 +167,8 @@ Lay the bar on the ledges, centred along the jaws. Both ends stick out about 2 m
 1.67 mm shim strips go under it.** The jaws grip 4.7 of the aluminium bar and 3.0 of the brass.
 
 1. Open `base-op1.nc` / `slider-op1.nc`, arm the bog guard, Cycle Start.
-2. T99 + Find stock (TOL 1.5, DEPTH 3): jog over the middle, then Continue.
+2. T99 + Find stock from the saved vise location (`VISE=1`): tap the stylus and press Continue. rcnc moves over
+   the stock by itself (X from the fixed jaw and the bar width, Y the vise's middle). No jogging.
    - **Aluminium:** Z comes from the Vise reference.
    - **Brass:** Z comes from the bar's probed top, so Z0 is the bar's bottom on the shims. The guidelines allow
      a probed Z here because op 1 faces that top off.
@@ -155,8 +195,9 @@ finished walls in the jaws. Those walls reach 7.5 mm (aluminium) / 6.47 mm (bras
 grip 4.7. The raw band above the walls is wider (25.4): make sure the jaws close on the finished walls, not on it.
 Push the bar against the fixed jaw and clamp.
 
-1. Open `base-op2.nc` / `slider-op2.nc`, arm the bog guard, Cycle Start.
-2. T99 + Find stock: a rough X/Y (it expects the size op 1's simulation left). Z comes from the Vise reference.
+1. Open `base-last.nc` / `slider-last.nc` (or the cycle), arm the bog guard, Cycle Start.
+2. T99 + Find stock from the saved vise location (`VISE=-1 JAWAT=`: op 1's finished wall lies against the jaw):
+   tap the stylus and Continue, no jogging. Z comes from the Vise reference.
 3. **BORES PAUSE:** the program stops with a message. Blow the chips out of the two carrier bores, check their
    mouths for burrs, then Cycle Start. A chip or burr in a bore can fail Find bores.
 4. T99 + **Find bores**: X/Y and the turn from the two carrier bores (Ø7.5, 10 apart, TOL 0.1, turn ≤ 0.5°).
@@ -167,16 +208,18 @@ Push the bar against the fixed jaw and clamp.
    - **CHIP PAUSE:** blow the chips out of the two channels and off the top.
    - Finish the channel floor at 12k, passes along the slide (Y) so the tool marks run the way the slider moves.
    - The magnet pockets.
-   - Rough the band above op 1's walls off to Z7.3. This **separates the two bases**. It's light (198 W).
+   - Rough the band above op 1's walls off to Z7.3. This **separates the two bases**. It's light: target 120 W, peak 113 W.
    - Finish the channels' walls, Z9 to Z6, in one pass. It runs straight down both channels and through the cleared gap.
    - T1 at 24k: the **1.7 rail-top chamfers**, outside, round the R2.5 corners to the channel. The tip is at Z6.3.
      Then the 0.3 edge breaks (channel edges, floor ends, pocket rims).
 6. Slider:
    - Face to Z8 (1.8 off, 217 W).
-   - Rough the band above op 1's walls off to Z6.27. The two sliders **separate during this rough**.
-   - T1: the **2.4 ingot chamfer** round the top. The tip is at Z5.02, just over the jaws' Z5.0.
-7. Sliders: without unclamping, open `slider-engrave.nc` and run it. It uses T1 again, the same work offset and
-   no probing. To swap the pattern for a custom one or a name:
+   - Rough the band above op 1's walls off to Z6.27. The two sliders **separate during this rough**. Since the
+     first run (one slider moved in Y) it's light: target 120 W, peak 225 W where it opens the gap (was 311 W).
+   - T1, in the same program: **the engraving first** (both sliders still undisturbed), then the **2.4 ingot
+     chamfer in two passes**: 1.7, then 2.4 (Jonas: one pass was too heavy). Same tip offset, the tip at Z5.72
+     then Z5.02, just over the jaws' Z5.0.
+7. To swap the engraving for a custom one or a name:
    - put a sketch on the top field (14.8 × 40.2 flat; keep 1 mm in from the chamfer: 12.8 × 38.2);
    - add a `trace` op (lines) or a `vcarve` op (text) in the "Slider op2 engrave" tab of `slider-cam.json`.
 
@@ -217,9 +260,9 @@ only one station's work and one tool change per tool:
 | Program | What | Station | Time (rcnc sim) | Sheet |
 |---|---|---|---|---|
 | `base-first.nc` | base op 1 only | left, G54 | 6.2 min | `base-first.html` |
-| `base-last.nc` | base op 2 only (Find stock, BORES PAUSE, Find bores) | right, G55 | 9.4 min | `base-last.html` |
-| `slider-first.nc` | slider op 1 only (bar on the 1.67 mm shims) | left, G54 | 8.7 min | `slider-first.html` |
-| `slider-last.nc` | slider op 2 **and** the engraving in one program (T99, T24, T1 once each) | right, G55 | 7.5 min | `slider-last.html` |
+| `base-last.nc` | base op 2 only (Find stock, BORES PAUSE, Find bores) | right, G55 | 9.5 min | `base-last.html` |
+| `slider-first.nc` | slider op 1 only (bar on the 1.67 mm shims) | left, G54 | 8.1 min | `slider-first.html` |
+| `slider-last.nc` | slider op 2, the engraving, then the 2-pass chamfer, in one program (T99, T24, T1 once each) | right, G55 | 8.1 min | `slider-last.html` |
 
 The last programs set G55 themselves (Find stock, then Find bores), so they run on their own. The header of a
 last program still lists station 1 (op 1) in its "stations" comment, but it contains no op 1 moves and no G54.
@@ -236,7 +279,7 @@ last program still lists station 1 (op 1) in its "stations" comment, but it cont
    - clamp a new raw blank in the left station (brass: on the two shim strips);
    - run `base-cycle.nc` / `slider-cycle.nc`.
 
-   Find stock asks you to jog over each station in turn: the left first, then the right.
+   Find stock goes to each station from the saved vise location by itself: the left first, then the right.
 3. **Last** (left station empty): run `base-last.nc` / `slider-last.nc` (op 2 only, G55; the slider's includes the
    engraving).
 
@@ -258,8 +301,7 @@ and as fixture boxes, and the toolpaths stay 0.3 over them.
 | base-op1 | none | 728 W at 9k (caution 850): rough entering the gap, 5.91 × 3.75 at F1185 | 26.3 | rough: "expected" (1.35) | ok | none |
 | base-op2 | none | 662 W at 9k (850): channel rough, 3.52 × 2.80 at F3000; face 415 W at 12k (684) | 29.6; face 17.1 | ok | channel rough: caution (0.56) | none |
 | slider-op1 | none | 320 W at 18k (cap 400, caution 501): rough, X4.5 Y0.5, 4.30 × 1.62 at F1800 | 12.5 | rough: "expected" (1.28) | ok | none |
-| slider-op2 | none | 311 W at 18k (501): band rough, X−1.3 Y−0.5, 3.72 × 1.53 at F2200 | 12.5 | band rough: "expected" (1.22) | ok | none |
-| slider-engrave | none | – | – | ok | ok | none |
+| slider op 2 (in slider-last / cycle) | none | 225 W at 18k (cap 150 target 120, caution 501): band rough opening the gap, 5.0 × 1.53 at F1050 | – | band rough: caution (0.86) | ok | none |
 | base-cycle | none | as the singles | | | | |
 | slider-cycle | none | as the singles | | | | |
 
@@ -278,10 +320,12 @@ Notes on the checks:
 - **verify_gcode on every final file** (`verify.json`, after pauses, dwells and the guard line): all 7 ok, 0
   problems, stamps match the setups. The cycles were read station by station and simulated together on the
   machine. As a check, a cycle with one Z changed to dig into station 2 was caught as a gouge.
-- **rcnc simulator** (`RCNC_JOB=… cargo test --release -p cnc-machine runs_a_job_file -- --ignored`, with
-  `RCNC_BORES="-5,0;5,0"` for op 2): all six programs that probe ran to the end with the guard line, Find stock,
-  the pauses, Find bores (bores 10.000 apart, 0.000° turn) and three tool changes each. `slider-engrave` alone
-  can't run there, because G55 isn't set without op 2 before it. It ran inside `slider-cycle`.
+- **rcnc simulator** (rcnc 2a7bb0d; `RCNC_JOB=… cargo test --release -p cnc-machine runs_a_job_file -- --ignored`, with
+  `RCNC_BORES="-5,0;5,0"` for op 2, plus a local, uncommitted harness setting `RCNC_VISE_OFF` that saves a vise
+  location at the simulated block's faces): all 9 programs ran to the end with the guard line, Find stock from
+  the vise location (stock 25.0 / 25.4 × 101.000, the face check against the jaw passing), the pauses, Find bores
+  (10.000 apart, 0.000°) and three tool changes each. Times: base-first 6.2, base-last 9.5, base-cycle 13.3,
+  slider-first 8.1, slider-last 8.1, slider-cycle 13.8 min.
 - **Find stock size:** op 1 expects the bar (25.0 × 101 brass, 25.4 × 101 aluminium, TOL 1.0). The single op 2
   programs expect op 1's simulated leftover on its grid (25.2 × 101.2 brass, 25.6 × 101.2 aluminium), and the
   cycles expect the setup's size. All are inside op 2's TOL 1.5. The rcnc simulator found 25.0 × 101.000 for the

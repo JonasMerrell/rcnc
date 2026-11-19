@@ -19,7 +19,7 @@ G53 G0 Z0
 T99 M6
 (rcnc Find stock: jog the probe over the middle of the stock, a few mm above it, and press Continue)
 (Find stock touches the sides 3 below the top: measure sawn stock there, its ends may not be square)
-(RCNC FIND_STOCK SIZE=25.4,101,12.7 AT=0,0,12.7 TOL=1 DEPTH=3 KEEPZ=1)
+(RCNC FIND_STOCK SIZE=25.4,101,12.7 AT=0,0,12.7 TOL=1 DEPTH=3 KEEPZ=1 VISE=1)
 
 (Probe stock centre - Probe)
 

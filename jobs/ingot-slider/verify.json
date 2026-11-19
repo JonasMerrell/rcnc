@@ -35,20 +35,6 @@
  {
   "tool": "verify_gcode",
   "args": {
-   "cam": 3,
-   "path": "slider-op2.nc"
-  }
- },
- {
-  "tool": "verify_gcode",
-  "args": {
-   "cam": 4,
-   "path": "slider-engrave.nc"
-  }
- },
- {
-  "tool": "verify_gcode",
-  "args": {
    "cam": 0,
    "path": "base-cycle.nc"
   }

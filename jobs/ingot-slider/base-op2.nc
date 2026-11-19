@@ -1,6 +1,6 @@
 (Base op2 top - made by rCAD)
 (RCNC REQUIRE_GUARD: the bog guard [Settings -> Listening, feed hold on] must be armed: rcnc refuses Cycle Start without it)
-(SIM OK: 0 problems in rCAD's stock simulation of these toolpaths, hash 50b9e52a930da101)
+(SIM OK: 0 problems in rCAD's stock simulation of these toolpaths, hash 584291b3e24f5f29)
 (work zero: part bottom, stock centre [on the vise])
 (carries on from Base op1 bottom: clamp the part it left with its top side up)
 (fixture fixed jaw [centre block] [-X]: X-25.2 to -12.5, Y-47.75 to 47.75, Z0 to 4.7 [work])
@@ -9,7 +9,7 @@
 (T99 YIDOFENG 3D touch probe - touch probe, D2 stylus ball, flute length 12, stickout 40)
 (T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)
 (T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill, flute length 18, stickout 22)
-(estimated time 5:07)
+(estimated time 5:09)
 G21 G17 G40 G49 G80 G90 G91.1 G94 G64
 G55
 (RCNC Z_REFERENCE Vise)
@@ -19,7 +19,7 @@ G53 G0 Z0
 T99 M6
 (rcnc Find stock: jog the probe over the middle of the stock, a few mm above it, and press Continue)
 (Find stock touches the sides 3 below the top: measure sawn stock there, its ends may not be square)
-(RCNC FIND_STOCK SIZE=25.6,101.2,12.7 AT=0,0,12.5 TOL=1.5 DEPTH=3 KEEPZ=1)
+(RCNC FIND_STOCK SIZE=25.6,101.2,12.7 AT=0,0,12.5 TOL=1.5 DEPTH=3 KEEPZ=1 VISE=-1 JAWAT=-12.5)
 
 (Probe stock centre - Probe)
 
@@ -30,7 +30,7 @@ M9
 M0
 (Probe carrier bore A - Probe)
 (rcnc Find bores: the probe finds the locating bores and sets X/Y from them)
-(RCNC FIND_BORES A=-5,0 B=5,0 D=7.5 TOP=9 DEPTH=1 TOL=0.1 ROT=0.5)
+(RCNC FIND_BORES A=-5,0 B=5,0 D=7.5 TOP=12.5 DEPTH=1 TOL=0.1 ROT=0.5)
 
 (Probe carrier bore B - Probe)
 
@@ -2852,20 +2852,68 @@ Z17.5
 (Rough the band above op 1's walls off to Z7.3, 0.2 under their top Z7.5 [no web left], 0.3 off them [separates the bases] - Adaptive)
 S9000 M3
 G4 P3
-X-6.136 Y-44.229
+X5.419 Y45.43
 Z11
 G1 Z7.3 F3000
-X-6.525 Y-44.564
-Y-45.198
-Y-45.831
-Y-46.464
-Y-47.098
-G2 X-6.528 Y-49.092 I-254.455 J-0.631
-G2 X-6.953 Y-50.665 I-3.484 J0.098
-G1 X-7.01 Y-50.788
-X7.01
-G2 X6.744 Y-50.207 I5.207 J2.73
-G2 X6.525 Y-48.965 I3.347 J1.231
+X5.884 Y45.599
+Y46.168
+Y46.737
+Y47.306
+G2 X5.886 Y49.106 I231.298 J0.652
+G1 X5.901 Y49.359
+X5.909 Y49.454
+X5.942 Y49.671
+X-5.941 Y49.669
+G2 X-5.883 Y48.966 I-4.114 J-0.697
+G1 Y48.407
+Y47.847
+Y47.287
+Y46.727
+Y46.168
+Y45.608
+G0 Z10
+X6.159 Y44.269
+G1 Z7.3
+X6.525 Y44.564 F2150
+Y45.198
+Y45.831
+Y46.464 F3000
+Y47.098
+G2 X6.528 Y49.092 I254.455 J0.631
+G2 X6.889 Y50.542 I3.489 J-0.099
+G1 X-6.968 Y50.696
+G2 X-6.525 Y48.965 I-3.108 J-1.718
+G1 Y48.332
+Y47.699
+Y47.066
+Y46.432
+Y45.799
+Y45.166
+Y44.533
+G0 Z10
+X-5.418 Y-45.433
+G1 Z7.3
+X-5.883 Y-45.602
+Y-46.171
+Y-46.74
+Y-47.308
+G2 X-5.886 Y-49.107 I-227.825 J-0.568
+G1 X-5.901 Y-49.358
+X-5.909 Y-49.454
+X-5.942 Y-49.671
+X5.941 Y-49.669
+G2 X5.883 Y-48.966 I4.114 J0.697
+G1 Y-48.407
+Y-47.847
+Y-47.287
+Y-46.727
+Y-46.168
+Y-45.608
+G0 Z10
+X6.657 Y-51.063
+G1 Z7.3
+X6.968 Y-50.696
+G2 X6.525 Y-48.965 I3.108 J1.718
 G1 Y-48.332
 Y-47.699
 Y-47.066
@@ -2874,27 +2922,19 @@ Y-45.799
 Y-45.166
 Y-44.533
 G0 Z10
-X6.136 Y44.229
+X-6.204 Y-44.211
 G1 Z7.3
-X6.525 Y44.564
-Y45.198
-Y45.831
-Y46.464
-Y47.098
-G2 X6.528 Y49.092 I254.455 J0.631
-G2 X6.953 Y50.665 I3.484 J-0.098
-G1 X7.01 Y50.788
-X-7.01
-G2 X-6.744 Y50.207 I-5.207 J-2.73
-G2 X-6.525 Y48.965 I-3.347 J-1.231
-G1 Y48.332
-Y47.699
-Y47.066
-Y46.432
-Y45.799
-Y45.166
-Y44.533
-G0 Z17.5
+X-6.525 Y-44.47 F2000
+Y-45.102
+Y-45.733
+Y-46.277 F3000
+Y-46.821
+Y-47.365
+G2 X-6.528 Y-49.092 I-193.507 J-0.543
+G2 X-6.889 Y-50.542 I-3.489 J0.099
+G0 Z11.26
+Z17.5
+X-6.525 Y44.533
 
 (Finish the rails' channel walls, Z9 to Z6, one pass [traces inside the channel sketch, straight through the cleared gap] - Trace)
 S12000 M3
