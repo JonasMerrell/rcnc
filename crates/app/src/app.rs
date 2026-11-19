@@ -96,6 +96,9 @@ pub struct App {
     log_open: bool,
     /// Stock size for Find stock started from the Probe page.
     fs_size: [f64; 3],
+    /// Find stock from the Probe page: the fixed jaw it lies against, from the
+    /// saved vise location (None: X from the stock's own sides).
+    fs_vise: Option<f64>,
     /// Air cut height to switch on, mm.
     air_lift: f64,
     /// Gauge block thickness for calibrating a Z reference without the probe, mm.
@@ -171,6 +174,7 @@ impl App {
             accept_confirm: false,
             log_open: false,
             fs_size: [39.0, 20.0, 77.0],
+            fs_vise: None,
             air_lift: 25.0,
             cal_gauge: 10.0,
             pc_shape: machine::ProbeCalShape::InnerBore,
@@ -529,6 +533,7 @@ impl eframe::App for App {
         self.log_window(ctx);
         self.calibrate_window(ctx);
         self.probe_cal_window(ctx);
+        self.find_vise_window(ctx);
 
         // The sheet is a native window over the centre area, drawn above
         // anything egui puts there: keep it out of the way of the tool change

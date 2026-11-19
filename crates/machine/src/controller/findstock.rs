@@ -126,6 +126,10 @@ impl Controller {
             Some(format!("the probe (T{probe_tool}) hasn't been measured on the tool setter"))
         } else if self.outputs.spindle_on {
             Some("the spindle is on".to_string())
+        } else if request.vise.is_some() && self.config.probing.vise.location.is_none() {
+            Some("VISE= takes X from the saved vise location, and there is none: run Find vise location on the Probe page first".to_string())
+        } else if request.vise.is_some() && !self.homed[..2].iter().all(|h| *h) {
+            Some("VISE= takes X from the saved vise location, in machine coordinates: home the machine first".to_string())
         } else {
             None
         };
@@ -137,7 +141,11 @@ impl Controller {
         // a depth the stylus can't reach is shown, to change in the window (Continue waits for it)
         let problem = self.depth_problem(depth);
         self.find_stock = Some(FindStockView { request, stage: FindStockStage::Locate, tapped: false, found: None, problem, tolerance, depth });
-        self.info("Find stock: tap the probe's stylus, jog it over the middle of the stock, a few mm above the top, then press Continue");
+        self.info(if self.find_stock.as_ref().is_some_and(|f| f.request.vise.is_some()) {
+            "Find stock: tap the probe's stylus, press Over the stock (or jog over the middle of the stock, a few mm above the top), then press Continue"
+        } else {
+            "Find stock: tap the probe's stylus, jog it over the middle of the stock, a few mm above the top, then press Continue"
+        });
         self.sync_position();
         self.routine = Some(Routine { name: "Find stock".into(), steps: locate_steps().into(), hits: Vec::new() });
         self.routine_move = None;
@@ -156,7 +164,8 @@ impl Controller {
             && self.routine_waiting
             && (self.find_stock.as_ref().is_some_and(|f| matches!(f.stage, FindStockStage::Locate | FindStockStage::Mismatch))
                 || self.calibrate.as_ref().is_some_and(|c| c.stage == super::CalibrateStage::Locate)
-                || self.probe_cal.as_ref().is_some_and(|p| p.stage.locating()))
+                || self.probe_cal.as_ref().is_some_and(|p| p.stage.locating())
+                || self.find_vise.as_ref().is_some_and(|v| v.stage == super::FindViseStage::Locate))
     }
 
     /// A jog while locating stops on the probe, except a tool jogged onto a gauge block.
@@ -180,6 +189,47 @@ impl Controller {
     fn depth_problem(&self, depth: f64) -> Option<String> {
         self.stylus_too_short(depth + self.config.probing.stylus_diameter / 2.0)
             .map(|e| format!("The sides would be touched {} mm below the top, {e}. Lower the depth below.", fmt(depth)))
+    }
+
+    /// Where the stock's top middle should be with a saved vise location (`VISE=`): machine X/Y,
+    /// and a Z clear above it (the jaw top plus the stock's height, as if it stood on the jaw).
+    fn stock_from_vise(&self, req: &StockRequest) -> Option<[f64; 3]> {
+        let (side, loc) = (req.vise?, self.config.probing.vise.location?);
+        let jaw = loc.jaw_x(side, loc.y);
+        let [cx, _, _] = req.top_centre;
+        let jaw_work = req.jaw_at.unwrap_or(cx + side * req.size[0] / 2.0);
+        let x = jaw + cx - jaw_work;
+        let jaw_top = self.work_to_machine(2, self.config.probing.setter.top() - loc.setter_above_top);
+        Some([x, loc.y, jaw_top + req.size[2] + self.config.probing.find_stock.z_clearance])
+    }
+
+    /// Find stock with a saved vise location, before Continue: move over where the stock should be
+    /// (up first, never down), from where the operator can jog to fine-tune, or Continue.
+    pub(super) fn find_stock_over_stock(&mut self) {
+        let Some(f) = &self.find_stock else { return };
+        if f.stage != FindStockStage::Locate || !self.locating() {
+            return;
+        }
+        let Some(to) = self.stock_from_vise(&f.request) else {
+            return self.info("Find stock: Over the stock needs VISE= in the program and a saved vise location");
+        };
+        let s = self.config.probing.clone();
+        // across at the higher of here and the clearance height, then down to it (guarded: a
+        // stock standing higher than expected stops the probe)
+        let mut up = self.machine_position()[2].max(to[2]);
+        if self.config.soft_limits {
+            up = up.min(self.config.axes[2].soft_max);
+        }
+        let down = to[2].min(up);
+        self.info(format!("Find stock: moving over the stock, machine X{} Y{} Z{}", fmt(to[0]), fmt(to[1]), fmt(down)));
+        let moves = [probing::guarded_to(&s, 2, up), probing::guarded_to(&s, 0, to[0]), probing::guarded_to(&s, 1, to[1]), probing::guarded_to(&s, 2, down)];
+        if let Some(r) = &mut self.routine {
+            for step in moves.into_iter().chain([Step::Operator]).rev() {
+                r.steps.push_front(step);
+            }
+        }
+        self.routine_waiting = false;
+        self.routine_step();
     }
 
     /// The operator changed how far below the top the sides are touched, or the size tolerance.
@@ -308,7 +358,49 @@ impl Controller {
             return Ok(steps);
         }
         let [cx, cy, cz] = req.top_centre;
-        self.set_work_axis(0, centre[0], cx);
+        if let (Some(side), Some(loc)) = (req.vise, s.vise.location) {
+            // X from the saved fixed jaw, where the stock's middle is along it; the stock's own face
+            // should be on it (unless JAWAT says another face lies against the jaw)
+            let jaw = loc.jaw_x(side, centre[1]);
+            let face = centre[0] + side * size[0] / 2.0;
+            let gap = (face - jaw) * -side;
+            if req.jaw_at.is_none() && gap.abs() > tolerance + 1e-9 {
+                let why = if gap < 0.0 {
+                    format!("{} mm inside the fixed jaw, where it can't be: the vise has moved since Find vise location (run it again), or it's the wrong station", fmt(-gap))
+                } else {
+                    format!("{} mm away from the fixed jaw: seat the stock against it (chips under or beside it?)", fmt(gap))
+                };
+                let problem = format!(
+                    "The stock measures {summary}, but its face that should lie against the fixed jaw is {why}. Nothing was set. \
+                     Then jog over the middle again and press Continue, or Stop."
+                );
+                self.info(format!("Find stock: {problem}"));
+                self.find_stock_stage(FindStockStage::Mismatch);
+                if let Some(f) = &mut self.find_stock {
+                    f.problem = Some(problem);
+                }
+                steps.push(Step::Operator);
+                steps.push(Step::Then(Box::new(|c, _| {
+                    if let Some(f) = &mut c.find_stock {
+                        f.problem = None;
+                    }
+                    c.find_stock_probe()
+                })));
+                return Ok(steps);
+            }
+            let jaw_work = req.jaw_at.unwrap_or(cx + side * req.size[0] / 2.0);
+            self.set_work_axis(0, jaw, jaw_work);
+            self.report(format!(
+                "Fixed jaw at machine X{} (saved vise location): work X set from it (the stock's face against it is X{}; the stock's own face was {} mm from it)",
+                fmt(jaw),
+                fmt(jaw_work),
+                fmt(gap)
+            ));
+            // end over the stock's middle as the job sees it
+            steps[0] = probing::guarded_to(&s, 0, jaw + cx - jaw_work);
+        } else {
+            self.set_work_axis(0, centre[0], cx);
+        }
         self.set_work_axis(1, centre[1], cy);
         if let Some((side, jaw_z)) = req.jaw {
             // X from the fixed jaw: touch its face beside the stock's end, outside the stock in Y
@@ -677,7 +769,7 @@ fn locate_steps() -> Vec<Step> {
 
 /// Touch both sides of the stock along `axis`, from outside each, `depth`
 /// below the top; records the low side's touch, then the high side's.
-fn sides(s: &probing::ProbeSettings, axis: usize, middle: f64, size: f64, top: f64, depth: f64) -> Vec<Step> {
+pub(super) fn sides(s: &probing::ProbeSettings, axis: usize, middle: f64, size: f64, top: f64, depth: f64) -> Vec<Step> {
     let fs = &s.find_stock;
     let out = size / 2.0 + fs.clearance + s.stylus_diameter / 2.0;
     let mut steps = Vec::new();
