@@ -16,12 +16,14 @@ over their tops (fixture_clearance).
 import json
 
 # ---- the bar (nominal until Jonas measures it) ----
-BAR_AL = (25.4, 12.7)       # width, height: 6061 1/2 x 1 in
+BAR_AL = (26.6, 12.34)      # 6061, measured 26.6 wide x 12.34 thick (Jonas, 2026-11-20)
+SHIM_AL = 0.0               # aluminium op 1 shims: none (the base is 8.6 thick instead)
 BAR_BR = (25.0, 10.0)       # C360, measured 10.0 x 25.0 (Jonas, 2026-11-19)
 SHIM_BR = 1.67              # brass op 1 lies on two shim strips this thick (Jonas's shims; 10 mm bar: op 1's walls reach Z6.47 in op 2)
 BLANK_L = 101.0             # sawn to 101 (Jonas, 2026-11-19); op 1 finishes the parts' outer ends 98 apart
 FACE_AL, FACE_BR = 0.2, 0.2  # op 1 facing of the bar top (the parts' bottoms)
-BASE_T, SLIDER_T = 9.0, 8.0
+BASE_T, SLIDER_T = 8.6, 8.0   # base 8.6 (was 9): the measured 12.34 bar's op 1 walls reach Z7.14, the 1.7 chamfer's edge Z6.9
+CH_FLOOR = BASE_T - 3.0       # the base's channel floor (channel 3 deep)
 INGOT_CH_1 = 1.7          # the ingot chamfer's first pass (half the area of the 2.4)
 JAW_LIMIT = 5.0             # lowest the tool goes beside the jaws (their top 4.7 + 0.3)
 RAIL_CH, INGOT_CH = 1.7, 2.4  # the chamfers that hide the seam (build.py BCH / SCH)
@@ -152,17 +154,21 @@ S = [{"tool": "open_document", "args": {"path": "slider.json"}},
 # ======================= 6061 bases =======================
 W, H = BAR_AL
 BW = 25.0
-top1 = H - FACE_AL                  # op 1: the bases' bottoms after facing
-wall_top = top1 - JAW_LIMIT         # op 2: how high op 1's walls reach
+top1 = H - FACE_AL                  # op 1 (blank coordinates: Z0 is the blank's bottom on the shims): the bases' bottoms after facing
+low_al = JAW_LIMIT - SHIM_AL        # op 1's lowest beside the jaws, in those coordinates
+wall_top = top1 - low_al            # op 2: how high op 1's walls reach
 assert BASE_T - RAIL_CH <= wall_top - 0.2 + 1e-9, f"rail chamfer lower edge Z{BASE_T - RAIL_CH} not 0.2 under the op 1 wall top Z{wall_top}"
+shims_al = [{"name": f"{SHIM_AL} mm shim strip (25 x 39) under the {e} base, op 1 only", "min": [-12.5, lo, -SHIM_AL], "max": [12.5, lo + 39, 0]}
+            for e, lo in (("-Y", -45), ("+Y", 6))]
 S += [setup("Base op1 bottom", 3, stock={"size": [W, BLANK_L, H], "bottom": H - FACE_AL - BASE_T, "material": "6061-T6"}, orient="bottom",
-            origin="stock_bottom_center", station_x=FIXED_L - W / 2, fixtures=jaws(W, +1), model="DMC2-twostation-base", with_=["Base op2 top"])]
+            origin="stock_bottom_center", station_x=FIXED_L - W / 2, fixtures=jaws(W, +1, z0=-SHIM_AL, extra=shims_al if SHIM_AL else ()), model="DMC2-twostation-base",
+            with_=["Base op2 top"], zref="" if SHIM_AL else "Vise")]
 S += tools(0, AL) + probe(0, 3, 1.0) + [
     op(0, "face", f"Face the bar top (the bases' bottoms) {FACE_AL}", tool=24, stepdown=FACE_AL, stepover=0.4, rpm=AL["face_rpm"], feed=AL["feed"]),
-    rough(0, AL, f"Rough round both bases, the gap and the ends to Z{JAW_LIMIT:g} (laps, power budget)", bottom=JAW_LIMIT,
-          stepdown=(top1 - JAW_LIMIT) / 2, leave_floor=0.0),
-    op(0, "contour", f"Finish the walls in one full-height pass, down to Z{JAW_LIMIT:g} (op 2 cuts no wall below the chamfer)", tool=24,
-       side="outside", bottom=JAW_LIMIT, stepdown=20, lead=2, rpm=AL["fin_rpm"], feed=AL["fin_feed"]),
+    rough(0, AL, f"Rough round both bases, the gap and the ends to Z{low_al:g} (laps, power budget)", bottom=low_al,
+          stepdown=(top1 - low_al) / 2, leave_floor=0.0),
+    op(0, "contour", f"Finish the walls in one full-height pass, down to Z{low_al:g} (op 2 cuts no wall below the chamfer)", tool=24,
+       side="outside", bottom=low_al, stepdown=20, lead=2, rpm=AL["fin_rpm"], feed=AL["fin_feed"]),
     op(0, "bore", "Two locating bores 7.5 through the carrier between the bases (op 2 finds them)", tool=24, points=CARRIER, thread_diameter=7.5,
        bottom=-0.3, rpm=AL["rough_rpm"], feed=1500),
     op(0, "chamfer", "Edge break 0.3 the bottom outline (op 2 sits it on the 1.9 ledges)", tool=1, chamfer=0.3, side="outside", tip_offset=1.0),
@@ -174,19 +180,19 @@ S += [setup("Base op2 top", 3, follows="Base op1 bottom", z=LEDGE_Z - FACE_AL, s
 S += tools(1, AL) + probe(1, 3, 1.5) + find_bores(1, 1.0) + [
     op(1, "face", f"Face the top down to Z{BASE_T:g} ({top1 - BASE_T:g}, two levels)", tool=24, stepdown=(top1 - BASE_T) / 2, stepover=0.2,
        rpm=AL["face_rpm"], feed=AL["feed"]),
-    rough(1, AL, "Rough the channel to Z6", bottom=6.0, stepdown=3.0),
-    op(1, "parallel", "Finish the channel floor (Z6), passes along the slide (Y)", tool=24, angle=90, stepover=0.4, slope_max=2, bottom=6.0, leave=0.0, rest=True,
+    rough(1, AL, f"Rough the channel to Z{CH_FLOOR:g}", bottom=CH_FLOOR, stepdown=3.0),
+    op(1, "parallel", f"Finish the channel floor (Z{CH_FLOOR:g}), passes along the slide (Y)", tool=24, angle=90, stepover=0.4, slope_max=2, bottom=CH_FLOOR, leave=0.0, rest=True,
        rpm=AL["fin_rpm"], feed=AL["fin_feed"]),
     op(1, "bore", "Magnet pockets 8.05 x 3.15 (helical, finish floor)", tool=24, rpm=AL["fin_rpm"], feed=1500),
     rough(1, AL, f"Rough the band above op 1's walls off to Z{wall_top - 0.2:g}, 0.2 under their top Z{wall_top:g} (no web left), 0.3 off them (separates the bases)",
           bottom=wall_top - 0.2, stepdown=BASE_T - wall_top + 0.2, leave_floor=0.0, target=120, cap=150),
-    op(1, "trace", "Finish the rails' channel walls, Z9 to Z6, one pass (traces inside the channel sketch, straight through the cleared gap)", tool=24,
-       sketches=[14], side="inside", top=BASE_T, depth=BASE_T - 6.0, stepdown=BASE_T - 6.0, rpm=AL["fin_rpm"], feed=AL["fin_feed"]),
+    op(1, "trace", f"Finish the rails' channel walls, Z{BASE_T:g} to Z{CH_FLOOR:g}, one pass (traces inside the channel sketch, straight through the cleared gap)", tool=24,
+       sketches=[14], side="inside", top=BASE_T, depth=BASE_T - CH_FLOOR, stepdown=BASE_T - CH_FLOOR, rpm=AL["fin_rpm"], feed=AL["fin_feed"]),
     op(1, "deburr", f"Chamfer {RAIL_CH} the rail tops outside (takes the 0.3 left on the band and hides the op 1 / op 2 seam)", tool=1,
        chamfer=RAIL_CH, tip_offset=1.0, edges=[[s * BW / 2, cy, BASE_T] for s in (1, -1) for cy in (-26.5, 26.5)]),
     op(1, "deburr", "Edge break 0.3: channel edges, floor ends, pocket rims", tool=1, chamfer=0.3, tip_offset=0.7,
-       edges=[[s * 10.0, cy, BASE_T] for s in (1, -1) for cy in (-26.5, 26.5)] + [[0, cy + s * 22.5, 6.0] for s in (1, -1) for cy in (-26.5, 26.5)]
-       + [[4.025, cy + m, 6.0] for m in (-15, 0, 15) for cy in (-26.5, 26.5)]),
+       edges=[[s * 10.0, cy, BASE_T] for s in (1, -1) for cy in (-26.5, 26.5)] + [[0, cy + s * 22.5, CH_FLOOR] for s in (1, -1) for cy in (-26.5, 26.5)]
+       + [[4.025, cy + m, CH_FLOOR] for m in (-15, 0, 15) for cy in (-26.5, 26.5)]),
 ] + out(1, "base-op2") + cycle(0, "base-cycle") + first_last(0, "base", ["Base op1 bottom"], ["Base op2 top"])
 
 # ======================= C360 sliders =======================

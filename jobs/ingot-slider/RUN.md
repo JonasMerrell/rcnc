@@ -4,8 +4,8 @@
 > sheets, pictures and STEP). Run order for a batch: `*-first.nc` on a raw blank, then `*-cycle.nc` once per
 > blank after it, then `*-last.nc`. The scripts, docs and `cam.py` stay at the top; `cam.py` and `post.py` write into `base/` and `slider/`.
 
-> **Brass measured, aluminium PROVISIONAL (2026-11-19).** The C360 is measured: **10.0 × 25.0**, cut into **101 mm**
-> blanks. It lies on Jonas's **1.67 mm** shims in op 1. The 6061 is still planned on its nominal 12.7 × 25.4, also
+> **Both bars measured (2026-11-20).** The C360 is **10.0 × 25.0** and lies on Jonas's **1.67 mm** shims in op 1; the
+> 6061 is **12.34 × 26.6**, no shims, and the base is **8.6** thick (was 9.0) so its seam stays inside the 1.7 chamfer. Both are cut into 101 mm blanks. Anything else measured:
 > as 101 blanks. When the aluminium is measured, put the numbers in `BAR_AL` at the top of `cam.py`, then re-run
 > `cam.py`, `rcad run cam.json`, `post.py` and `rcad run verify.json`. The asserts in `cam.py` re-check that every
 > seam is still inside its chamfer.
@@ -24,13 +24,13 @@ are in `DESIGN.md`. Per-operation tools, feeds, times and loads are in `OPS.md`.
 
   | | Op 1 wall top (op 2 Z) | Chamfer | Chamfer lower edge | Margin | Chamfer tip |
   |---|---|---|---|---|---|
-  | Base | Z7.5 | 1.7 on the rail tops (was 1.5) | Z7.3 | 0.2 | Z6.3 |
+  | Base (8.6) | Z7.14 | 1.7 on the rail tops (was 1.5) | Z6.9 | 0.24 | Z5.9 |
   | Slider | Z6.47 | 2.4 ingot chamfer (was 2.0) | Z5.6 | 0.87 | Z5.02 |
 
   The same holds at the part ends and round the corners (R2.5 base, R3 slider): op 1's contour runs the whole
   outline, and the chamfer runs round the corners. Base rail top: 0.8 of its 2.5 width is left flat, 0.5 after
   the 0.3 inner edge break.
-- **Op 2's band rough** takes the stock above op 1's walls off to 0.2 under their top (Z7.3 / Z6.27), staying
+- **Op 2's band rough** takes the stock above op 1's walls off to 0.2 under their top (Z6.94 / Z6.27), staying
   0.3 off the walls. That leaves no web between the two parts. The chamfer's cone then takes the 0.3 strip
   and the raw skin together.
 - **Brass shims: Jonas's 1.67 mm strips.** On the 10.0 bar the slider's op 1 walls then reach Z6.47 in op 2,
@@ -76,7 +76,7 @@ Jonas cut the slider. The finish was very clean and the magnets were a perfect p
 - **Find bores probed too deep.** rCAD took the bores' top from the part (Z8), but they sit in the carrier between
   the parts, whose top is the stock's (Z9.8). The probe went 3.3 mm down instead of the planned 1.5. rCAD is fixed
   (PR #166, 49573d5), and the depth is now **1.0 below the carrier top** on both parts. On the slider the web is
-  Z6.47–9.8, so the ball's contact is 2.3 mm above its bottom; on the base the web is Z7.5–12.5 (3.5 mm margin).
+  Z6.47–9.8, so the ball's contact is 2.3 mm above its bottom; on the base the web is Z7.14–12.14 (3.1 mm margin).
 - **The ingot chamfer was too heavy in one pass.** It now runs in two passes, 1.7 then 2.4, with the same 0.58
   tip offset and climb. Estimated tangential force in C360 (about 0.7 J/mm³, 18k, F1000): one pass ~10 N; now
   ~4 N then ~6 N. The base's 1.7 rail chamfer cuts about half the cross-section of the old 2.4, in aluminium, so it
@@ -95,7 +95,7 @@ Jonas cut the slider. The finish was very clean and the magnets were a perfect p
     it pushes one way on one side and the other way on the other. I didn't change that.
 - **The op 1 wall finish was two depths.** rCAD stopped the outside wall pass at the magnet pockets' floor. Fixed
   (PR #166, 49573d5): the slider walls now go in one 6.47 mm full-height pass at 89 W, 0.41 wide (T24 at 24
-  stick-out; the flutes are 19). The base's was already one 7.5 mm pass (223 W at 12k).
+  stick-out; the flutes are 19). The base's is one 7.14 mm pass (515 W at 12k on the 26.6 bar, caution 684).
 - **Find stock from the saved vise location** (rcnc PR 22, `FIND_STOCK VISE=`): no jogging to the stock.
   - **The mill PC needs rcnc 2a7bb0d** (branch `claude/project-thread-k4skge`, or PR 22 once merged). It is on
     2eb5ac6, where Find stock with `VISE=` still waits for you to move over the stock. 2a7bb0d still has PR 14
@@ -115,7 +115,7 @@ Jonas cut the slider. The finish was very clean and the magnets were a perfect p
 - Blanks are sawn to **101 mm** (brass measured). Op 1 Find stock expects 101 ± 1.0. The parts take 98.0 (two
   45 mm parts and an 8 mm gap), so 1.5 is left at each end. Op 1 roughs and finishes the outer ends down to the
   jaw limit, and op 2's band rough takes the stub above. Each end sticks out 2.75 past the 95.5 jaws.
-- Aluminium: 6061 1/2 × 1 flat bar (12.7 × 25.4 nominal). Brass: C360, **10.0 × 25.0 measured**. That's 2.7 of
+- Aluminium: 6061 flat bar, **12.34 × 26.6 measured** (bought as 1/2 × 1). Brass: C360, **10.0 × 25.0 measured**. That's 2.7 of
   stock each side of the 19.6 slider.
 - **Shims for brass op 1:** two flat **1.67 mm** strips about **25 × 39**, one under each slider. Put them 12 mm
   apart, centred on the bar's middle, so the two carrier bores at the middle break through between them. Both
@@ -195,8 +195,8 @@ Lay the bar on the ledges, centred along the jaws. Both ends stick out about 2 m
 
 Turn the blank over, either way (the carrier bores are symmetric about the middle). Wipe the ledges clean first:
 the parts sit on 1.6 mm of land on each 1.9 ledge. The finished bottom goes down on the ledges, with op 1's
-finished walls in the jaws. Those walls reach 7.5 mm (aluminium) / 6.47 mm (brass) above the ledge, and the jaws
-grip 4.7. The raw band above the walls is wider (25.4): make sure the jaws close on the finished walls, not on it.
+finished walls in the jaws. Those walls reach 7.14 mm (aluminium) / 6.47 mm (brass) above the ledge, and the jaws
+grip 4.7. The raw band above the walls is wider (26.6 / 25.0): make sure the jaws close on the finished walls, not on it.
 Push the bar against the fixed jaw and clamp.
 
 1. Open `base-last.nc` / `slider-last.nc` (or the cycle), arm the bog guard, Cycle Start.
@@ -207,14 +207,14 @@ Push the bar against the fixed jaw and clamp.
 4. T99 + **Find bores**: X/Y and the turn from the two carrier bores (Ø7.5, 10 apart, TOL 0.1, turn ≤ 0.5°).
    This happens before any cutting. The carrier is located from these bores, not from a raw face.
 5. Base:
-   - Face to Z9 at 12k, two levels of 1.75.
-   - Rough the channel to Z6 at 9k (walls leave 0.3, floor 0.2).
+   - Face to Z8.6 at 12k, two levels of 1.77.
+   - Rough the channel to Z5.6 at 9k (walls leave 0.3, floor 0.2).
    - **CHIP PAUSE:** blow the chips out of the two channels and off the top.
    - Finish the channel floor at 12k, passes along the slide (Y) so the tool marks run the way the slider moves.
    - The magnet pockets.
-   - Rough the band above op 1's walls off to Z7.3. This **separates the two bases**. It's light: target 120 W, peak 113 W.
-   - Finish the channels' walls, Z9 to Z6, in one pass. It runs straight down both channels and through the cleared gap.
-   - T1 at 24k: the **1.7 rail-top chamfers**, outside, round the R2.5 corners to the channel. The tip is at Z6.3.
+   - Rough the band above op 1's walls off to Z6.94. This **separates the two bases**. It's light: target 120 W, peak 110 W.
+   - Finish the channels' walls, Z8.6 to Z5.6, in one pass. It runs straight down both channels and through the cleared gap.
+   - T1 at 24k: the **1.7 rail-top chamfers**, outside, round the R2.5 corners to the channel. The tip is at Z5.9.
      Then the 0.3 edge breaks (channel edges, floor ends, pocket rims).
 6. Slider:
    - Face to Z8 (1.8 off, 217 W).
@@ -327,10 +327,10 @@ Notes on the checks:
 - **rcnc simulator** (rcnc 2a7bb0d; `RCNC_JOB=… cargo test --release -p cnc-machine runs_a_job_file -- --ignored`, with
   `RCNC_BORES="-5,0;5,0"` for op 2, plus a local, uncommitted harness setting `RCNC_VISE_OFF` that saves a vise
   location at the simulated block's faces): all 9 programs ran to the end with the guard line, Find stock from
-  the vise location (stock 25.0 / 25.4 × 101.000, the face check against the jaw passing), the pauses, Find bores
+  the vise location (stock 25.0 / 26.6 × 101.000, the face check against the jaw passing), the pauses, Find bores
   (10.000 apart, 0.000°) and three tool changes each. Times: base-first 6.2, base-last 9.5, base-cycle 13.3,
   slider-first 8.1, slider-last 8.1, slider-cycle 13.8 min.
-- **Find stock size:** op 1 expects the bar (25.0 × 101 brass, 25.4 × 101 aluminium, TOL 1.0). The single op 2
+- **Find stock size:** op 1 expects the bar (25.0 × 101 brass, 26.6 × 101 aluminium, TOL 1.0). The single op 2
   programs expect op 1's simulated leftover on its grid (25.2 × 101.2 brass, 25.6 × 101.2 aluminium), and the
   cycles expect the setup's size. All are inside op 2's TOL 1.5. The rcnc simulator found 25.0 × 101.000 for the
   brass and 25.4 × 101.000 for the aluminium.
