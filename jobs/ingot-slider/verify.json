@@ -1,0 +1,90 @@
+[
+ {
+  "tool": "open_document",
+  "args": {
+   "path": "slider-cam.json"
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 0,
+   "path": "base-op1.nc",
+   "stations": [
+    "Base op1 bottom"
+   ]
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 1,
+   "path": "base-op2.nc"
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 2,
+   "path": "slider-op1.nc",
+   "stations": [
+    "Slider op1 bottom"
+   ]
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 0,
+   "path": "base-cycle.nc"
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 2,
+   "path": "slider-cycle.nc"
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 0,
+   "path": "base-first.nc",
+   "stations": [
+    "Base op1 bottom"
+   ]
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 0,
+   "path": "base-last.nc",
+   "stations": [
+    "Base op2 top"
+   ]
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 2,
+   "path": "slider-first.nc",
+   "stations": [
+    "Slider op1 bottom"
+   ]
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 2,
+   "path": "slider-last.nc",
+   "stations": [
+    "Slider op2 top",
+    "Slider op2 engrave"
+   ]
+  }
+ }
+]
