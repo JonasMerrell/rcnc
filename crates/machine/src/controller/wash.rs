@@ -87,6 +87,8 @@ impl Controller {
         let outputs = self.outputs.clone();
         let spinning = outputs.spindle_on;
         self.outputs.spindle_on = false;
+        // off until the first corner: no spray on the way there
+        self.outputs.flood = false;
         self.outputs.mist = false;
 
         let feed = w.feed;
@@ -366,3 +368,4 @@ mod tests {
         assert!(!c.snapshot().flood && !c.washing());
     }
 }
+
