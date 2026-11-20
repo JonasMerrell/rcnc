@@ -23,6 +23,7 @@ mod findstock;
 mod hometest;
 mod toolchange;
 mod vise;
+mod wash;
 pub use calibrate::{CalibrateStage, CalibrateView};
 pub use hometest::{stats as home_test_stats, HomeTestView};
 pub use probecal::{ProbeCalShape, ProbeCalStage, ProbeCalTarget, ProbeCalView};
@@ -142,6 +143,8 @@ pub enum Command {
     FindVise,
     /// Carry on with Find vise location: over the block, or save the result.
     FindViseContinue,
+    /// Wash the vise and table down with the flood coolant (Tools page settings).
+    WashDown,
     /// Find stock with a saved vise location (`VISE=`), before Continue: move the probe over where
     /// the stock should be, against the fixed jaw.
     FindStockOverStock,
@@ -218,6 +221,8 @@ pub struct Snapshot {
     pub probe_cal: Option<ProbeCalView>,
     /// Find vise location in progress.
     pub find_vise: Option<FindViseView>,
+    /// A coolant wash-down is running.
+    pub washing: bool,
     /// How far the probe's ball sits off the spindle axis, X/Y mm, as last
     /// measured while it has stayed in the spindle (None: not measured).
     pub probe_runout: Option<[f64; 2]>,
@@ -342,6 +347,7 @@ pub struct Controller {
     calibrate: Option<CalibrateView>,
     probe_cal: Option<ProbeCalView>,
     find_vise: Option<FindViseView>,
+    wash: Option<wash::Wash>,
     /// The loaded probe's ball offset from the spindle axis, measured since it went in.
     probe_runout: Option<[f64; 2]>,
     /// The last tool measured on the setter and the machine Z its tip touched at (for the stick-out check).
@@ -435,6 +441,7 @@ impl Controller {
             calibrate: None,
             probe_cal: None,
             find_vise: None,
+            wash: None,
             probe_runout: None,
             last_setter_hit: None,
             last_message: None,
@@ -621,6 +628,7 @@ impl Controller {
         self.calibrate = None;
         self.probe_cal = None;
         self.find_vise = None;
+        self.wash = None;
         self.auto_probe = false;
         self.probe_again = None;
         self.probe_accept = None;
@@ -817,6 +825,7 @@ impl Controller {
             Command::CalibrateProbeTurn => self.probe_cal_turn(),
             Command::FindVise => self.start_find_vise(),
             Command::FindViseContinue => self.find_vise_continue(),
+            Command::WashDown => self.start_wash_down(None),
             Command::FindStockOverStock => self.find_stock_over_stock(),
             Command::SetAirCut(lift) => {
                 if !self.is_ready() {
@@ -1130,6 +1139,7 @@ impl Controller {
         self.end_calibrate(&result);
         self.end_probe_cal(&result);
         self.end_find_vise(&result);
+        self.end_wash_down(&result);
     }
 
     /// Set the active work offset so machine position `machine` on `axis` reads `work`.
@@ -2130,6 +2140,10 @@ impl Controller {
                 self.start_find_bores(request);
                 return;
             }
+            Op::WashDown { passes } => {
+                self.start_wash_down(passes);
+                return;
+            }
             Op::Probe { to, feed } => match self.probe_move(&to, feed) {
                 Ok(()) => Wait::Probe,
                 Err(msg) => return self.raise(format!("line {}: {msg}", line + 1)),
@@ -2306,6 +2320,7 @@ impl Controller {
             calibrate: self.calibrate.clone(),
             probe_cal: self.probe_cal.clone(),
             find_vise: self.find_vise.clone(),
+            washing: self.wash.is_some(),
             probe_runout: self.probe_runout,
             last_measured_tool: self.last_setter_hit.map(|h| h.0),
             home_test: self.home_test.clone(),

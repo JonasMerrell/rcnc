@@ -202,6 +202,10 @@ pub enum Op {
     /// Zero every tool measured from now on on this setter reference (an
     /// `(RCNC Z_REFERENCE Vise)` comment): the job's Z0 is that surface.
     ZReference(String),
+    /// Wash the vise and table down with the flood coolant (an `(RCNC WASH_DOWN)` comment,
+    /// optionally `PASSES=n`): the spindle stops, coolant sweeps the area set up in rcnc, then the
+    /// program carries on from where it was, spindle and coolant as they were.
+    WashDown { passes: Option<u32> },
     /// G64 (`blend`: constant velocity, corners rounded within the planner's
     /// junction deviation) or G61 / G61.1 (exact stop at the end of every move).
     PathMode { blend: bool },
@@ -246,6 +250,29 @@ fn z_reference(comment: &str) -> Option<Result<String, String>> {
     }
     let name = rest[KEYWORD.len()..].trim();
     Some(if name.is_empty() { Err("Z_REFERENCE needs a reference name, e.g. Vise".into()) } else { Ok(name.to_string()) })
+}
+
+/// `(RCNC WASH_DOWN)` or `(RCNC WASH_DOWN PASSES=3)`.
+fn wash_down(comment: &str) -> Option<Result<Option<u32>, String>> {
+    const KEYWORD: &str = "RCNC WASH_DOWN";
+    let rest = comment.trim();
+    if rest.len() < KEYWORD.len() || !rest[..KEYWORD.len()].eq_ignore_ascii_case(KEYWORD) {
+        return None;
+    }
+    let mut passes = None;
+    for word in rest[KEYWORD.len()..].split_whitespace() {
+        let Some((k, v)) = word.split_once('=') else {
+            return Some(Err(format!("WASH_DOWN: expected KEY=VALUE, got '{word}'")));
+        };
+        if !k.eq_ignore_ascii_case("PASSES") {
+            return Some(Err(format!("WASH_DOWN: unknown setting {k}")));
+        }
+        match v.trim().parse::<u32>() {
+            Ok(n) if (1..=20).contains(&n) => passes = Some(n),
+            _ => return Some(Err(format!("WASH_DOWN: PASSES takes a whole number from 1 to 20, got '{v}'"))),
+        }
+    }
+    Some(Ok(passes))
 }
 
 /// `(RCNC PROBE_Z AT=x,y Z=z SEARCH=mm)`: with the touch probe loaded, go
@@ -728,6 +755,9 @@ impl Interpreter {
             if ["RCNC FIND_STOCK", "RCNC FIND_BORES", "RCNC PROBE_Z"].iter().any(|d| comment.trim_start().starts_with(d)) {
                 return Some((n + 1, "a probing routine"));
             }
+            if comment.trim_start().starts_with("RCNC WASH_DOWN") {
+                return Some((n + 1, "a coolant wash-down (it sweeps an area in machine coordinates)"));
+            }
             // words: a letter and the number after it
             let mut words = vec![];
             let mut chars = code.chars().filter(|c| !c.is_whitespace()).peekable();
@@ -962,6 +992,8 @@ impl Interpreter {
                 ops.push(Op::FindBores(req?));
             } else if let Some(name) = z_reference(c) {
                 ops.push(Op::ZReference(name?));
+            } else if let Some(passes) = wash_down(c) {
+                ops.push(Op::WashDown { passes: passes? });
             }
         }
 
@@ -1805,6 +1837,7 @@ mod tests {
 
     #[test]
     fn finds_what_needs_homing() {
+        assert_eq!(Interpreter::new("G0 X1\n(RCNC WASH_DOWN)\nM30").needs_homing(true).map(|h| h.0), Some(2));
         assert_eq!(Interpreter::new("G0 X1\nG1 Y2 F100\nM30").needs_homing(true), None);
         assert_eq!(Interpreter::new("G0 X1 (M6 in a comment)\nT1 M06\nM30").needs_homing(true), Some((2, "a tool change")));
         assert_eq!(Interpreter::new("T1 M6\nM30").needs_homing(false), None, "a tool change done where the tool is");
@@ -2338,5 +2371,15 @@ M30");
         assert!(ZRequest::parse("RCNC PROBE_Z Z=1").unwrap().is_err());
         assert!(BoresRequest::parse("RCNC FIND_BORES A=0,0 B=0,0 D=8 TOP=0").unwrap().is_err());
         assert!(ZRequest::parse("RCNC PROBE_ZED AT=0,0 Z=0").is_none());
+    }
+
+    #[test]
+    fn wash_down_comment() {
+        let (_, ops) = run("(RCNC WASH_DOWN)\n(rcnc wash_down passes=3)\nM30");
+        let washes: Vec<_> = ops.iter().filter_map(|o| match o { Op::WashDown { passes } => Some(*passes), _ => None }).collect();
+        assert_eq!(washes, [None, Some(3)]);
+        let mut i = Interpreter::new("");
+        assert!(i.execute_line("(RCNC WASH_DOWN PASSES=0)").is_err());
+        assert!(i.execute_line("(RCNC WASH_DOWN SPEED=3)").is_err());
     }
 }

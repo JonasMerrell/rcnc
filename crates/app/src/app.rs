@@ -1184,6 +1184,22 @@ impl App {
             });
             ui.add_space(16.0);
 
+            // Coolant wash-down: flood on, sweep the vise and table, flood off.
+            let wash = s.config.wash_area();
+            let can_wash = s.mode == Mode::Idle && s.homed[..3].iter().all(|h| *h) && wash.is_ok();
+            let label = if s.washing { "Washing…" } else { "Wash down" };
+            if ui
+                .add_enabled(can_wash, big_button(label, ACCENT).min_size(Vec2::new(110.0, 56.0)))
+                .on_hover_text(match &wash {
+                    Ok(_) => "Stop the spindle, raise Z, turn the flood coolant on and sweep the vise and table, then coolant off and back (settings: Tools page)".to_string(),
+                    Err(e) => format!("Can't wash down: {e}"),
+                })
+                .clicked()
+            {
+                self.machine.send(Command::WashDown);
+            }
+            ui.add_space(16.0);
+
             ui.vertical(|ui| {
                 override_slider(ui, "Feed", s.feed_override, 0.0..=2.0, |v| {
                     self.machine.send(Command::SetFeedOverride(v))

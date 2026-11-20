@@ -92,6 +92,54 @@ pub struct MachineConfig {
     /// At a tool change (M6), measure the new tool on the tool setter.
     pub tool_change_touch_off: bool,
     pub tool_change: ToolChangeSettings,
+    pub wash_down: WashDownSettings,
+}
+
+/// Coolant wash-down: with the spindle stopped, turn the flood coolant on
+/// and sweep the nozzle over the vise and table so the chips are washed off,
+/// then turn it off again. The nozzle rides on the spindle head, so the
+/// spindle sweeps the area at a safe height, in machine coordinates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WashDownSettings {
+    /// Sweep the saved vise location's outline (`vise_size` about the fixed
+    /// centre block) plus `margin`. Off: sweep `x` and `y`.
+    pub around_vise: bool,
+    /// The whole vise's X and Y size, centred on its fixed centre block.
+    pub vise_size: [f64; 2],
+    /// Sweep this far past the vise's outline.
+    pub margin: f64,
+    /// The area to sweep when not around the vise: machine X and Y, low to high.
+    pub x: [f64; 2],
+    pub y: [f64; 2],
+    /// Lowest machine Z to sweep at: Z is raised to it, never lowered.
+    pub z: f64,
+    /// Between the sweep's rows.
+    pub spacing: f64,
+    /// Sweep feed, mm/min: slower soaks every spot for longer.
+    pub feed: f64,
+    /// How many times the area is swept; every other pass runs crosswise.
+    pub passes: u32,
+    /// Seconds of coolant before the first move, so it is flowing.
+    pub soak: f64,
+}
+
+impl Default for WashDownSettings {
+    fn default() -> Self {
+        // The two-station vise from vise.step: 317.7 x 144.5, centred on its centre block.
+        WashDownSettings {
+            around_vise: true,
+            vise_size: [317.7, 144.5],
+            margin: 15.0,
+            x: [0.0, 0.0],
+            y: [0.0, 0.0],
+            z: 0.0,
+            spacing: 30.0,
+            feed: 3000.0,
+            passes: 2,
+            soak: 2.0,
+        }
+    }
 }
 
 /// Guided tool change at M6.
@@ -216,7 +264,50 @@ impl MachineConfig {
             probing: Default::default(),
             tool_change_touch_off: true,
             tool_change: Default::default(),
+            wash_down: Default::default(),
         }
+    }
+
+    /// The machine X and Y area the wash-down sweeps (low to high), kept
+    /// inside the travel: never past a home switch, X within its travel from
+    /// home, and inside the soft limits when they're on.
+    pub fn wash_area(&self) -> Result<([f64; 2], [f64; 2]), String> {
+        let w = &self.wash_down;
+        let (mut x, mut y) = if w.around_vise {
+            let Some(v) = &self.probing.vise.location else {
+                return Err("it sweeps around the saved vise location, and there is none: run Find vise location (Probe page), or set an area by hand (Tools page)".into());
+            };
+            let cx = (v.faces[0] + v.faces[1]) / 2.0;
+            let (hx, hy) = (w.vise_size[0].abs() / 2.0 + w.margin, w.vise_size[1].abs() / 2.0 + w.margin);
+            ([cx - hx, cx + hx], [v.y - hy, v.y + hy])
+        } else {
+            ([w.x[0].min(w.x[1]), w.x[0].max(w.x[1])], [w.y[0].min(w.y[1]), w.y[0].max(w.y[1])])
+        };
+        for (i, r) in [&mut x, &mut y].into_iter().enumerate() {
+            let a = &self.axes[i];
+            let (mut lo, mut hi) = if self.soft_limits { (a.soft_min, a.soft_max) } else { (f64::NEG_INFINITY, f64::INFINITY) };
+            if a.home_positive {
+                hi = hi.min(a.home_position);
+            } else {
+                lo = lo.max(a.home_position);
+            }
+            if i == 0 && self.tool_change.x_travel.abs() > 0.0 {
+                let t = self.tool_change.x_travel.abs();
+                if a.home_positive {
+                    lo = lo.max(a.home_position - t);
+                } else {
+                    hi = hi.min(a.home_position + t);
+                }
+            }
+            *r = [r[0].clamp(lo, hi), r[1].clamp(lo, hi)];
+        }
+        if !(x[1] - x[0] > 1.0 && y[1] - y[0] > 1.0) || ![x[0], x[1], y[0], y[1]].iter().all(|v| v.is_finite()) {
+            return Err(format!(
+                "the area to sweep, X{:.1} to X{:.1} and Y{:.1} to Y{:.1}, is empty once kept inside the machine's travel (Tools page)",
+                x[0], x[1], y[0], y[1]
+            ));
+        }
+        Ok((x, y))
     }
 
     /// Machine X the tool change moves to, if it moves X: by default the
@@ -289,6 +380,11 @@ impl MachineConfig {
             return Err("slow homing speed must be between 0 and 100% of the seek speed".into());
         }
         positive("max spindle speed", self.spindle_max_rpm)?;
+        positive("wash-down row spacing", self.wash_down.spacing)?;
+        positive("wash-down feed", self.wash_down.feed)?;
+        if !(self.wash_down.soak >= 0.0 && self.wash_down.margin.is_finite()) {
+            return Err("the wash-down soak can't be negative".into());
+        }
         if !(self.junction_deviation >= 0.0) {
             return Err("corner tolerance can't be negative".into());
         }
