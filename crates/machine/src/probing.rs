@@ -52,18 +52,27 @@ pub struct ProbeSettings {
 /// block's -X face is the left station's fixed jaw and its +X face the right
 /// station's; Find stock (`VISE=`) takes X from the saved faces instead of
 /// touching a jaw every time.
+///
+/// The block's shape, from vise.step: two hardened insert bars (the fixed jaw
+/// faces) stand 4 to 5 mm above a web between them and a 1.9 mm ledge on the
+/// outside of each face; past the bars' ends the block steps down about 10 mm.
+/// So the probe starts over the web, touches it, then the top of a bar, the
+/// bars' ends along Y, and the faces just below the bar top, above the ledges.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ViseSettings {
-    /// Between the two fixed jaw faces (the insert bars' faces), X.
+    /// Between the two fixed jaw faces (the insert bars' outer faces), X.
     pub gap: f64,
-    /// The centre block's length along Y, between the ends that are touched.
-    pub length: f64,
-    /// Touch the block's Y ends for the vise's Y middle (off: the middle is
+    /// Each insert bar's thickness along X: the bar top is touched half of it
+    /// inside a face.
+    pub jaw_thickness: f64,
+    /// The insert bars' length along Y, between the ends that are touched.
+    pub jaw_length: f64,
+    /// Touch the bars' Y ends for the vise's Y middle (off: the middle is
     /// where the probe was started).
     pub ends: bool,
-    /// Below the jaw top to touch the faces and ends.
-    pub depth: f64,
+    /// Below the bar top to touch the faces and ends: above the ledges.
+    pub face_depth: f64,
     /// Each face is touched this far either side of the middle in Y, for its angle.
     pub spread: f64,
     /// Measured gap and length further than this from the above are flagged.
@@ -74,9 +83,19 @@ pub struct ViseSettings {
 
 impl Default for ViseSettings {
     fn default() -> Self {
-        // From vise.step in the DMC2 rCAD machine: insert bar faces 33.3 apart,
-        // centre block 144.5 long, jaws 95.5 long (so ±30 stays on the bars).
-        ViseSettings { gap: 33.3, length: 144.5, ends: true, depth: 3.0, spread: 30.0, tolerance: 1.0, location: None }
+        // From vise.step in the DMC2 rCAD machine: insert bar faces 33.274
+        // apart, bars 12.7 thick and 95.5 long (so ±30 stays on them), their
+        // tops 4.13 above the web and ledges (about 4.7 on the real vise).
+        ViseSettings {
+            gap: 33.27,
+            jaw_thickness: 12.7,
+            jaw_length: 95.5,
+            ends: true,
+            face_depth: 2.0,
+            spread: 30.0,
+            tolerance: 1.0,
+            location: None,
+        }
     }
 }
 
@@ -94,9 +113,13 @@ pub struct ViseLocation {
     pub angle: f64,
     /// How far the tool setter's top is above the jaw top (like a Z reference).
     pub setter_above_top: f64,
-    /// Measured X between the faces and Y length of the block.
+    /// Measured X between the faces and Y length of the insert bars.
     pub gap: f64,
     pub length: Option<f64>,
+    /// How far the bar top is above the web between the bars (the ledges'
+    /// height, like the vise's built-in parallels).
+    #[serde(default)]
+    pub web_below_top: f64,
 }
 
 impl ViseLocation {

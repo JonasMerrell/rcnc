@@ -425,8 +425,14 @@ impl App {
                         ))
                         .color(TEXT),
                     );
-                    let len = v.length.map(|l| format!(", block {l:.3} long")).unwrap_or_default();
-                    ui.label(RichText::new(format!("Middle Y{:.3}{len}; turned {:.3}°; jaw top {:.3} below the setter top", v.y, v.angle, v.setter_above_top)).color(TEXT));
+                    let len = v.length.map(|l| format!(", jaws {l:.3} long")).unwrap_or_default();
+                    ui.label(
+                        RichText::new(format!(
+                            "Middle Y{:.3}{len}; turned {:.3}°; jaw top {:.3} below the setter top, {:.3} above the ledges",
+                            v.y, v.angle, v.setter_above_top, v.web_below_top
+                        ))
+                        .color(TEXT),
+                    );
                 }
                 None => {
                     ui.label(RichText::new("Vise location not found yet: programs with FIND_STOCK VISE= need it").color(MUTED));
@@ -434,7 +440,7 @@ impl App {
             }
             if ui
                 .add_enabled(s.mode == Mode::Idle && probe_in, Button::new("Find vise location").min_size(Vec2::new(260.0, 32.0)))
-                .on_hover_text("Empty the vise, jog the probe over the middle of the fixed centre block: rcnc touches its top, Y ends and both fixed jaw faces, and keeps where they are")
+                .on_hover_text("Empty the vise, jog the probe over the middle of the fixed centre block, between the jaw bars: rcnc touches the web, a jaw bar's top, the bars' Y ends and both fixed jaw faces, and keeps where they are")
                 .clicked()
             {
                 self.machine.send(Command::FindVise);
@@ -442,11 +448,12 @@ impl App {
             egui::Grid::new("vise-settings").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
                 let v = &mut p.vise;
                 changed |= labelled(ui, "Between the fixed jaw faces", &mut v.gap, 0.1, " mm");
-                changed |= labelled(ui, "Centre block length", &mut v.length, 0.1, " mm");
-                ui.label(RichText::new("Touch the block's Y ends").color(MUTED));
+                changed |= labelled(ui, "Jaw bar thickness", &mut v.jaw_thickness, 0.1, " mm");
+                changed |= labelled(ui, "Jaw length", &mut v.jaw_length, 0.1, " mm");
+                ui.label(RichText::new("Touch the jaws' Y ends").color(MUTED));
                 changed |= ui.checkbox(&mut v.ends, "").changed();
                 ui.end_row();
-                changed |= labelled(ui, "Below the jaw top", &mut v.depth, 0.1, " mm");
+                changed |= labelled(ui, "Faces below the jaw top", &mut v.face_depth, 0.1, " mm");
                 changed |= labelled(ui, "Faces touched ± along Y", &mut v.spread, 1.0, " mm");
                 changed |= labelled(ui, "Gap / length tolerance", &mut v.tolerance, 0.05, " mm");
             });

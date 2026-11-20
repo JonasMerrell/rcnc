@@ -5239,7 +5239,17 @@ mod tests {
         let face = bx[0] - mm(gap);
         let mid_y = (by[0] + by[1]) / 2;
         let top = sim.world.probe_z + (12.0 * config.axes[2].steps_per_unit) as i64;
-        sim.world.blocks.push(([face - mm(33.3), face], [mid_y - mm(72.25), mid_y + mm(72.25)], top));
+        // the centre block as in vise.step: two 12.7 insert bars 33.27 apart over their outer
+        // faces, 95.5 long, standing 4.13 above the web between them and the 1.9 ledges
+        // outside them; past the bars' ends the block steps down to 9.97 below their top
+        let zmm = |v: f64| (v * config.axes[2].steps_per_unit) as i64;
+        let (half, end) = (mm(95.5 / 2.0), mm(72.26));
+        let (left, ledge) = (face - mm(33.27), mm(1.9));
+        let jaws = [mid_y - half, mid_y + half];
+        sim.world.blocks.push(([left, left + mm(12.7)], jaws, top));
+        sim.world.blocks.push(([face - mm(12.7), face], jaws, top));
+        sim.world.blocks.push(([left - ledge, face + ledge], jaws, top - zmm(4.13)));
+        sim.world.blocks.push(([left - ledge, face + ledge], [mid_y - end, mid_y + end], top - zmm(9.97)));
         sim.world.lean = lean;
         sim.world.lean_about = mid_y;
         if !stock {
@@ -5269,19 +5279,25 @@ mod tests {
         run_until(c, clock, 120.0, "the end of a jog", |s| s.mode == Mode::Probing);
     }
 
-    /// Find vise location from 4 mm off the block's middle; saves it and returns it.
-    fn find_vise(c: &mut Controller, clock: &ManualClock, truth: [f64; 3]) -> (FindViseView, crate::probing::ViseLocation) {
+    /// Start Find vise location with the probe `x` off the +X face, 4 mm off the block's
+    /// middle in Y, and run it to the result (or an alarm).
+    fn find_vise_from(c: &mut Controller, clock: &ManualClock, truth: [f64; 3], x: f64) {
         c.handle(Command::FindVise);
         assert_eq!(c.snapshot().find_vise.as_ref().map(|v| v.stage), Some(FindViseStage::Locate), "{:?}", c.snapshot().log);
         let z = c.snapshot().machine[2].max(truth[2] + 30.0);
         jog_to(c, clock, 2, z);
-        jog_to(c, clock, 0, truth[0] - 16.65 + 2.0);
+        jog_to(c, clock, 0, truth[0] + x);
         jog_to(c, clock, 1, truth[1] - 4.0);
-        jog_to(c, clock, 2, truth[2] - 5.0);
-        assert!(c.snapshot().find_vise.as_ref().unwrap().tapped, "the jog stops on the jaw top");
-        jog_to(c, clock, 2, truth[2] + 5.0);
+        jog_to(c, clock, 2, truth[2] - 6.0);
+        assert!(c.snapshot().find_vise.as_ref().unwrap().tapped, "the jog stops on the block");
+        jog_to(c, clock, 2, truth[2] + 3.0);
         c.handle(Command::FindViseContinue);
         run_until(c, clock, 600.0, "the vise result", |s| s.find_vise.as_ref().is_some_and(|v| v.stage == FindViseStage::Result) || s.mode == Mode::Alarm || s.find_vise.is_none());
+    }
+
+    /// Find vise location from 2 mm off the web's middle; saves it and returns it.
+    fn find_vise(c: &mut Controller, clock: &ManualClock, truth: [f64; 3]) -> (FindViseView, crate::probing::ViseLocation) {
+        find_vise_from(c, clock, truth, -33.27 / 2.0 + 2.0);
         let view = c.snapshot().find_vise.clone().unwrap_or_else(|| panic!("{:?}", c.snapshot().log));
         tick(c, clock, 400);
         assert!(view.old.is_none() && c.snapshot().config.probing.vise.location.is_none(), "nothing saved before Save");
@@ -5290,6 +5306,23 @@ mod tests {
         let s = c.snapshot();
         assert!(s.log.iter().any(|l| l.starts_with("Vise location saved")), "{:?}", s.log);
         (view, s.config.probing.vise.location.unwrap())
+    }
+
+    /// Find stock with VISE=, the operator only tapping the stylus where the probe stands and
+    /// pressing Continue: rcnc moves over the stock from the saved vise location and probes it.
+    fn run_find_stock_on_vise_hands_off(c: &mut Controller, clock: &ManualClock, program: &str) -> Snapshot {
+        c.handle(Command::Load { name: "t".into(), text: program.into() });
+        c.handle(Command::CycleStart);
+        run_until(c, clock, 300.0, "the Find stock wizard", |s| s.find_stock.is_some() || s.mode == Mode::Alarm);
+        assert!(c.snapshot().find_stock.is_some(), "{:?}", c.snapshot().log);
+        // a finger on the stylus, without moving the machine
+        c.find_stock.as_mut().unwrap().tapped = true;
+        c.handle(Command::FindStockContinue);
+        run_until(c, clock, 600.0, "the end of Find stock", |s| {
+            s.find_stock.as_ref().is_some_and(|f| f.stage == FindStockStage::Mismatch && s.mode == Mode::Probing) || s.find_stock.is_none()
+        });
+        tick(c, clock, 400);
+        c.snapshot()
     }
 
     fn run_find_stock_on_vise(c: &mut Controller, clock: &ManualClock, program: &str, top: f64) -> Snapshot {
@@ -5327,7 +5360,7 @@ mod tests {
         let (mut c, clock, truth) = vise_setup(&config, false, 0.5, 0.0);
         let (view, loc) = find_vise(&mut c, &clock, truth);
         assert!(view.warnings.is_empty(), "{:?}", view.warnings);
-        assert!(close(loc.gap, 33.3) && close(loc.length.unwrap(), 144.5), "{loc:?}");
+        assert!(close(loc.gap, 33.27) && close(loc.length.unwrap(), 95.5) && close(loc.web_below_top, 4.13), "{loc:?}");
         assert!(loc.angle.abs() < 0.005, "{loc:?}");
         // to within the home switch's release, which `truth` doesn't know
         assert!((loc.faces[1] - truth[0]).abs() < 2.0 && (loc.y - truth[1]).abs() < 2.0, "{loc:?} {truth:?}");
@@ -5380,10 +5413,36 @@ mod tests {
         let (view, loc) = find_vise(&mut c, &clock, truth);
         assert!((loc.angle - lean.atan().to_degrees()).abs() < 0.002, "{loc:?}");
         assert!(view.warnings.iter().any(|w| w.contains("tram the vise")), "{:?}", view.warnings);
-        assert!(close(loc.gap, 33.3), "{loc:?}");
+        assert!(close(loc.gap, 33.27), "{loc:?}");
         // where the block's middle is the lean adds nothing
         assert!((loc.faces[1] - truth[0]).abs() < 2.0, "{loc:?}");
         assert!(close(loc.jaw_x(-1.0, loc.y + 40.0) - loc.jaw_x(-1.0, loc.y), 40.0 * lean), "{loc:?}");
+    }
+
+    /// Started over a jaw bar instead of the web between them: the second touch, over the web,
+    /// is lower than the first, so it stops and says where to start.
+    #[test]
+    fn find_vise_location_started_over_a_jaw() {
+        let (mut c, clock, truth) = vise_setup(&crate::sim::dmc2_sim_config(), false, 0.0, 0.0);
+        find_vise_from(&mut c, &clock, truth, -33.27 + 6.35);
+        let s = c.snapshot();
+        assert!(s.find_vise.is_none() && s.config.probing.vise.location.is_none(), "{:?}", s.log);
+        assert!(s.log.iter().any(|l| l.contains("between the two jaw bars") && l.contains("nothing was changed")), "{:?}", s.log);
+    }
+
+    /// With a saved vise location, Find stock VISE= needs no jogging: Continue from wherever the
+    /// probe is goes over the stock and finds it.
+    #[test]
+    fn find_stock_from_the_vise_needs_no_jog() {
+        let (mut c, clock, truth) = vise_setup(&crate::sim::dmc2_sim_config(), false, 0.5, 0.0);
+        let (_, loc) = find_vise(&mut c, &clock, truth);
+        let (mut c, clock, _) = vise_setup(&c.snapshot().config, true, 0.5, 0.0);
+        let s = run_find_stock_on_vise_hands_off(&mut c, &clock, "T99 M6\n(RCNC FIND_STOCK SIZE=39,77,20 AT=0,0,20 KEEPZ=1 VISE=-1)\nG0 Z5\nM30");
+        assert!(s.log.iter().any(|l| l.starts_with("Find stock: moving over the stock")), "{:?}", s.log);
+        run_until_idle(&mut c, &clock, 300.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "{:?}", s.log);
+        assert!(close(loc.faces[1] - s.work_offsets[0][0], -19.5), "jaw at work X{}", loc.faces[1] - s.work_offsets[0][0]);
     }
 
     #[test]

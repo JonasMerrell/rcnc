@@ -42,6 +42,11 @@ pub struct FindStockView {
     /// How far below the top the sides are touched (the program's DEPTH, or the
     /// default); the operator can change it, and the tolerance, before Continue.
     pub depth: f64,
+    /// Machine position when the wizard opened, and whether the probe has since been put over
+    /// the stock (Over the stock, a jog, or a probing run). With VISE= and a saved vise
+    /// location, Continue moves over the stock itself until then, so nothing needs jogging.
+    pub start: [f64; 3],
+    pub positioned: bool,
 }
 
 /// A probing step in a running program failed: the probe went back up, nothing was set and the
@@ -140,9 +145,12 @@ impl Controller {
         let depth = request.depth.unwrap_or(self.config.probing.find_stock.depth);
         // a depth the stylus can't reach is shown, to change in the window (Continue waits for it)
         let problem = self.depth_problem(depth);
-        self.find_stock = Some(FindStockView { request, stage: FindStockStage::Locate, tapped: false, found: None, problem, tolerance, depth });
+        let p = self.machine_position();
+        let start = [p[0], p[1], p[2]];
+        self.find_stock = Some(FindStockView { request, stage: FindStockStage::Locate, tapped: false, found: None, problem, tolerance, depth, start, positioned: false });
         self.info(if self.find_stock.as_ref().is_some_and(|f| f.request.vise.is_some()) {
-            "Find stock: tap the probe's stylus, press Over the stock (or jog over the middle of the stock, a few mm above the top), then press Continue"
+            "Find stock: tap the probe's stylus and press Continue: rcnc moves over the stock from the saved vise location and probes it \
+             (or press Over the stock to stop there and fine-tune first)"
         } else {
             "Find stock: tap the probe's stylus, jog it over the middle of the stock, a few mm above the top, then press Continue"
         });
@@ -203,26 +211,34 @@ impl Controller {
         Some([x, loc.y, jaw_top + req.size[2] + self.config.probing.find_stock.z_clearance])
     }
 
-    /// Find stock with a saved vise location, before Continue: move over where the stock should be
-    /// (up first, never down), from where the operator can jog to fine-tune, or Continue.
-    pub(super) fn find_stock_over_stock(&mut self) {
-        let Some(f) = &self.find_stock else { return };
-        if f.stage != FindStockStage::Locate || !self.locating() {
-            return;
-        }
-        let Some(to) = self.stock_from_vise(&f.request) else {
-            return self.info("Find stock: Over the stock needs VISE= in the program and a saved vise location");
-        };
+    /// The guarded moves from here to over where the stock should be, from the saved vise location
+    /// and the program's stock size: across at the higher of here and the clearance height, then
+    /// down to it (guarded: a stock standing higher than expected stops the probe).
+    fn moves_over_stock(&mut self) -> Option<Vec<Step>> {
+        let to = self.stock_from_vise(&self.find_stock.as_ref()?.request)?;
         let s = self.config.probing.clone();
-        // across at the higher of here and the clearance height, then down to it (guarded: a
-        // stock standing higher than expected stops the probe)
         let mut up = self.machine_position()[2].max(to[2]);
         if self.config.soft_limits {
             up = up.min(self.config.axes[2].soft_max);
         }
         let down = to[2].min(up);
         self.info(format!("Find stock: moving over the stock, machine X{} Y{} Z{}", fmt(to[0]), fmt(to[1]), fmt(down)));
-        let moves = [probing::guarded_to(&s, 2, up), probing::guarded_to(&s, 0, to[0]), probing::guarded_to(&s, 1, to[1]), probing::guarded_to(&s, 2, down)];
+        if let Some(f) = &mut self.find_stock {
+            f.positioned = true;
+        }
+        Some(vec![probing::guarded_to(&s, 2, up), probing::guarded_to(&s, 0, to[0]), probing::guarded_to(&s, 1, to[1]), probing::guarded_to(&s, 2, down)])
+    }
+
+    /// Find stock with a saved vise location, before Continue: move over where the stock should be
+    /// (up first, never down), from where the operator can jog to fine-tune, then Continue.
+    pub(super) fn find_stock_over_stock(&mut self) {
+        let Some(f) = &self.find_stock else { return };
+        if f.stage != FindStockStage::Locate || !self.locating() {
+            return;
+        }
+        let Some(moves) = self.moves_over_stock() else {
+            return self.info("Find stock: Over the stock needs VISE= in the program and a saved vise location");
+        };
         if let Some(r) = &mut self.routine {
             for step in moves.into_iter().chain([Step::Operator]).rev() {
                 r.steps.push_front(step);
@@ -267,6 +283,21 @@ impl Controller {
         }
         if self.config.probe.is_some_and(|p| p.is_active(self.status.inputs)) {
             return self.info("The probe is touching something: jog it clear first");
+        }
+        // VISE= with a saved location and the probe not put anywhere yet: go over the stock
+        // first, then probe straight on. A jog of more than 1 mm counts as putting it there.
+        let jogged = self.machine_position().iter().zip(f.start).any(|(a, b)| (a - b).abs() > 1.0);
+        if f.stage == FindStockStage::Locate && !f.positioned && !jogged {
+            if let Some(moves) = self.moves_over_stock() {
+                if let Some(r) = &mut self.routine {
+                    for step in moves.into_iter().rev() {
+                        r.steps.push_front(step);
+                    }
+                }
+            }
+        }
+        if let Some(f) = &mut self.find_stock {
+            f.positioned = true;
         }
         self.routine_waiting = false;
         self.routine_step();
