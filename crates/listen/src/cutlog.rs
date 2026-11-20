@@ -80,6 +80,13 @@ pub struct Moment {
     /// programmed speed, so it also carries the VFD's own no-load slip, about 1.2% at 24k on the DMC2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub over_no_load: Option<f64>,
+    /// Standing with the spindle on: its speed over the long window (0.68 s, 4x the resolution of `heard_rpm`),
+    /// rpm: the no-load reference the bog guard learns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_load_rpm: Option<f64>,
+    /// The speed the VFD drove the motor at then (its output frequency), rpm, if a drive was connected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vfd_rpm: Option<f64>,
 }
 
 /// One program line: what it asked for and what was heard while it ran.
@@ -133,6 +140,8 @@ impl CutLog {
             chatter: f.chatter,
             adaptive_feed: None,
             over_no_load: None,
+            no_load_rpm: f.air_droop.map(|d| f.ctx.rpm * (1.0 - d)),
+            vfd_rpm: f.ctx.vfd_rpm,
         });
         self.add(f);
     }

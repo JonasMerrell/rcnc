@@ -457,8 +457,9 @@ impl eframe::App for App {
         self.watch_file(ctx.input(|i| i.time));
         self.picked(ctx);
         let program = self.program_file.as_ref().map(|p| p.0.clone());
-        self.ears.poll(&self.snap, program.as_deref(), &self.machine);
         self.vfd.poll(&self.snap, program.as_deref(), &self.machine);
+        self.ears.vfd_rpm = self.vfd.rpm();
+        self.ears.poll(&self.snap, program.as_deref(), &self.machine);
         if self.ears.listening() || self.vfd.connected() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -864,6 +865,25 @@ impl App {
                 if s.probe_active { "touching" } else { "clear" },
             );
         });
+        // the spindle's real speed, heard by the transducer, beside the VFD's
+        if s.spindle != Spindle::Off {
+            let heard = self.ears.speed();
+            let vfd = self.vfd.rpm();
+            let (text, color) = match ears::speed_line(heard, vfd) {
+                Some(t) => (t, if heard.is_some_and(|h| h.droop > 0.06) { AMBER } else { GREEN }),
+                None if self.ears.listening() => ("spindle not heard (spinning up, or the transducer is quiet)".to_string(), MUTED),
+                None => match vfd {
+                    Some(v) => (format!("VFD {} rpm (listening off)", ears::thousands(v)), MUTED),
+                    None => (String::new(), MUTED),
+                },
+            };
+            if !text.is_empty() {
+                ui.add_space(2.0);
+                ui.label(RichText::new(text).size(13.0).color(color).strong()).on_hover_text(
+                    "Heard: the spindle's real speed from the vibration transducer (what most windows of the last 0.7 s agree on) and how far it runs under the S word. VFD: the speed the drive turns the field at, from its output frequency over RS-485. Slip: the difference, the rotor's lag behind the field, which grows with the load.",
+                );
+            }
+        }
     }
 
     fn jog(&mut self, ui: &mut egui::Ui) {
