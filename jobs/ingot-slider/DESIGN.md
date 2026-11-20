@@ -8,7 +8,7 @@ Magnetic fidget slider: a C360 brass "ingot" slides in a 6061 channel base and c
 
 | | Base (6061-T6) | Slider (C360 brass) |
 |---|---|---|
-| Size | 25.0 × 45.0 × 9.0 | 19.6 × 45.0 × 8.0 |
+| Size | 25.0 × 45.0 × **8.6** (was 9.0: the measured 12.34 bar) | 19.6 × 45.0 × 8.0 |
 | Outline corners | R2.5 (ends on the channel wall) | R3 |
 | Feature | channel 20.0 wide × 3.0 deep, full length (2.5 mm rails) | ingot chamfer 2.4 × 45° round the top (top flat 14.8 × 40.2; engraving field 12.8 × 38.2) |
 | Magnet pockets | 3 × Ø8.05 × 3.15 in the channel floor, y −15 / 0 / +15 | 3 × Ø8.05 × 3.15 in the bottom, same places |
@@ -17,15 +17,20 @@ Magnetic fidget slider: a C360 brass "ingot" slides in a 6061 channel base and c
 | Mass (approx.) | 18 g | 53 g |
 
 Fit: 0.2 mm side clearance in the channel; the slider stands 5 mm above the rails. Under each base magnet
-2.85 mm of floor, over each slider magnet 4.85 mm of brass. With both sets 0.15 below flush the faces are
+2.45 mm of floor (base 8.6), over each slider magnet 4.85 mm of brass. With both sets 0.15 below flush the faces are
 0.3 apart when the slider sits on the floor.
 
 ## Changes from the proposal
 
+- **Base 8.6 thick, not 9.0 (2026-11-20).** The aluminium came in at 12.34, so op 1's walls (down to the jaw
+  limit) reach only Z7.14 in op 2. With the 1.7 rail chamfer, a 9.0 base would have left 0.16 of op 2 wall under
+  the chamfer (the seam showing). 8.6 puts the chamfer's lower edge at Z6.9, 0.24 inside, with no shim, full 4.7
+  grip in op 1, the channel still 3 deep and the slider's fit unchanged; 2.45 of aluminium stays under each magnet.
+
 - **Ingot chamfer 2.4 mm (2026-11-18; was 2.0, proposal 3).** It hides the op 1 / op 2 seam (below). The 90°
   chamfer mill (Ø6.35, cone 3.175 wide) cuts 2.4 with a 0.58 tip offset (cone used 2.98 wide), and the tip stays
   at Z5.02, just over the jaw limit Z5.0. 3 mm would need a deeper tip than the jaws allow.
-- **Rail-top chamfer 1.7 (was 1.5)**, also to hide the seam. Tip offset 1.0: tip at Z6.3, cone used 2.7 wide.
+- **Rail-top chamfer 1.7 (was 1.5)**, also to hide the seam. Tip offset 1.0: tip at Z5.9 (base 8.6), cone used 2.7 wide.
 - **Base outline corners R2.5** (= the rail width), so the corner arc ends on the channel wall instead of
   leaving a sliver of rail end.
 - **Outer vertical edges are radiused (R2.5 / R3), not chamfered**: a vertical edge can't be chamfered with a
@@ -59,21 +64,21 @@ operations:** op 1 finishes every outside wall full height down to the jaw limit
 below the top chamfer, and the chamfer's lower edge sits 0.2 under the top of op 1's wall, so the seam between
 them is inside the chamfer, where the chamfer removes it.
 
-The bars are bought: **6061 1/2 × 1 (12.7 × 25.4, nominal until measured)** and **C360 measured 10.0 × 25.0**,
+The bars are bought and measured: **6061 12.34 × 26.6** and **C360 10.0 × 25.0**,
 both sawn to 101 blanks (`BAR_AL`, `BAR_BR`, `SHIM_BR`, `BLANK_L` in `cam.py`; the asserts there re-check the seam).
 
-| | Base (6061, 12.7 bar) | Slider (C360, 10.0 bar) |
+| | Base (6061, 12.34 bar, base 8.6) | Slider (C360, 10.0 bar) |
 |---|---|---|
 | Op 1 face | 0.2 → 12.5 | 0.2 → 9.8 |
 | Under the bar in op 1 | nothing | two 1.67 mm shim strips (25 × 39, 12 mm apart) |
 | Op 1 walls down to (op 1 Z) | Z5.0 | Z5.0 (3.33 above the blank's bottom) |
 | Op 1 grip on the raw bar | 4.7 | **3.0** (rough capped at 400 W, peak 320 W at 18k) |
-| Op 1 walls in op 2 reach | Z7.5 | Z6.47 |
-| Op 2 face to | Z9 (3.5 off, two levels) | Z8 (1.8 off) |
+| Op 1 walls in op 2 reach | Z7.14 | Z6.47 |
+| Op 2 face to | Z8.6 (3.54 off, two levels) | Z8 (1.8 off) |
 | Top chamfer | 1.7 on the rails | 2.4 round the ingot |
-| Chamfer lower edge | **Z7.3** (0.2 under 7.5) | **Z5.6** (0.87 under 6.47) |
-| Chamfer tip (≥ 5.0 beside the jaws) | Z6.3 | Z5.02 |
-| Op 2 grip on op 1's finished walls | 4.7 of 7.5 | 4.7 of 6.47 |
+| Chamfer lower edge | **Z6.9** (0.24 under 7.14) | **Z5.6** (0.87 under 6.47) |
+| Chamfer tip (≥ 5.0 beside the jaws) | Z5.9 | Z5.02 |
+| Op 2 grip on op 1's finished walls | 4.7 of 7.14 | 4.7 of 6.47 |
 
 Op 2's band rough takes the stock above op 1's walls down to exactly their top, leaving 0.3 off the walls; the
 chamfer's cone removes that 0.3 strip and the raw skin together. The same holds at the part ends and round the
@@ -82,7 +87,7 @@ corners (R2.5 base, R3 slider): op 1's contour runs the whole outline.
 - **No 0 mm seam left.** The smallest margin is the base's 0.2 between the chamfer's lower edge and op 1's wall top (the slider has 0.87).
   If the measured bars differ, `cam.py` re-derives the wall tops; the asserts fail if a margin goes under 0.2.
 - **Base gap web:** between the two bases the 8 mm gap is cut by op 1 down to Z5 (op 1), so in op 2 the carrier is
-  only the band above Z7.5. The band rough separates the bases; after it each base is held by its own 45 mm of
+  only the band above Z7.14. The band rough separates the bases; after it each base is held by its own 45 mm of
   4.7 mm grip, and only finishing and T1 follow.
 - Brass op 1 takes Z from the probed bar top (Z0 = the blank's bottom = the shim top), so the shim's thickness
   doesn't change the cut; a thinner shim lowers the wall top in op 2 by the same amount and the assert in

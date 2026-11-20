@@ -8,4 +8,4 @@ Batch order:
 2. `base-cycle.nc` once for every blank after it (op 1 left + op 2 right in one program).
 3. `base-last.nc` for the last blank (op 2 only, right station, G55).
 
-Aluminium is still planned on nominal 12.7 × 25.4: measure it first.
+Bar: 6061 12.34 × 26.6 (measured), no shims. The base is 8.6 thick.
