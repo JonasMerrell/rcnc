@@ -91,36 +91,36 @@ def out(c, stem, only=None):
     """Simulate, render and post setup c; `only`: for a job's lead, just these of its setups (op 1 alone)."""
     k = {"stations": only} if only else {}
     return [{"tool": "cam_info", "args": {"cam": c}},
-            {"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem}-sim.png", "resolution": 500, **k}},
-            {"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem}-sim-top.png", "view": "top", "resolution": 500, **k}},
-            {"tool": "render_cam", "args": {"cam": c, "path": f"{stem}-paths.png"}},
-            {"tool": "export_gcode", "args": {"cam": c, "path": f"{stem}.nc", **k}},
-            {"tool": "export_setup_sheet", "args": {"cam": c, "path": f"{stem}.html", **k}},
-            {"tool": "export_cam_simulation", "args": {"cam": c, "path": f"{stem}-sim.html", "resolution": 500, **k}}]
+            {"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem.split('-')[0]}/{stem}-sim.png", "resolution": 500, **k}},
+            {"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem.split('-')[0]}/{stem}-sim-top.png", "view": "top", "resolution": 500, **k}},
+            {"tool": "render_cam", "args": {"cam": c, "path": f"{stem.split('-')[0]}/{stem}-paths.png"}},
+            {"tool": "export_gcode", "args": {"cam": c, "path": f"{stem.split('-')[0]}/{stem}.nc", **k}},
+            {"tool": "export_setup_sheet", "args": {"cam": c, "path": f"{stem.split('-')[0]}/{stem}.html", **k}},
+            {"tool": "export_cam_simulation", "args": {"cam": c, "path": f"{stem.split('-')[0]}/{stem}-sim.html", "resolution": 500, **k}}]
 
 
 def info(c, stem):
     """A setup that is only posted as part of its job (no program of its own): its numbers and pictures."""
     return [{"tool": "cam_info", "args": {"cam": c}},
-            {"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem}-sim.png", "resolution": 500}},
-            {"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem}-sim-top.png", "view": "top", "resolution": 500}},
-            {"tool": "render_cam", "args": {"cam": c, "path": f"{stem}-paths.png"}}]
+            {"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem.split('-')[0]}/{stem}-sim.png", "resolution": 500}},
+            {"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem.split('-')[0]}/{stem}-sim-top.png", "view": "top", "resolution": 500}},
+            {"tool": "render_cam", "args": {"cam": c, "path": f"{stem.split('-')[0]}/{stem}-paths.png"}}]
 
 
 def cycle(c, stem):
     """The whole job c leads: both stations in one program, simulation, sheet and playback."""
-    return [{"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem}-sim.png", "resolution": 500}},
-            {"tool": "export_gcode", "args": {"cam": c, "path": f"{stem}.nc"}},
-            {"tool": "export_setup_sheet", "args": {"cam": c, "path": f"{stem}.html"}},
-            {"tool": "export_cam_simulation", "args": {"cam": c, "path": f"{stem}-sim.html", "resolution": 700}}]
+    return [{"tool": "simulate_cam", "args": {"cam": c, "path": f"{stem.split('-')[0]}/{stem}-sim.png", "resolution": 500}},
+            {"tool": "export_gcode", "args": {"cam": c, "path": f"{stem.split('-')[0]}/{stem}.nc"}},
+            {"tool": "export_setup_sheet", "args": {"cam": c, "path": f"{stem.split('-')[0]}/{stem}.html"}},
+            {"tool": "export_cam_simulation", "args": {"cam": c, "path": f"{stem.split('-')[0]}/{stem}-sim.html", "resolution": 700}}]
 
 
 def first_last(c, stem, first, last):
     """The batch's first program (op 1 alone) and last (op 2 and what follows it), posted from job c with stations."""
     S = []
     for which, st in (("first", first), ("last", last)):
-        S += [{"tool": "export_gcode", "args": {"cam": c, "stations": st, "path": f"{stem}-{which}.nc"}},
-              {"tool": "export_setup_sheet", "args": {"cam": c, "stations": st, "path": f"{stem}-{which}.html"}}]
+        S += [{"tool": "export_gcode", "args": {"cam": c, "stations": st, "path": f"{stem.split('-')[0]}/{stem}-{which}.nc"}},
+              {"tool": "export_setup_sheet", "args": {"cam": c, "stations": st, "path": f"{stem.split('-')[0]}/{stem}-{which}.html"}}]
     return S
 
 

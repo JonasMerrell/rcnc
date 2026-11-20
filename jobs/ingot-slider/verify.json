@@ -9,7 +9,7 @@
   "tool": "verify_gcode",
   "args": {
    "cam": 0,
-   "path": "base-op1.nc",
+   "path": "base/base-op1.nc",
    "stations": [
     "Base op1 bottom"
    ]
@@ -19,14 +19,14 @@
   "tool": "verify_gcode",
   "args": {
    "cam": 1,
-   "path": "base-op2.nc"
+   "path": "base/base-op2.nc"
   }
  },
  {
   "tool": "verify_gcode",
   "args": {
    "cam": 2,
-   "path": "slider-op1.nc",
+   "path": "slider/slider-op1.nc",
    "stations": [
     "Slider op1 bottom"
    ]
@@ -36,21 +36,21 @@
   "tool": "verify_gcode",
   "args": {
    "cam": 0,
-   "path": "base-cycle.nc"
+   "path": "base/base-cycle.nc"
   }
  },
  {
   "tool": "verify_gcode",
   "args": {
    "cam": 2,
-   "path": "slider-cycle.nc"
+   "path": "slider/slider-cycle.nc"
   }
  },
  {
   "tool": "verify_gcode",
   "args": {
    "cam": 0,
-   "path": "base-first.nc",
+   "path": "base/base-first.nc",
    "stations": [
     "Base op1 bottom"
    ]
@@ -60,7 +60,7 @@
   "tool": "verify_gcode",
   "args": {
    "cam": 0,
-   "path": "base-last.nc",
+   "path": "base/base-last.nc",
    "stations": [
     "Base op2 top"
    ]
@@ -70,7 +70,7 @@
   "tool": "verify_gcode",
   "args": {
    "cam": 2,
-   "path": "slider-first.nc",
+   "path": "slider/slider-first.nc",
    "stations": [
     "Slider op1 bottom"
    ]
@@ -80,7 +80,7 @@
   "tool": "verify_gcode",
   "args": {
    "cam": 2,
-   "path": "slider-last.nc",
+   "path": "slider/slider-last.nc",
    "stations": [
     "Slider op2 top",
     "Slider op2 engrave"
