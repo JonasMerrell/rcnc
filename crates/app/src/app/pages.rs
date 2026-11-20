@@ -169,7 +169,83 @@ impl App {
             }
             ui.add_space(12.0);
             self.tool_change_settings(ui);
+            ui.add_space(12.0);
+            self.wash_down_settings(ui);
         });
+    }
+
+    fn wash_down_settings(&mut self, ui: &mut egui::Ui) {
+        let s = self.snap.clone();
+        let idle = s.mode == Mode::Idle;
+        section_title(ui, "Coolant wash-down");
+        let area = s.config.wash_area();
+        let homed = s.homed[..3].iter().all(|h| *h);
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(idle && homed && area.is_ok(), Button::new("Wash down now"))
+                .on_hover_text("Stop the spindle, raise Z, turn the flood coolant on and sweep the area, then coolant off and back. A program can ask for it with (RCNC WASH_DOWN)")
+                .clicked()
+            {
+                self.machine.send(Command::WashDown);
+            }
+            let text = match &area {
+                Ok((x, y)) => RichText::new(format!("Sweeps machine X{:.1} to X{:.1}, Y{:.1} to Y{:.1}", x[0], x[1], y[0], y[1])).color(TEXT),
+                Err(e) => RichText::new(format!("Can't run: {e}")).color(AMBER),
+            };
+            ui.label(text);
+        });
+        let mut c = s.config.clone();
+        let mut changed = false;
+        let w = &mut c.wash_down;
+        changed |= ui
+            .checkbox(&mut w.around_vise, "Around the saved vise location (Find vise location, Probe page)")
+            .changed();
+        egui::Grid::new("wash-down").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+            if w.around_vise {
+                changed |= labelled(ui, "Vise size X", &mut w.vise_size[0], 1.0, " mm");
+                changed |= labelled(ui, "Vise size Y", &mut w.vise_size[1], 1.0, " mm");
+                changed |= labelled(ui, "Past the vise by", &mut w.margin, 1.0, " mm");
+            } else {
+                changed |= labelled(ui, "From X", &mut w.x[0], 1.0, " mm");
+                changed |= labelled(ui, "To X", &mut w.x[1], 1.0, " mm");
+                changed |= labelled(ui, "From Y", &mut w.y[0], 1.0, " mm");
+                changed |= labelled(ui, "To Y", &mut w.y[1], 1.0, " mm");
+            }
+            changed |= labelled(ui, "Lowest Z", &mut w.z, 0.5, " mm");
+            changed |= labelled(ui, "Row spacing", &mut w.spacing, 1.0, " mm");
+            changed |= labelled(ui, "Sweep feed", &mut w.feed, 50.0, " mm/min");
+            ui.label(RichText::new("Passes").color(MUTED));
+            changed |= ui.add(DragValue::new(&mut w.passes).range(1..=20)).changed();
+            ui.end_row();
+            changed |= labelled(ui, "Coolant on before moving", &mut w.soak, 0.5, " s");
+        });
+        if !w.around_vise {
+            if ui
+                .button("Corner here")
+                .on_hover_text("Jog to one corner of the area, press this, then jog to the opposite corner and press it again")
+                .clicked()
+            {
+                // the first press sets both corners here, the second the far one
+                if (w.x[0] - w.x[1]).abs() < 1e-6 && (w.y[0] - w.y[1]).abs() < 1e-6 {
+                    w.x = [s.machine[0]; 2];
+                    w.y = [s.machine[1]; 2];
+                } else {
+                    w.x[1] = s.machine[0];
+                    w.y[1] = s.machine[1];
+                }
+                changed = true;
+            }
+        }
+        ui.label(
+            RichText::new(
+                "Machine coordinates. Z only ever rises to the lowest Z. Each pass laps the edge, then rows across it;                  every other pass runs crosswise. Stop switches the coolant off.",
+            )
+            .size(12.0)
+            .color(MUTED),
+        );
+        if changed && idle {
+            self.machine.send(Command::SetConfig(Box::new(c)));
+        }
     }
 
     fn tool_change_settings(&mut self, ui: &mut egui::Ui) {
