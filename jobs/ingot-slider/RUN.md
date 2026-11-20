@@ -1,5 +1,9 @@
 # Ingot slider: how to run it
 
+> **On the mill:** the base programs are in `base/`, the slider programs in `slider/` (each with its setup
+> sheets, pictures and STEP). Run order for a batch: `*-first.nc` on a raw blank, then `*-cycle.nc` once per
+> blank after it, then `*-last.nc`. The scripts, docs and `cam.py` stay at the top: they work in `~/dmc2/slider`.
+
 > **Brass measured, aluminium PROVISIONAL (2026-11-19).** The C360 is measured: **10.0 × 25.0**, cut into **101 mm**
 > blanks. It lies on Jonas's **1.67 mm** shims in op 1. The 6061 is still planned on its nominal 12.7 × 25.4, also
 > as 101 blanks. When the aluminium is measured, put the numbers in `BAR_AL` at the top of `cam.py`, then re-run
