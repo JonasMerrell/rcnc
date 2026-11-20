@@ -134,6 +134,14 @@ impl SpindleVfd {
         }
     }
 
+    /// The speed the drive turns the motor's field at (output frequency x 120 / poles), rpm, while connected.
+    pub fn rpm(&self) -> Option<f64> {
+        if !self.connected() {
+            return None;
+        }
+        self.last.as_ref()?.rpm_from_hz(self.poles())
+    }
+
     /// Motor poles from the drive (F143), else 2 (the DMC2's spindle).
     fn poles(&self) -> f64 {
         self.link

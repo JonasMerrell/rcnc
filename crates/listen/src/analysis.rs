@@ -22,6 +22,10 @@ pub struct Context {
     pub pos: [f64; 3],
     #[serde(default)]
     pub velocity: f64,
+    /// The speed the spindle VFD drives the motor at, from its output frequency over RS-485 (None: no drive
+    /// connected), rpm: the heard speed's slip under it is the rotor's lag, which grows with the load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vfd_rpm: Option<f64>,
 }
 
 /// One analysed window of sound.
@@ -280,7 +284,21 @@ impl Analyzer {
                 prom[i - 1].max(prom[i]).max(prom[i + 1])
             }
         };
-        let score = |f: f64| (1..=harmonics).map(|k| at_db(k as f64 * f)).sum::<f64>();
+        // the comb's score reads each harmonic right at its frequency (between bins, linearly): the most of 3 bins
+        // made a broad plateau round every line, so a comb a bin and a half off a real harmonic's lobe still scored
+        // it in full and, with the DMC2's fixed 3106-3129 Hz line as its 8th, beat the real comb (24k in air, v4
+        // run 1: one window in four read 23 470-23 560 where the spindle ran 23 880)
+        let exact = |hz: f64| {
+            let x = hz / bin;
+            let i = x.floor() as usize;
+            if i + 1 >= prom.len() || i == 0 {
+                0.0
+            } else {
+                let w = x - i as f64;
+                prom[i] * (1.0 - w) + prom[i + 1] * w
+            }
+        };
+        let score = |f: f64| (1..=harmonics).map(|k| exact(k as f64 * f)).sum::<f64>();
         let (lo_f, hi_f) = (rot * (1.0 - MAX_DROOP), rot * 1.02);
         let step = bin / (2.0 * harmonics as f64);
         let mut scores = vec![];
