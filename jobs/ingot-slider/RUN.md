@@ -41,7 +41,8 @@ are in `DESIGN.md`. Per-operation tools, feeds, times and loads are in `OPS.md`.
 - **Spindle at F004 = 150:** aluminium is roughed at **S9000** (target 650 W, under the 850 W caution), with top
   facing and finishing at S12000 and the chamfer mill at S24000 (light). Every S change is followed by
   `G4 P3` in air.
-- **Chip pauses before the finishes** that follow the 9k roughing (aluminium, both ops).
+- **No chip pauses** before the aluminium finishes (removed 2026-11-21: Jonas saw no chip build-up at 9k). The
+  BORES PAUSE before Find bores stays.
 - **Op 2 locates from the carrier bores:** Find stock (size from op 1's simulation), the BORES PAUSE to blow them
   out, then Find bores, which also measures the part's rotation (rcnc PR #18).
 - **Every program has `(RCNC REQUIRE_GUARD)`.** These cuts go beyond the proven ones (9k at 650–740 W, the new
@@ -181,8 +182,6 @@ Lay the bar on the ledges, centred along the jaws. Both ends stick out about 2 m
    - Roughs round both parts, the 8 mm gap and the ends to Z5 (aluminium, two levels of 3.75 at 9k) or 3.5 above
      the blank's bottom (brass, four levels at 18k, capped at 400 W). Where it enters the gap it is close to slotting (5.95 wide
      in aluminium). The feed schedule drops to 1185 mm/min there, and that's the 734 W peak.
-   - **Aluminium: CHIP PAUSE.** Spindle and coolant stop. Blow the chips off the bar and out of the gap, then
-     Cycle Start.
    - One full-height finish pass on all the walls, down to the jaw limit. These walls are final: op 2 grips
      them and never cuts them again.
    - Brass only: the 6 magnet pockets.
@@ -209,7 +208,6 @@ Push the bar against the fixed jaw and clamp.
 5. Base:
    - Face to Z8.6 at 12k, two levels of 1.77.
    - Rough the channel to Z5.6 at 9k (walls leave 0.3, floor 0.2).
-   - **CHIP PAUSE:** blow the chips out of the two channels and off the top.
    - Finish the channel floor at 12k, passes along the slide (Y) so the tool marks run the way the slider moves.
    - The magnet pockets.
    - Rough the band above op 1's walls off to Z6.94. This **separates the two bases**. It's light: target 120 W, peak 110 W.
@@ -239,7 +237,7 @@ Each cycle runs one blank's op 1 in the **left station (G54)** and the previous 
 | Tool | Left station (G54) | Right station (G55) |
 |---|---|---|
 | T99 | Find stock (raw bar) | Find stock, **BORES PAUSE**, Find bores |
-| T24 | all of op 1 (aluminium: CHIP PAUSE before the wall finish) | all of op 2 (aluminium: CHIP PAUSE before the floor finish) |
+| T24 | all of op 1 | all of op 2 |
 | T1 | op 1 edge breaks | op 2 chamfers, then (sliders) the crosshatch engraving |
 
 **The programs come straight from rCAD.** In `slider-cam.json` the op 1 setup leads a *job*: `with: ["Base op2 top"]`
