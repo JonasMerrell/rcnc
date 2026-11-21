@@ -12,7 +12,8 @@ import sys
 
 WALL = {"base": 25.0, "slider": 19.6, "eclipse": 19.6, "engraved": 19.6}   # op 1's finished width, the face op 2 grips
 for p in sys.argv[1:]:
-    part = p.replace("\\", "/").split("/")[-1].split("-")[0]
+    name = p.replace("\\", "/").split("/")[-1]
+    part = "base" if name.startswith("eclipse-base") else name.split("-")[0]
     out, station, n = [], None, 0
     for line in open(p).read().split("\n"):
         s = line.strip()
