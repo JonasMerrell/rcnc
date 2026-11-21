@@ -1,5 +1,7 @@
 # Ingot slider: Eclipse car (v3) — rides the custom base in ../eclipse-base
 
+> **SUPERSEDED (2026-11-21): do not run these programs.** Jonas approved a new car surface and the thick-rail base; use `../eclipse-car/` (car) and `../eclipse-base-thick/` (base) instead. Kept for reference only.
+
 A brass slider shaped like a 1st-gen Eclipse: side profile traced from Jonas's blueprint (eclipse-blueprint.png;
 heights at 0.8 of true scale, 9.5 at the roof), body line at 3.7 (vertical lower body, 45° shoulder, near-vertical
 sides, narrower greenhouse), wing-height tail, pop-up lids and glass outlines engraved. Underneath: a 10.4 × 1.65

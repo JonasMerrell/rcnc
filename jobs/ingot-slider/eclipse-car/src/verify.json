@@ -1,0 +1,96 @@
+[
+ {
+  "tool": "open_document",
+  "args": {
+   "path": "/home/jonas/dmc2/eclipse-car/eclipse-car-cam.json"
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 0,
+   "path": "/home/jonas/dmc2/eclipse-car/eclipse-car/eclipse-car-op1.nc",
+   "stations": [
+    "Eclipse car op1 bottom"
+   ]
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 1,
+   "path": "/home/jonas/dmc2/eclipse-car/eclipse-car/eclipse-car-op2.nc"
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 0,
+   "path": "/home/jonas/dmc2/eclipse-car/eclipse-car/eclipse-car-cycle.nc"
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 0,
+   "path": "/home/jonas/dmc2/eclipse-car/eclipse-car/eclipse-car-first.nc",
+   "stations": [
+    "Eclipse car op1 bottom"
+   ]
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 0,
+   "path": "/home/jonas/dmc2/eclipse-car/eclipse-car/eclipse-car-last.nc",
+   "stations": [
+    "Eclipse car op2 top"
+   ]
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 2,
+   "path": "/home/jonas/dmc2/eclipse-car/eclipse-base-thick/eclipse-base-thick-op1.nc",
+   "stations": [
+    "Thick base op1 bottom"
+   ]
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 3,
+   "path": "/home/jonas/dmc2/eclipse-car/eclipse-base-thick/eclipse-base-thick-op2.nc"
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 2,
+   "path": "/home/jonas/dmc2/eclipse-car/eclipse-base-thick/eclipse-base-thick-cycle.nc"
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 2,
+   "path": "/home/jonas/dmc2/eclipse-car/eclipse-base-thick/eclipse-base-thick-first.nc",
+   "stations": [
+    "Thick base op1 bottom"
+   ]
+  }
+ },
+ {
+  "tool": "verify_gcode",
+  "args": {
+   "cam": 2,
+   "path": "/home/jonas/dmc2/eclipse-car/eclipse-base-thick/eclipse-base-thick-last.nc",
+   "stations": [
+    "Thick base op2 top"
+   ]
+  }
+ }
+]
