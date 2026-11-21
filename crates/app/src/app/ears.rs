@@ -5,7 +5,7 @@
 use super::palette::*;
 use eframe::egui::{self, RichText};
 use gcode::Spindle;
-use listen::{Analyzer, Context, CutLog, Frame, Guard, GuardSettings, Limiter, LimiterSettings, Source};
+use listen::{Analyzer, Context, CutLog, Frame, Guard, GuardSettings, Limiter, LimiterSettings, Source, Speed, SpeedMeter};
 use machine::{Command, ControllerHandle, Mode, Snapshot};
 use std::sync::Arc;
 
@@ -57,6 +57,11 @@ pub struct Ears {
     log_saved: std::time::Instant,
     log_saving: Option<std::thread::JoinHandle<()>>,
     pub last: Option<Frame>,
+    /// The heard speed steadied for the readouts (on the guard's clock).
+    speed: SpeedMeter,
+    /// The speed the VFD drives the motor at (its output frequency), set by the app each frame; logged with
+    /// each window and shown beside the heard speed.
+    pub vfd_rpm: Option<f64>,
     /// Recent chatter verdicts, to steady the indicator.
     chatter_recent: std::collections::VecDeque<bool>,
     tap: Tap,
@@ -94,6 +99,8 @@ impl Ears {
             log_saved: std::time::Instant::now(),
             log_saving: None,
             last: None,
+            speed: SpeedMeter::new(),
+            vfd_rpm: None,
             chatter_recent: Default::default(),
             tap: Tap::Idle,
             ops: (0, vec![]),
@@ -184,6 +191,7 @@ impl Ears {
         let mut over = vec![None; n];
         for (i, f) in frames.iter().enumerate() {
             let t = gt - (n - 1 - i) as f64 * step;
+            self.speed.update(t, f);
             let held = self.guard.update(t, f);
             over[i] = self.guard.excess(f);
             if let Some(why) = held {
@@ -313,6 +321,7 @@ impl Ears {
             feed: s.feed_rate,
             pos: [s.work[0], s.work[1], s.work[2]],
             velocity: s.velocity,
+            vfd_rpm: self.vfd_rpm,
             cutting: s.spindle != Spindle::Off && matches!(s.mode, Mode::Running) && s.velocity > 0.0,
         }
     }
@@ -335,6 +344,13 @@ impl Ears {
         self.arm_state().map(|_| ())
     }
 
+    /// The spindle's speed as heard now (steadied over the last few windows); None with listening off, the
+    /// spindle off, or not heard in the last second.
+    pub fn speed(&self) -> Option<Speed> {
+        self.source.as_ref()?;
+        self.speed.get(self.clock.elapsed().as_secs_f64())
+    }
+
     pub fn recording(&self) -> bool {
         self.recording.is_some()
     }
@@ -352,13 +368,14 @@ impl Ears {
             return;
         }
         let chatter = self.chatter_recent.iter().filter(|c| **c).count() >= 3;
-        let (text, color) = match &self.last {
-            Some(f) if chatter => (format!("mic: CHATTER {:.0} Hz", f.chatter.map(|c| c.0).unwrap_or(0.0)), RED),
-            Some(Frame { droop: Some(d), .. }) => (format!("mic: rpm −{:.1}%", d * 100.0), if *d > 0.06 { AMBER } else { GREEN }),
-            Some(f) if f.ctx.rpm > 0.0 => ("mic: listening".to_string(), MUTED),
+        let speed = self.speed();
+        let (text, color) = match (&self.last, speed) {
+            (Some(f), _) if chatter => (format!("mic: CHATTER {:.0} Hz", f.chatter.map(|c| c.0).unwrap_or(0.0)), RED),
+            (_, Some(sp)) => (format!("mic: {} rpm ({})", thousands(sp.rpm), signed_pct(-sp.droop)), if sp.droop > 0.06 { AMBER } else { GREEN }),
+            (Some(f), None) if f.ctx.rpm > 0.0 => ("mic: spindle not heard".to_string(), MUTED),
             _ => ("mic: on".to_string(), MUTED),
         };
-        ui.label(RichText::new(text).size(13.0).color(color).strong()).on_hover_text("From the microphone: the spindle's speed under load (droop) and chatter. Logged per line next to the program as .cutlog.json.");
+        ui.label(RichText::new(text).size(13.0).color(color).strong()).on_hover_text(speed_hover(speed, self.vfd_rpm));
         if let Some(why) = &self.held {
             let banner = if why.contains("hasn't heard the spindle") { "FEED HELD: spindle not heard" } else { "FEED HELD: spindle bogging" };
             ui.label(RichText::new(banner).size(13.0).color(RED).strong()).on_hover_text(why);
@@ -511,6 +528,48 @@ impl Ears {
 /// How often a running program's cut log is written out, s.
 const LOG_SAVE_S: f64 = 10.0;
 
+/// 11 310 for 11310.4: a space between the thousands.
+pub fn thousands(rpm: f64) -> String {
+    let n = rpm.round() as i64;
+    let (sign, n) = if n < 0 { ("-", -n) } else { ("", n) };
+    if n >= 1000 {
+        format!("{sign}{} {:03}", n / 1000, n % 1000)
+    } else {
+        format!("{sign}{n}")
+    }
+}
+
+/// −5.7% / +0.3%.
+fn signed_pct(share: f64) -> String {
+    let p = share * 100.0;
+    if p < -0.05 {
+        format!("−{:.1}%", -p)
+    } else {
+        format!("+{:.1}%", p.max(0.0))
+    }
+}
+
+/// The heard speed beside the VFD's, in a line for the DRO: "heard 11 310 rpm (−5.7%) · VFD 11 980 · slip 670".
+pub fn speed_line(sp: Option<Speed>, vfd_rpm: Option<f64>) -> Option<String> {
+    let sp = sp?;
+    let mut t = format!("heard {} rpm ({})", thousands(sp.rpm), signed_pct(-sp.droop));
+    if let Some(v) = vfd_rpm.filter(|v| *v > 0.0) {
+        t.push_str(&format!(" · VFD {} · slip {}", thousands(v), thousands(sp.slip_from(v))));
+    }
+    Some(t)
+}
+
+fn speed_hover(sp: Option<Speed>, vfd_rpm: Option<f64>) -> String {
+    let mut t = String::from("From the vibration transducer: the spindle's real speed, from its rotation's harmonics (in a cut, the teeth's beat), what most windows of the last 0.7 s agree on, and how far it runs under the programmed speed; and chatter. Logged per window beside the program as .cutlog.json.");
+    if let Some(sp) = sp {
+        t.push_str(&format!("\n\nHeard {} rpm, programmed S{:.0}: {} ({} rpm); {} of the last {} windows agree.", thousands(sp.rpm), sp.programmed, signed_pct(-sp.droop), thousands(sp.rpm - sp.programmed), sp.agree, sp.windows));
+        if let Some(v) = vfd_rpm.filter(|v| *v > 0.0) {
+            t.push_str(&format!(" The VFD drives it at {} rpm (its output frequency): the rotor slips {} rpm under that, which grows with the load.", thousands(v), thousands(sp.slip_from(v))));
+        }
+    }
+    t
+}
+
 fn samples_per_frame_s(rate: u32) -> f64 {
     let n = if rate >= 32_000 { 8192 } else { 4096 };
     (n / 2) as f64 / rate.max(1) as f64
@@ -626,6 +685,20 @@ mod tests {
         assert_eq!((set.unwrap().target, set.unwrap().min, set.unwrap().max), (0.05, 0.3, 1.5));
         // no MAX: no speed-up in air
         assert_eq!(super::adaptive_lines("(RCNC ADAPTIVE_FEED)", base).0.unwrap().max, 1.0);
+    }
+
+    #[test]
+    fn the_heard_speed_reads_as_rpm_beside_the_vfds() {
+        use super::{speed_line, thousands};
+        assert_eq!(thousands(11_310.4), "11 310");
+        assert_eq!(thousands(950.0), "950");
+        assert_eq!(thousands(-1_200.0), "-1 200");
+        let sp = listen::Speed { rpm: 11_310.0, programmed: 12_000.0, droop: 1.0 - 11_310.0 / 12_000.0, agree: 7, windows: 8, spread: 20.0 };
+        assert_eq!(speed_line(Some(sp), None).unwrap(), "heard 11 310 rpm (−5.8%)");
+        assert_eq!(speed_line(Some(sp), Some(11_980.0)).unwrap(), "heard 11 310 rpm (−5.8%) · VFD 11 980 · slip 670");
+        assert!(speed_line(None, Some(11_980.0)).is_none());
+        let fast = listen::Speed { rpm: 12_036.0, droop: -0.003, ..sp };
+        assert_eq!(speed_line(Some(fast), None).unwrap(), "heard 12 036 rpm (+0.3%)");
     }
 
     #[test]
