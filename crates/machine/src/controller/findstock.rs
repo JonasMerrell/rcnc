@@ -147,8 +147,16 @@ impl Controller {
         let problem = self.depth_problem(depth);
         let p = self.machine_position();
         let start = [p[0], p[1], p[2]];
-        self.find_stock = Some(FindStockView { request, stage: FindStockStage::Locate, tapped: false, found: None, problem, tolerance, depth, start, positioned: false });
-        self.info(if self.find_stock.as_ref().is_some_and(|f| f.request.vise.is_some()) {
+        // the probe's tool change had the stylus tapped (and maybe the vise location confirmed)
+        let checked = self.probe_checks.clone();
+        let hands_off = request.vise.is_some() && checked.as_ref().is_some_and(|k| k.vise) && problem.is_none();
+        let tapped = checked.is_some();
+        self.find_stock = Some(FindStockView { request, stage: FindStockStage::Locate, tapped, found: None, problem, tolerance, depth, start, positioned: false });
+        self.info(if hands_off {
+            "Find stock: the probe and the vise location were checked at the tool change: moving over the stock from the saved vise location and probing it"
+        } else if tapped {
+            "Find stock: jog the probe over the middle of the stock, a few mm above the top, then press Continue"
+        } else if self.find_stock.as_ref().is_some_and(|f| f.request.vise.is_some()) {
             "Find stock: tap the probe's stylus and press Continue: rcnc moves over the stock from the saved vise location and probes it \
              (or press Over the stock to stop there and fine-tune first)"
         } else {
@@ -164,6 +172,9 @@ impl Controller {
             exec.wait = Wait::Routine;
         }
         self.routine_step();
+        if hands_off {
+            self.find_stock_continue();
+        }
     }
 
     /// The wizard is waiting for the operator to jog over the stock.

@@ -217,6 +217,24 @@ pub enum Op {
 /// and Z size, the work coordinates its top centre should read, how far the
 /// probed size may differ from the expected one, and how far below the top
 /// to touch the sides. Always millimetres.
+/// The probing cycles between a tool change and the next (see [`Interpreter::probe_segment`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProbeSegment {
+    pub find_stock: bool,
+    /// A Find stock takes X from the saved vise location (`VISE=`).
+    pub vise: bool,
+    pub find_bores: bool,
+    pub probe_z: bool,
+    /// Lines (0-based) of M0 stops, just after a `(MSG,...)` about the bores, before a Find bores.
+    pub bore_stops: Vec<usize>,
+}
+
+impl ProbeSegment {
+    pub fn probes(&self) -> bool {
+        self.find_stock || self.find_bores || self.probe_z
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StockRequest {
     pub size: [f64; 3],
@@ -758,25 +776,49 @@ impl Interpreter {
             if comment.trim_start().starts_with("RCNC WASH_DOWN") {
                 return Some((n + 1, "a coolant wash-down (it sweeps an area in machine coordinates)"));
             }
-            // words: a letter and the number after it
-            let mut words = vec![];
-            let mut chars = code.chars().filter(|c| !c.is_whitespace()).peekable();
-            while let Some(c) = chars.next() {
-                if c.is_ascii_alphabetic() {
-                    let mut num = String::new();
-                    while let Some(d) = chars.peek().filter(|d| d.is_ascii_digit() || **d == '.') {
-                        num.push(*d);
-                        chars.next();
-                    }
-                    words.push((c, num.parse::<f64>().unwrap_or(f64::NAN)));
-                }
-            }
-            words.iter().find_map(|(c, v)| match (c, *v) {
+            code_words(code).iter().find_map(|(c, v)| match (c, *v) {
                 ('M', v) if v == 6.0 && tool_changes => Some((n + 1, "a tool change")),
                 ('G', v) if v == 53.0 || v == 28.0 || v == 30.0 => Some((n + 1, "machine coordinates")),
                 _ => None,
             })
         })
+    }
+
+    /// What the probe will be used for after a tool change on line `from` (0-based), up to the next
+    /// tool change or the program's end: so the change can ask for every check those probing cycles
+    /// need at once (the stylus tapped, the bores cleaned out, the saved vise location trusted).
+    pub fn probe_segment(&self, from: usize) -> ProbeSegment {
+        let mut seg = ProbeSegment::default();
+        let mut message = String::new();
+        let mut stops = Vec::new();
+        for (n, line) in self.lines.iter().enumerate().skip(from + 1) {
+            let up = line.to_ascii_uppercase();
+            let (code, comment) = up.split_once(['(', ';']).unwrap_or((up.as_str(), ""));
+            let comment = comment.trim_start();
+            if comment.starts_with("RCNC FIND_STOCK") {
+                seg.find_stock = true;
+                seg.vise |= comment.split(|c: char| c.is_whitespace() || c == ')').any(|w| w.starts_with("VISE="));
+            } else if comment.starts_with("RCNC FIND_BORES") {
+                seg.find_bores = true;
+                seg.bore_stops.append(&mut stops);
+            } else if comment.starts_with("RCNC PROBE_Z") {
+                seg.probe_z = true;
+            } else if let Some(m) = comment.strip_prefix("MSG,") {
+                message = m.to_string();
+            }
+            let words = code_words(code);
+            if words.iter().any(|(c, v)| *c == 'M' && (*v == 6.0 || *v == 2.0 || *v == 30.0)) {
+                break;
+            }
+            // a stop to clean out the bores before Find bores: the tool change asks for that instead
+            if words.iter().any(|(c, v)| *c == 'M' && *v == 0.0) {
+                if message.contains("BORE") {
+                    stops.push(n);
+                }
+                message.clear();
+            }
+        }
+        seg
     }
 
     /// Next line to execute.
@@ -1695,6 +1737,23 @@ fn label_of(line: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+/// A line's words, without its comment: each letter and the number after it.
+fn code_words(code: &str) -> Vec<(char, f64)> {
+    let mut words = vec![];
+    let mut chars = code.chars().filter(|c| !c.is_whitespace()).peekable();
+    while let Some(c) = chars.next() {
+        if c.is_ascii_alphabetic() {
+            let mut num = String::new();
+            while let Some(d) = chars.peek().filter(|d| d.is_ascii_digit() || **d == '.') {
+                num.push(*d);
+                chars.next();
+            }
+            words.push((c, num.parse::<f64>().unwrap_or(f64::NAN)));
+        }
+    }
+    words
+}
+
 /// The program's lines. A `%` line after the start (or a second `%`) ends
 /// the program: anything after it is not run.
 fn program_lines(program: &str) -> Vec<String> {
@@ -2381,5 +2440,17 @@ M30");
         let mut i = Interpreter::new("");
         assert!(i.execute_line("(RCNC WASH_DOWN PASSES=0)").is_err());
         assert!(i.execute_line("(RCNC WASH_DOWN SPEED=3)").is_err());
+    }
+
+    #[test]
+    fn probe_segment_reads_up_to_the_next_tool_change() {
+        let i = Interpreter::new(
+            "T99 M6\n(RCNC FIND_STOCK SIZE=1,2,3 VISE=-1)\nM5\n(MSG,Blow the chips out of the two carrier bores)\nM0\n(MSG,Turn the part)\nM0\n(RCNC FIND_BORES A=0,0 B=1,0 D=8 TOP=0)\nT3 M6\n(RCNC FIND_STOCK SIZE=1,2,3)\n(MSG,bores)\nM0\nM30",
+        );
+        let seg = i.probe_segment(0);
+        assert_eq!(seg, ProbeSegment { find_stock: true, vise: true, find_bores: true, probe_z: false, bore_stops: vec![4] });
+        // after T3: no Find bores, so the bores stop isn't one
+        let seg = i.probe_segment(8);
+        assert_eq!(seg, ProbeSegment { find_stock: true, ..Default::default() });
     }
 }

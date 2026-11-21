@@ -28,7 +28,7 @@ pub use calibrate::{CalibrateStage, CalibrateView};
 pub use hometest::{stats as home_test_stats, HomeTestView};
 pub use probecal::{ProbeCalShape, ProbeCalStage, ProbeCalTarget, ProbeCalView};
 pub use findstock::{FindStockStage, FindStockView, ProbeRetryView, StockFound, STOCK_REFERENCE};
-pub use toolchange::{ToolChangeStage, ToolChangeView};
+pub use toolchange::{ProbeChecksView, ToolChangeStage, ToolChangeView};
 pub use vise::{FindViseStage, FindViseView};
 
 /// Segments kept queued on the board while streaming (240 ms at 4 ms).
@@ -103,6 +103,9 @@ pub enum Command {
     /// The new tool is loaded: carry on with the tool change, measuring it
     /// or not (`None`: as set up).
     ToolChangeContinue { measure: Option<bool> },
+    /// At the touch probe's tool change: the operator ticked (or unticked) "the bores are cleaned out"
+    /// and "the vise location is accurate".
+    ToolChangeChecks { bores: bool, vise: bool },
     /// Start the Find stock wizard by hand (a program asks for it with a FIND_STOCK comment).
     FindStock(gcode::StockRequest),
     /// The probe is over the stock: carry on with Find stock.
@@ -350,6 +353,13 @@ pub struct Controller {
     wash: Option<wash::Wash>,
     /// The loaded probe's ball offset from the spindle axis, measured since it went in.
     probe_runout: Option<[f64; 2]>,
+    /// The checks the operator made when the touch probe was loaded (the stylus tapped, the bores
+    /// cleaned out, the vise location trusted), for the probing cycles up to the next tool change.
+    probe_checks: Option<toolchange::ProbeChecks>,
+    /// Tests: the operator makes the probe's checks at its tool change before pressing Continue
+    /// (tests of the checks themselves turn this off).
+    #[cfg(test)]
+    test_operator_checks: bool,
     /// The last tool measured on the setter and the machine Z its tip touched at (for the stick-out check).
     last_setter_hit: Option<(u32, f64)>,
     /// The program's last (MSG,...), for an M0 that follows it.
@@ -443,6 +453,9 @@ impl Controller {
             find_vise: None,
             wash: None,
             probe_runout: None,
+            probe_checks: None,
+            #[cfg(test)]
+            test_operator_checks: true,
             last_setter_hit: None,
             last_message: None,
             auto_probe: false,
@@ -737,6 +750,7 @@ impl Controller {
                     return;
                 }
                 self.interp.load(&text);
+                self.probe_checks = None;
                 self.tools_from_header(&text);
                 self.program = Arc::new(text);
                 self.info(format!("Loaded {name}"));
@@ -801,6 +815,7 @@ impl Controller {
             Command::SetConfig(config) => self.set_config(*config),
             Command::Probe(job) => self.start_probe(job),
             Command::ToolChangeContinue { measure } => self.tool_change_continue(measure),
+            Command::ToolChangeChecks { bores, vise } => self.tool_change_checks(bores, vise),
             Command::FindStock(request) => {
                 if self.is_ready() {
                     self.start_find_stock(request);
@@ -1663,6 +1678,7 @@ impl Controller {
                 }
                 if self.interp.pc() == 0 {
                     self.path_blend = None;
+                    self.probe_checks = None;
                 }
                 self.sync_position();
                 self.exec = Some(Exec {
@@ -1725,6 +1741,8 @@ impl Controller {
         self.drop_motion();
         // a work rotation belongs to the run that measured it
         self.clear_rotation();
+        // checks made for this run: the vise or the part may be touched before the next
+        self.probe_checks = None;
         self.mode = Mode::Idle;
         if let Ok(s) = self.backend.poll(&self.outputs) {
             self.status = s;
@@ -1793,6 +1811,7 @@ impl Controller {
         }
         self.watch_probe();
         self.find_stock_watch();
+        self.tool_change_watch();
         self.calibrate_watch();
         self.probe_cal_watch();
         self.find_vise_watch();
@@ -1909,6 +1928,7 @@ impl Controller {
         {
             self.info("Program finished");
         }
+        self.probe_checks = None;
         self.exec = None;
         self.mode = Mode::Idle;
         self.sync_position();
@@ -2088,7 +2108,8 @@ impl Controller {
                     self.info(format!("T{tool} is already loaded"));
                     Wait::None
                 } else {
-                    self.start_tool_change(tool);
+                    let program = matches!(&self.exec, Some(Exec { source: Source::Program, .. }));
+                    self.start_tool_change(tool, program.then_some(line));
                     return;
                 }
             }
@@ -2098,6 +2119,11 @@ impl Controller {
                 format!("Load tool {tool}, touch it off if needed, then press Cycle Start")
             }),
             // a (MSG,...) just before the stop says what it's for
+            Op::Pause { .. } if self.probe_checks.as_ref().is_some_and(|p| p.bore_stops.contains(&line)) => {
+                self.last_message = None;
+                self.info(format!("Line {}: skipped the stop to clean out the bores: that was checked at the probe's tool change", line + 1));
+                Wait::None
+            }
             Op::Pause { optional } => Wait::Pause(match (optional, self.last_message.take()) {
                 (true, None) => "Optional stop (M1)".into(),
                 (true, Some(m)) => format!("Optional stop (M1): {m}"),
@@ -4197,9 +4223,9 @@ mod tests {
         let s = c.snapshot();
         assert!(s.tool_measured);
         assert_eq!(s.find_stock.as_ref().unwrap().stage, FindStockStage::Locate);
-        // Continue before tapping the stylus does nothing.
-        c.handle(Command::FindStockContinue);
-        assert!(c.snapshot().log.back().unwrap().contains("Tap the probe"));
+        // the stylus was tapped at the probe's tool change: Find stock only waits for the jog
+        assert!(s.find_stock.as_ref().unwrap().tapped);
+        assert!(s.log.back().unwrap().contains("Find stock: jog the probe over the middle"), "{:?}", s.log);
         locate(&mut c, &clock, 4.0, -3.0);
         c.handle(Command::FindStockContinue);
         run_until(&mut c, &clock, 300.0, "the end of Find stock", |s| s.find_stock.is_none());
@@ -5468,5 +5494,79 @@ mod tests {
         run_until(&mut c, &clock, 120.0, "the alarm", |s| s.mode == Mode::Alarm || s.find_stock.is_some());
         let s = c.snapshot();
         assert!(s.find_stock.is_none() && s.log.iter().any(|l| l.contains("run Find vise location")), "{:?}", s.log);
+    }
+
+    /// The operator's finger on the stylus: the probe input on for one update.
+    fn tap_stylus(c: &mut Controller) {
+        let probe = c.config.probe.unwrap();
+        let before = c.status.inputs;
+        c.status.inputs = if probe.active_low { before & !(1 << probe.pin) } else { before | (1 << probe.pin) };
+        c.tool_change_watch();
+        c.status.inputs = before;
+    }
+
+    fn checks(c: &Controller) -> ProbeChecksView {
+        c.snapshot().tool_change.and_then(|t| t.checks).expect("the probe's checks")
+    }
+
+    /// Loading the touch probe with Find stock VISE= and Find bores to come: the tool change asks for
+    /// the tap, the clean bores and the vise location all at once, and won't go on without them;
+    /// then Find stock goes over the stock from the saved vise location by itself.
+    #[test]
+    fn the_probe_tool_change_makes_every_check_then_find_stock_runs_on() {
+        let (mut c, clock, truth) = vise_setup(&crate::sim::dmc2_sim_config(), false, 0.5, 0.0);
+        let _ = find_vise(&mut c, &clock, truth);
+        let (mut c, clock, _) = vise_setup(&c.snapshot().config, true, 0.5, 0.0);
+        c.loaded_tool = 0;
+        c.test_operator_checks = false;
+        c.handle(Command::Load {
+            name: "t".into(),
+            text: "T99 M6\n(RCNC FIND_STOCK SIZE=39,77,20 AT=0,0,20 KEEPZ=1 VISE=-1)\n(MSG,Blow the chips out of the bores)\nM0\n(RCNC FIND_BORES A=-5,0 B=5,0 D=8 TOP=20 DEPTH=1 TOL=0.1)\nG0 Z5\nM30".into(),
+        });
+        c.handle(Command::CycleStart);
+        run_until(&mut c, &clock, 120.0, "loading the probe", |s| s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading));
+        let k = checks(&c);
+        assert_eq!((k.tapped, k.bores, k.vise, k.jog_over_stock), (false, Some(false), Some(false), false), "{k:?}");
+        assert_eq!(k.bore_stops, vec![3]);
+        assert!(c.snapshot().log.back().unwrap().contains("tap the stylus, clean out the bores, check the vise location"));
+        // each missing check holds Continue (and Cycle Start)
+        c.handle(Command::ToolChangeContinue { measure: None });
+        assert!(c.snapshot().log.back().unwrap().contains("Tap the probe's stylus first"));
+        tap_stylus(&mut c);
+        assert!(checks(&c).tapped);
+        c.handle(Command::CycleStart);
+        assert!(c.snapshot().log.back().unwrap().contains("Clean out the bores"));
+        c.handle(Command::ToolChangeChecks { bores: true, vise: false });
+        c.handle(Command::ToolChangeContinue { measure: None });
+        assert!(c.snapshot().log.back().unwrap().contains("vise hasn't moved"));
+        assert_eq!(c.snapshot().tool_change.unwrap().stage, ToolChangeStage::Loading);
+        c.handle(Command::ToolChangeChecks { bores: true, vise: true });
+        c.handle(Command::ToolChangeContinue { measure: None });
+        // Find stock: straight over the stock and probing, nothing to press
+        run_until(&mut c, &clock, 600.0, "Find stock done", |s| {
+            s.log.iter().any(|l| l.starts_with("Stock found")) || s.find_stock.as_ref().is_some_and(|f| f.stage == FindStockStage::Mismatch) || s.mode == Mode::Alarm
+        });
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("checked at the tool change: moving over the stock")), "{:?}", s.log);
+        assert!(s.log.iter().any(|l| l.starts_with("Stock found")), "{:?}", s.log);
+        // and the stop to clean the bores is skipped on the way to Find bores (the sim's stock has no bores)
+        run_until(&mut c, &clock, 600.0, "Find bores", |s| s.probe_retry.is_some() || s.paused.is_some() || matches!(s.mode, Mode::Alarm | Mode::Idle));
+        let s = c.snapshot();
+        assert!(s.paused.is_none(), "{:?}", s.paused);
+        assert!(s.log.iter().any(|l| l.contains("Line 4: skipped the stop to clean out the bores")), "{:?}", s.log);
+    }
+
+    /// Without the probe's tool change checks (the probe already in the spindle), the stop before
+    /// Find bores stays.
+    #[test]
+    fn the_bores_stop_stays_without_the_tool_change_checks() {
+        let (mut c, clock, _) = vise_setup(&crate::sim::dmc2_sim_config(), true, 0.5, 0.0);
+        c.handle(Command::Load {
+            name: "t".into(),
+            text: "T99 M6\n(MSG,Blow the chips out of the bores)\nM0\n(RCNC FIND_BORES A=-5,0 B=5,0 D=8 TOP=20 DEPTH=1 TOL=0.1)\nM30".into(),
+        });
+        c.handle(Command::CycleStart);
+        run_until(&mut c, &clock, 60.0, "the stop", |s| s.paused.is_some() || s.mode == Mode::Alarm);
+        assert!(c.snapshot().paused.unwrap().contains("Blow the chips out of the bores"));
     }
 }
