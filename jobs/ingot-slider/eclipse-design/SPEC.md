@@ -38,3 +38,12 @@ He rejected: a spoiler/wing line at the rear, a squashed profile, and the facete
 - Gate: SIM OK, verify_gcode, rcnc simulator. Report anything rCAD skips or leaves unfinished (it silently dropped a
   chamfer once on this job).
 - Do NOT send anything to the mill PC. Push to mill/ingot-slider-vise in new folders and report hashes and times.
+
+## Addendum 2026-11-21: smooth nose and tail corners (Jonas: "make this region smooth", both corners)
+- Use `eclipse-car-solid-smooth.stl` INSTEAD of `eclipse-car-top-0.15mm.stl`. It is a closed, watertight solid
+  (137,772 triangles, checked edge by edge): same approved top surface, but the side walls are the exact outline
+  (45 x 17.3, R4.8 nose corners, R2.4 tail corners, arcs in 1.5 degree steps) straight down to z 0, with a flat bottom.
+  No stair-stepped corner walls, no duplicate triangles, nothing to trim.
+- `eclipse-car-heightmap-extended-0.1mm.csv` is the same top surface continued about 0.75 mm past the outline, for
+  anything that wants to sample heights at or beyond the edge.
+- Nothing else changes: same dimensions, same magnet pockets, same op split, same cutters.
