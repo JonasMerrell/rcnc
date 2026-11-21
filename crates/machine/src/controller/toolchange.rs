@@ -41,6 +41,47 @@ pub struct ToolChangeView {
     pub problem: Option<String>,
     /// The new tool's stick-out from its setter measurement, once the check is calibrated.
     pub measured_stickout: Option<f64>,
+    /// Loading the touch probe: the checks its probing cycles need, all made here, so those
+    /// cycles run straight on after the change. Continue waits until they're all done.
+    pub checks: Option<ProbeChecksView>,
+}
+
+/// The touch probe's checks at its tool change.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProbeChecksView {
+    /// The probe input has been seen on since the change reached the loading stage.
+    pub tapped: bool,
+    /// Find bores follows: the bores have been cleaned out (`None` when there's no Find bores).
+    pub bores: Option<bool>,
+    /// Find stock with `VISE=` follows: the saved vise location is still right (`None` without).
+    pub vise: Option<bool>,
+    /// A Find stock without `VISE=` follows: it still stops for the probe to be jogged over the stock.
+    pub jog_over_stock: bool,
+    /// The stops before Find bores that the bores check replaces (program lines, 0-based).
+    pub bore_stops: Vec<usize>,
+}
+
+impl ProbeChecksView {
+    /// What's still to do before Continue, if anything.
+    pub fn missing(&self) -> Option<&'static str> {
+        if !self.tapped {
+            Some("Tap the probe's stylus first, so rcnc knows the probe input works")
+        } else if self.bores == Some(false) {
+            Some("Clean out the bores to be probed, then tick that they're clean")
+        } else if self.vise == Some(false) {
+            Some("Check the vise hasn't moved since Find vise location, then tick that its location is accurate")
+        } else {
+            None
+        }
+    }
+}
+
+/// The checks made at the probe's tool change, kept for its probing cycles.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ProbeChecks {
+    /// The saved vise location was confirmed: Find stock with `VISE=` goes over the stock and probes it.
+    pub vise: bool,
+    pub bore_stops: Vec<usize>,
 }
 
 pub(super) struct ToolChange {
@@ -53,8 +94,9 @@ pub(super) struct ToolChange {
 
 impl Controller {
     /// Start a guided tool change from a running program or MDI. The machine
-    /// is stopped (M6 waits for motion to finish).
-    pub(super) fn start_tool_change(&mut self, tool: u32) {
+    /// is stopped (M6 waits for motion to finish). `line` is the M6's program line (not in MDI):
+    /// loading the touch probe, what follows it up to the next tool change says what to check.
+    pub(super) fn start_tool_change(&mut self, tool: u32, line: Option<usize>) {
         let tc = self.config.tool_change.clone();
         // The change position is in machine coordinates: they mean nothing unhomed.
         let change_x = self.config.change_x();
@@ -68,6 +110,17 @@ impl Controller {
         let spinning = outputs.spindle_on;
         self.tool_measured = false;
         self.setter_hit = None;
+        self.probe_checks = None;
+        let checks = (tool != 0 && tool == self.config.probing.probe_tool).then(|| {
+            let seg = line.map(|l| self.interp.probe_segment(l)).unwrap_or_default();
+            ProbeChecksView {
+                tapped: false,
+                bores: seg.find_bores.then_some(false),
+                vise: seg.vise.then_some(false),
+                jog_over_stock: seg.find_stock && !seg.vise,
+                bore_stops: if seg.find_bores { seg.bore_stops } else { vec![] },
+            }
+        });
         self.outputs.spindle_on = false;
         self.outputs.flood = false;
         self.outputs.mist = false;
@@ -86,7 +139,20 @@ impl Controller {
         steps.push_back(to(1, change_y));
         steps.push_back(Step::Then(Box::new(move |c, _| {
             c.stage(ToolChangeStage::Loading);
-            c.info(format!("Load tool {tool}, then press Continue (or Cycle Start)"));
+            let probe = c.tool_change.as_ref().and_then(|t| t.view.checks.as_ref()).map(|k| {
+                let mut v = vec!["tap the stylus"];
+                if k.bores.is_some() {
+                    v.push("clean out the bores");
+                }
+                if k.vise.is_some() {
+                    v.push("check the vise location");
+                }
+                v.join(", ")
+            });
+            match probe {
+                Some(checks) => c.info(format!("Load the touch probe (T{tool}), {checks}, then press Continue (or Cycle Start)")),
+                None => c.info(format!("Load tool {tool}, then press Continue (or Cycle Start)")),
+            }
             Ok(vec![])
         })));
         steps.push_back(Step::Operator);
@@ -109,6 +175,7 @@ impl Controller {
                 return_to_start: tc.return_to_start,
                 problem: None,
                 measured_stickout: None,
+                checks,
             },
             start,
             z_offset: self.interp.program_offset()[2],
@@ -136,11 +203,48 @@ impl Controller {
         if !self.routine_waiting || !matches!(t.view.stage, ToolChangeStage::Loading | ToolChangeStage::Mismatch) {
             return;
         }
+        #[cfg(test)]
+        if let Some(k) = t.view.checks.as_mut().filter(|_| self.test_operator_checks) {
+            k.tapped = true;
+            k.bores = k.bores.map(|_| true);
+            k.vise = k.vise.map(|_| true);
+        }
+        if t.view.stage == ToolChangeStage::Loading {
+            if let Some(why) = t.view.checks.as_ref().and_then(|k| k.missing()) {
+                return self.info(why);
+            }
+        }
         if let Some(m) = measure {
             t.view.measure = m;
         }
         self.routine_waiting = false;
         self.routine_step();
+    }
+
+    /// The operator ticked (or unticked) the probe's checks.
+    pub(super) fn tool_change_checks(&mut self, bores: bool, vise: bool) {
+        let Some(k) = self.tool_change.as_mut().filter(|t| t.view.stage == ToolChangeStage::Loading).and_then(|t| t.view.checks.as_mut()) else {
+            return;
+        };
+        if let Some(b) = &mut k.bores {
+            *b = bores;
+        }
+        if let Some(v) = &mut k.vise {
+            *v = vise;
+        }
+    }
+
+    /// Note a tap on the stylus while the probe's tool change waits for one.
+    pub(super) fn tool_change_watch(&mut self) {
+        let touching = self.config.probe.is_some_and(|p| p.is_active(self.status.inputs));
+        let Some(t) = &mut self.tool_change else { return };
+        if !touching || t.view.stage != ToolChangeStage::Loading {
+            return;
+        }
+        if let Some(k) = t.view.checks.as_mut().filter(|k| !k.tapped) {
+            k.tapped = true;
+            self.info("Probe input works");
+        }
     }
 
     fn set_problem(&mut self, problem: Option<String>) {
@@ -159,6 +263,8 @@ impl Controller {
         }
         self.loaded_tool = view.to;
         self.info(format!("Tool {} loaded", view.to));
+        // the probe's checks, for its probing cycles up to the next tool change
+        self.probe_checks = view.checks.as_ref().map(|k| ProbeChecks { vise: k.vise == Some(true), bore_stops: k.bore_stops.clone() });
         // The program carries on expecting the spindle and coolant as they
         // were, whether or not the tool goes back to where it started.
         // Never start the spindle with the touch probe in it.

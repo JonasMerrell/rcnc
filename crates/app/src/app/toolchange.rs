@@ -118,19 +118,30 @@ impl App {
         let wide = Vec2::new(ui.available_width(), 120.0);
         match tc.stage {
             ToolChangeStage::Loading => {
-                notice(ui, AMBER, &format!("Put T{} in the spindle and tighten it, then press Continue.", tc.to),
-                    "The machine moves to the tool setter as soon as you do: keep your hands and the wrenches clear.");
+                let title = match &tc.checks {
+                    Some(_) => format!("Put the touch probe (T{}) in the spindle, make the checks below, then press Continue.", tc.to),
+                    None => format!("Put T{} in the spindle and tighten it, then press Continue.", tc.to),
+                };
+                notice(ui, AMBER, &title, "The machine moves to the tool setter as soon as you do: keep your hands and the wrenches clear.");
                 ui.add_space(10.0);
+                if let Some(k) = &tc.checks {
+                    probe_checks(ui, k, &self.machine);
+                    ui.add_space(6.0);
+                }
                 let mut m = measure;
                 if ui.checkbox(&mut m, RichText::new("Measure the tool on the setter").size(18.0)).changed() {
                     self.tc_measure = Some(m);
                 }
                 self.ears.tap_ui(ui, tc.to, &self.machine);
                 ui.add_space(10.0);
-                if ui.add(huge_button("Continue", GREEN).min_size(wide)).clicked() {
+                let missing = tc.checks.as_ref().and_then(|k| k.missing());
+                if ui.add_enabled(missing.is_none(), huge_button("Continue", GREEN).min_size(wide)).clicked() {
                     self.machine.send(Command::ToolChangeContinue { measure: Some(m) });
                 }
-                ui.label(RichText::new("Cycle Start does the same.").size(14.0).color(MUTED));
+                match missing {
+                    Some(why) => ui.label(RichText::new(why).size(15.0).color(AMBER)),
+                    None => ui.label(RichText::new("Cycle Start does the same.").size(14.0).color(MUTED)),
+                };
                 ui.add_space(8.0);
                 if ui.add(cancel_button().min_size(Vec2::new(180.0, 44.0))).clicked() {
                     self.machine.send(Command::Stop);
@@ -185,6 +196,50 @@ impl App {
         self.tc_photo = Some((n, wanted, path.clone()));
         path
     }
+}
+
+/// The touch probe's checks, all made at its tool change so its probing cycles run straight on:
+/// a tap on the stylus (shown when rcnc sees it), and ticks for the bores and the vise location
+/// when the program's probing needs them.
+fn probe_checks(ui: &mut egui::Ui, k: &machine::ProbeChecksView, machine: &machine::ControllerHandle) {
+    egui::Frame::new()
+        .fill(RAISED)
+        .corner_radius(CornerRadius::same(10))
+        .inner_margin(Margin::symmetric(16, 12))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new("PROBE CHECKS").size(14.0).color(MUTED).strong());
+            let (mark, color, text) = if k.tapped {
+                ("✔", GREEN, "Probe input works (stylus tapped)")
+            } else {
+                ("○", AMBER, "Tap the probe's stylus with a finger")
+            };
+            ui.label(RichText::new(format!("{mark}  {text}")).size(20.0).color(color).strong());
+            let (mut bores, mut vise) = (k.bores.unwrap_or(false), k.vise.unwrap_or(false));
+            let mut changed = false;
+            if k.bores.is_some() {
+                changed |= ui
+                    .checkbox(&mut bores, RichText::new("The bores to be probed are cleaned out (chips blown out, no burrs at their mouths)").size(18.0))
+                    .changed();
+            }
+            if k.vise.is_some() {
+                changed |= ui
+                    .checkbox(&mut vise, RichText::new("The vise location is accurate (the vise hasn't moved since Find vise location)").size(18.0))
+                    .changed();
+            }
+            if changed {
+                machine.send(Command::ToolChangeChecks { bores, vise });
+            }
+            if k.jog_over_stock {
+                ui.label(
+                    RichText::new("Find stock doesn't use the saved vise location here: it still stops for you to jog the probe over the stock.")
+                        .size(14.0)
+                        .color(MUTED),
+                );
+            } else if k.bores.is_some() || k.vise.is_some() {
+                ui.label(RichText::new("The probing cycles then run straight on, without stopping.").size(14.0).color(MUTED));
+            }
+        });
 }
 
 fn trim(v: f64) -> String {
