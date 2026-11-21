@@ -1,7 +1,6 @@
 """After rCAD posts: pauses, dwells, Find stock from the vise location and marks, then verify_gcode on every final file (verify.json).
 
 - op 2 (and the cycles): stop to blow the carrier bores out before Find bores (add_bores_pause.py);
-- aluminium: a chip-clearing stop before the finishing that follows the 9k roughing (add_finish_pause.py);
 - 3 s in air after every S change (add_dwell.py: the bog guard learns that speed's no-load speed);
 - (RCNC REQUIRE_GUARD) in every program (mark_guard.py)."""
 import json, subprocess
@@ -16,13 +15,7 @@ has = lambda p, t: t in open(p).read()
 for p in ("base/base-op2.nc", "base/base-cycle.nc", "slider/slider-cycle.nc", "base/base-last.nc", "slider/slider-last.nc"):
     if not has(p, "BORES PAUSE"):
         run("add_bores_pause.py", p)
-FIN1 = ("(Finish the walls in one full-height pass", "Blow the chips off the bar and out of the gap between the bases")
-FIN2 = ("(Finish the channel floor", "Blow the chips out of the two channels and off the top")
-for p, marks in (("base/base-op1.nc", [FIN1]), ("base/base-op2.nc", [FIN2]), ("base/base-cycle.nc", [FIN1, FIN2]), ("base/base-first.nc", [FIN1]), ("base/base-last.nc", [FIN2])):
-    for m, what in marks:
-        t = open(p).read()
-        if "(END CHIP PAUSE)" not in t[max(0, t.index(m) - 40):t.index(m)]:
-            run("add_finish_pause.py", p, m, what)
+# no chip-clearing stops before the aluminium finishes: Jonas, 2026-11-21, the chips didn't build up at 9k
 for p in ALL:
     run("add_dwell.py", p)
 for p in ALL:

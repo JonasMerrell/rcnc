@@ -1566,18 +1566,6 @@ G0 Z14.44
 Z17.34
 X12.114 Y-52.728
 
-(CHIP PAUSE before the finish: delete down to END CHIP PAUSE to skip)
-G53 G0 Z0
-M5
-M9
-(MSG,Blow the chips off the bar and out of the gap between the bases [spindle and coolant are off], then press Cycle Start)
-M0
-S9000 M3
-G4 P3
-M8
-G4 P3
-(END CHIP PAUSE)
-
 (Finish the walls in one full-height pass, down to Z5 [op 2 cuts no wall below the chamfer] - Contour)
 S12000 M3
 G4 P3

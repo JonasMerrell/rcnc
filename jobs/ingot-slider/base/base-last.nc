@@ -2622,18 +2622,6 @@ G1 X0.541 Y-41.414 F3000
 G0 Z17.14
 Y41.586
 
-(CHIP PAUSE before the finish: delete down to END CHIP PAUSE to skip)
-G53 G0 Z0
-M5
-M9
-(MSG,Blow the chips out of the two channels and off the top [spindle and coolant are off], then press Cycle Start)
-M0
-S9000 M3
-G4 P3
-M8
-G4 P3
-(END CHIP PAUSE)
-
 (Finish the channel floor [Z5.6], passes along the slide [Y] - Parallel)
 S12000 M3
 G4 P3
