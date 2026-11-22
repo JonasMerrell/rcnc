@@ -14,11 +14,11 @@ saved vise location (op 2 `JAWAT=-12.5`), blow-out pause, Find bores, bog guard 
 | Program | What | rCAD time | rcnc simulator | sha256 |
 |---|---|---|---|---|
 | `eclipse-base-thick-first.nc` | op 1 alone (G54) | 2:36 | 359 s, ran to the end | `a6462995895f` |
-| `eclipse-base-thick-cycle.nc` | op 1 + op 2 (G54 + G55) | 7:11 | 750 s, ran to the end | `30545bb26071` |
-| `eclipse-base-thick-last.nc` | op 2 alone (G55) | 4:35 | 529 s, ran to the end | `0199c1672afd` |
-| `eclipse-base-thick-op1.nc`, `-op2.nc` | single ops | 2:36 / 4:56 | 359 / 529 s | `a6462995895f` / `233cc028db87` |
+| `eclipse-base-thick-cycle.nc` | op 1 + op 2 (G54 + G55) | 7:11 | 750 s, ran to the end | `3a2e5390eaff` |
+| `eclipse-base-thick-last.nc` | op 2 alone (G55) | 4:35 | 529 s, ran to the end | `da709e0a995e` |
+| `eclipse-base-thick-op1.nc`, `-op2.nc` | single ops | 2:36 / 4:56 | 359 / 529 s | `a6462995895f` / `aa8297c9f3bf` |
 
-All SIM OK (0 problems); `verify_gcode` on the final files: **all 5 ok, 0 problems, stamps match the setups**.
+All SIM OK (0 problems, at the fine setting: 1000 cells); `verify_gcode` on the final files: **all 5 ok, 0 problems, stamps match the setups**. Re-posted 2026-11-22 with rCAD PR #175: same toolpaths, but the T1 deburr passes are now written as short lines instead of arcs (the post fits arcs to 3D finishing and deburr passes only where the points already lie on them).
 
 Simulation: op 1 peak 679 W at 9k (rough, caution 850), chatter "expected" on the rough (1.54) and caution on the
 wall finish (0.74); op 2 peak 675 W at 9k (channel rough), chip caution in the channel rough (0.57), as the

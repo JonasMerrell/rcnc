@@ -28,22 +28,28 @@ CAR_T, CAR_W, SURF_LO = 9.5, 17.3, 3.9    # nothing shaped below z 3.9
 PAIR = 26.5
 
 
+# the export gate's stock simulation: 1000 cells along the longer side (default 500). The two-station cycle's
+# stock spans both stations, so at 500 its cells were twice as coarse and flagged 0.03-0.05 at a tail-lip corner
+# that the single op 2 (and a 0.025 mm z-map of its T44 moves) shows clean
+RES = 1000
+
+
 def outs(c, folder, stem, only=None):
     k = {"stations": only} if only else {}
     return [{"tool": "cam_info", "args": {"cam": c}},
             {"tool": "simulate_cam", "args": {"cam": c, "path": f"{folder}/{stem}-sim.png", "resolution": 500, **k}},
             {"tool": "simulate_cam", "args": {"cam": c, "path": f"{folder}/{stem}-sim-top.png", "view": "top", "resolution": 500, **k}},
             {"tool": "render_cam", "args": {"cam": c, "path": f"{folder}/{stem}-paths.png"}},
-            {"tool": "export_gcode", "args": {"cam": c, "path": f"{folder}/{stem}.nc", **k}},
+            {"tool": "export_gcode", "args": {"cam": c, "path": f"{folder}/{stem}.nc", "resolution": RES, **k}},
             {"tool": "export_setup_sheet", "args": {"cam": c, "path": f"{folder}/{stem}.html", **k}}]
 
 
 def cycles(c, folder, stem, first, last):
     S = [{"tool": "simulate_cam", "args": {"cam": c, "path": f"{folder}/{stem}-cycle-sim.png", "resolution": 500}},
-         {"tool": "export_gcode", "args": {"cam": c, "path": f"{folder}/{stem}-cycle.nc"}},
+         {"tool": "export_gcode", "args": {"cam": c, "path": f"{folder}/{stem}-cycle.nc", "resolution": RES}},
          {"tool": "export_setup_sheet", "args": {"cam": c, "path": f"{folder}/{stem}-cycle.html"}}]
     for which, st in (("first", first), ("last", last)):
-        S += [{"tool": "export_gcode", "args": {"cam": c, "stations": st, "path": f"{folder}/{stem}-{which}.nc"}},
+        S += [{"tool": "export_gcode", "args": {"cam": c, "stations": st, "path": f"{folder}/{stem}-{which}.nc", "resolution": RES}},
               {"tool": "export_setup_sheet", "args": {"cam": c, "stations": st, "path": f"{folder}/{stem}-{which}.html"}}]
     return S
 
@@ -93,17 +99,21 @@ S += tools(1, BR) + [{"tool": "cam_tool", "args": dict(BALL, cam=1)}] + probe(1,
     # waterline: the only finish that takes the ball outside the outline, which the tail needs (the lamp panel drops
     # from the lip 0.9 mm in from the end); rCAD's waterline needed the chord fix (branch waterline-chords): it
     # gouged this mesh up to 0.76 next to the pillars
-    op(1, "waterline", f"Finish the steep faces (shoulders, glass, nose, tail lamp panel) with T44, 0.07 apart, down to car z {SURF_LO:g}",
-       tool=BT, stepdown=0.07, slope_min=40, bottom=FLOOR),
+    op(1, "waterline", f"Finish the steep faces (shoulders, glass, nose, tail lamp panel) with T44, 0.069 apart, down to car z {SURF_LO:g}",
+       tool=BT, stepdown=0.069, slope_min=40, bottom=FLOOR),
     # pencil: the creases the 0.07 passes straddle (hood shut line and body creases as V grooves, glass recess edges,
     # mirror bases): T44 along every concave corner a 4 mm ball would not reach (rCAD wants the reference over the 3.175 shank)
     op(1, "pencil", "Pencil the creases with T44 (hood shut line, glass edges, mirror bases): where a 4 mm ball would not reach",
        tool=BT, ref_diameter=4.0, stepover=0.07, leave=0.0, bottom=FLOOR),
-    # the sharp top edges only (picked): the nose and tail ends at z 3.9 and the tail lip (z 6.96, 0.9 in from the
-    # tail); the shoulders are rounded (R ~1, the ball's), and letting rCAD find every mesh edge over 30 deg gouged them
-    op(1, "deburr", "Edge break 0.2: the nose and tail top edges and the tail lip (T1)", tool=1, chamfer=0.2, tip_offset=0.5,
-       edges=[[0, cy + 22.5, SURF_LO + Z2] for cy in (-PAIR, PAIR)] + [[0, cy - 22.5, SURF_LO + Z2] for cy in (-PAIR, PAIR)]
-       + [[0, cy - 21.6, 6.96 + Z2] for cy in (-PAIR, PAIR)]),
+    # T1 edge break: the tail lip (deburr, picked) and the straight nose top edge at z 3.9 (a trace 0.2 deep
+    # along the edge: the cone's 45 deg side breaks it). rCAD's deburr, picked at the ends, ran on round the smooth
+    # R4.8 / R2.4 corners onto the rising fenders and gouged them 0.07-0.1; the corners are left to the ball.
+    op(1, "deburr", "Edge break 0.2: the tail lip (T1)", tool=1, chamfer=0.2, tip_offset=0.3, edge_angle=70,
+       edges=[[0, cy - 21.6, 6.96 + Z2] for cy in (-PAIR, PAIR)]),
+    # (the tail end's 3.9 edge is only 0.2 from the bumper slope and 0.9 from the lamp panel: the cone hits them, so it
+    # is left to the ball's passes over it)
+    op(1, "trace", "Edge break 0.2: the straight nose top edge at car z 3.9 (T1 tip on the edge, 0.2 deep)", tool=1,
+       sketches=[ids["car_end_edges"]], top=SURF_LO + Z2, depth=0.2, stepdown=0.2),
 ] + outs(1, CARD, "eclipse-car-op2") + cycles(0, CARD, "eclipse-car", ["Eclipse car op1 bottom"], ["Eclipse car op2 top"])
 
 # ======================= the thick-rail base (6061): the ingot base's CAM, channel 17.7 =======================

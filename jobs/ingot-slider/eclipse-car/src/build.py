@@ -1,4 +1,4 @@
-"""Eclipse car (approved surface, 2026-11-21) and its thick-rail base: rCAD document eclipse-car.json.
+"""Eclipse car (approved surface, 2026-11-21; smooth-corner solid c0ad1f0 from 2026-11-22) and its thick-rail base: rCAD document eclipse-car.json.
 
 The car is the approved surface itself: rCAD imports eclipse-car-top-0.15mm.stl (rcnc design/eclipse-car-surface
 25ebef5) as a solid; clean.py only removes 785 pairs of opposite-facing triangles lying on the bottom (cells
@@ -113,20 +113,25 @@ def car_outline(cy=0.0):
             {"type": "arc", "center": P(-t, -hy + TAIL_R), "start": P(-hx, -hy + TAIL_R), "end": P(-t, -hy)}]
 
 
-def clip_outline(d, cys):
+def clip_outline(d, cys, z0=0.0):
     sk = d.sketch([it for cy in cys for it in car_outline(cy)])
     d.feat("extrude", {"profiles": [{"sketch": sk}], "depth": 15, "op": "intersect"}, "Plan outline exactly R4.8 nose / R2.4 tail (trims the STL's stair-stepped corners)")
+    # the STL's corner cells dip below 3.9 (its grid's partial cells, down to z 0.2): fill them, straight walls to 3.9
+    pl = d.plane_z(z0, "car bottom (outline)") if z0 else {"kind": "origin_plane", "plane": "Top"}
+    sk = d.sketch([it for cy in cys for it in car_outline(cy)], pl)
+    d.feat("extrude", {"profiles": [{"sketch": sk}], "depth": 3.9, "op": "add"}, "Straight walls to z 3.9 all round (fills the STL's corner dips: nothing shaped below 3.9)")
 
 
 d.studio("Eclipse car", first=True)
-d.imp(f"{HERE}/car.stl", "Approved car surface (eclipse-car-top-0.15mm.stl, nose +Y)")
-clip_outline(d, [0.0])
+d.imp(f"{HERE}/car.stl", "Approved car solid (eclipse-car-solid-smooth.stl: exact R4.8 / R2.4 walls, nose +Y)")
 pockets(d, [0.0], 0.0)
 d.S.append({"tool": "set_part", "args": {"body": [1, 0], "name": "Eclipse car (C360 brass)", "color": "#d9a640", "material": "Brass", "finish": "metal"}})
 d.studio("Eclipse cars x2 (CAM)")
 d.imp(f"{HERE}/cars-cam.stl", "Two approved cars at y -26.5 / +26.5, up 1.67 (op 2's shims)")
-clip_outline(d, [-PAIR, PAIR])
 pockets(d, [-PAIR, PAIR], SHIM_OP2)
+# the straight part of the nose top edge (z 3.9), for op 2's T1 edge break as a trace (rCAD's deburr ran on
+# round the smooth R4.8 corners onto the rising fenders and gouged them)
+ends_car = d.sketch([{"type": "line", "from": [-3.6, cy + 22.5], "to": [3.6, cy + 22.5]} for cy in (-PAIR, PAIR)])
 d.studio("Thick-rail base")
 base(d)
 d.S.append({"tool": "set_part", "args": {"body": [2, 0], "name": "Thick-rail base (6061)", "color": "#c9ced6", "material": "Aluminium 6061", "finish": "metal"}})
@@ -148,5 +153,5 @@ d.S += [{"tool": "create_assembly", "args": {"name": "Eclipse car on the thick-r
         {"tool": "render_assembly", "args": {"assembly": 0, "view": "right", "path": f"{HERE}/asm-right.png", "width": 1400, "height": 800}}]
 d.S.append({"tool": "save_document", "args": {"path": f"{HERE}/eclipse-car.json"}})
 json.dump(d.S, open(f"{HERE}/build.json", "w"), indent=1)
-json.dump({"ends_sketch": ends, "channel_sketch": chan}, open(f"{HERE}/sketch_ids.json", "w"))
+json.dump({"ends_sketch": ends, "channel_sketch": chan, "car_end_edges": ends_car}, open(f"{HERE}/sketch_ids.json", "w"))
 print(len(d.S), "steps; base sketches", ends, chan)

@@ -10,6 +10,7 @@
   "args": {
    "cam": 0,
    "path": "/home/jonas/dmc2/eclipse-car/eclipse-car/eclipse-car-op1.nc",
+   "resolution": 1000,
    "stations": [
     "Eclipse car op1 bottom"
    ]
@@ -19,14 +20,16 @@
   "tool": "verify_gcode",
   "args": {
    "cam": 1,
-   "path": "/home/jonas/dmc2/eclipse-car/eclipse-car/eclipse-car-op2.nc"
+   "path": "/home/jonas/dmc2/eclipse-car/eclipse-car/eclipse-car-op2.nc",
+   "resolution": 1000
   }
  },
  {
   "tool": "verify_gcode",
   "args": {
    "cam": 0,
-   "path": "/home/jonas/dmc2/eclipse-car/eclipse-car/eclipse-car-cycle.nc"
+   "path": "/home/jonas/dmc2/eclipse-car/eclipse-car/eclipse-car-cycle.nc",
+   "resolution": 1000
   }
  },
  {
@@ -34,6 +37,7 @@
   "args": {
    "cam": 0,
    "path": "/home/jonas/dmc2/eclipse-car/eclipse-car/eclipse-car-first.nc",
+   "resolution": 1000,
    "stations": [
     "Eclipse car op1 bottom"
    ]
@@ -44,6 +48,7 @@
   "args": {
    "cam": 0,
    "path": "/home/jonas/dmc2/eclipse-car/eclipse-car/eclipse-car-last.nc",
+   "resolution": 1000,
    "stations": [
     "Eclipse car op2 top"
    ]
@@ -54,6 +59,7 @@
   "args": {
    "cam": 2,
    "path": "/home/jonas/dmc2/eclipse-car/eclipse-base-thick/eclipse-base-thick-op1.nc",
+   "resolution": 1000,
    "stations": [
     "Thick base op1 bottom"
    ]
@@ -63,14 +69,16 @@
   "tool": "verify_gcode",
   "args": {
    "cam": 3,
-   "path": "/home/jonas/dmc2/eclipse-car/eclipse-base-thick/eclipse-base-thick-op2.nc"
+   "path": "/home/jonas/dmc2/eclipse-car/eclipse-base-thick/eclipse-base-thick-op2.nc",
+   "resolution": 1000
   }
  },
  {
   "tool": "verify_gcode",
   "args": {
    "cam": 2,
-   "path": "/home/jonas/dmc2/eclipse-car/eclipse-base-thick/eclipse-base-thick-cycle.nc"
+   "path": "/home/jonas/dmc2/eclipse-car/eclipse-base-thick/eclipse-base-thick-cycle.nc",
+   "resolution": 1000
   }
  },
  {
@@ -78,6 +86,7 @@
   "args": {
    "cam": 2,
    "path": "/home/jonas/dmc2/eclipse-car/eclipse-base-thick/eclipse-base-thick-first.nc",
+   "resolution": 1000,
    "stations": [
     "Thick base op1 bottom"
    ]
@@ -88,6 +97,7 @@
   "args": {
    "cam": 2,
    "path": "/home/jonas/dmc2/eclipse-car/eclipse-base-thick/eclipse-base-thick-last.nc",
+   "resolution": 1000,
    "stations": [
     "Thick base op2 top"
    ]

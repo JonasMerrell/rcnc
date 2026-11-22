@@ -17,7 +17,7 @@ for p in CAR + BASE:
 V = [{"tool": "open_document", "args": {"path": H + "eclipse-car-cam.json"}}]
 for lead, op2, st, files in ((0, 1, ("Eclipse car op1 bottom", "Eclipse car op2 top"), CAR), (2, 3, ("Thick base op1 bottom", "Thick base op2 top"), BASE)):
     for p in files:
-        a = {"cam": op2 if p.endswith("op2.nc") else lead, "path": H + p}
+        a = {"cam": op2 if p.endswith("op2.nc") else lead, "path": H + p, "resolution": 1000}
         if p.endswith(("op1.nc", "first.nc")):
             a["stations"] = [st[0]]
         if p.endswith("last.nc"):

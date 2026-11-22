@@ -1,7 +1,7 @@
 """The approved car STL (rcnc design/eclipse-car-surface 25ebef5) turned for the vise: length along Y, nose at +Y.
 Writes car.stl (one car at the origin) and cars-cam.stl (two cars at y -26.5 / +26.5, up 1.67 for op 2's shims)."""
 import struct, numpy as np, sys
-SRC = "approved-clean.stl"   # clean.py of the approved STL (rcnc design/eclipse-car-surface 25ebef5)
+SRC = "smooth-clean.stl"   # eclipse-car-solid-smooth.stl (rcnc design/eclipse-car-surface c0ad1f0), closed; clean.py removed nothing
 b = open(SRC, "rb").read(); n = struct.unpack("<I", b[80:84])[0]
 dt = np.dtype([("n", "<f4", 3), ("v", "<f4", (3, 3)), ("a", "<u2")])
 a = np.frombuffer(b[84:], dtype=dt)
