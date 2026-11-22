@@ -28,7 +28,7 @@ V = [{"tool": "open_document", "args": {"path": "slider-cam.json"}}]
 for cam, path, st in ((0, "base/base-op1.nc", ["Base op1 bottom"]), (1, "base/base-op2.nc", None), (2, "slider/slider-op1.nc", ["Slider op1 bottom"]), (0, "base/base-cycle.nc", None), (2, "slider/slider-cycle.nc", None),
                       (0, "base/base-first.nc", ["Base op1 bottom"]), (0, "base/base-last.nc", ["Base op2 top"]),
                       (2, "slider/slider-first.nc", ["Slider op1 bottom"]), (2, "slider/slider-last.nc", ["Slider op2 top", "Slider op2 engrave"])):
-    a = {"cam": cam, "path": path}
+    a = {"cam": cam, "path": path, "resolution": 1000}
     if st:
         a["stations"] = st
     V.append({"tool": "verify_gcode", "args": a})

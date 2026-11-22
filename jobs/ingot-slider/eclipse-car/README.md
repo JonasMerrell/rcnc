@@ -9,7 +9,7 @@ vents, logos or badges.
 - rCAD imports `../eclipse-design/eclipse-car-solid-smooth.stl` (design commit c0ad1f0) as a solid. That file is
   closed as delivered, with exact walls on the outline (45 × 17.3, R4.8 nose, R2.4 tail, in 1.5° facets).
   - `src/mkstl.py` turns it for the vise: length along Y, nose at +Y.
-  - `src/build.py` cuts the three magnet pockets (8.05 × 3.15 at −15 / 0 / +15, exact cylinders).
+  - `src/build.py` cuts the three magnet pockets (**8.07** × 3.15 at −15 / 0 / +15, exact cylinders; the aluminium base pockets stay 8.05).
   - No trimming is needed. The nose and tail corner walls are smooth: see `model-nose-corner.png` and
     `model-tail-corner.png`.
 - **Deviation from the approved height map:** I measured every map point inside the outline to the nearest point
@@ -32,10 +32,10 @@ vents, logos or badges.
 
 | Program | What | rCAD time | rcnc simulator | sha256 |
 |---|---|---|---|---|
-| `eclipse-car-first.nc` | op 1 alone, left station (G54): first blank | 5:42 | 539 s, ran to the end | `0df6ff8d40e5` |
-| `eclipse-car-cycle.nc` | op 1 left (G54) + op 2 right (G55): every blank after it | 26:10 | 2017 s, ran to the end | `80f790b67a12` |
-| `eclipse-car-last.nc` | op 2 alone, right station (G55): last blank | 20:28 | 1622 s, ran to the end | `2e675bfcada9` |
-| `eclipse-car-op1.nc`, `eclipse-car-op2.nc` | the two ops as single programs | 5:42 / 20:44 | 539 / 1622 s | `0df6ff8d40e5` / `8b76f97356e5` |
+| `eclipse-car-first.nc` | op 1 alone, left station (G54): first blank | 5:46 | 544 s, ran to the end | `2737b8b84d98` |
+| `eclipse-car-cycle.nc` | op 1 left (G54) + op 2 right (G55): every blank after it | 26:13 | 2023 s, ran to the end | `54e5a9a4e38e` |
+| `eclipse-car-last.nc` | op 2 alone, right station (G55): last blank | 20:28 | 1622 s, ran to the end | `6ffb8aab62d0` |
+| `eclipse-car-op1.nc`, `eclipse-car-op2.nc` | the two ops as single programs | 5:46 / 20:44 | 544 / 1622 s | `2737b8b84d98` / `8b76f97356e5` |
 
 **Checks:**
 - Every program has the SIM OK stamp (0 problems). Since this version they are checked at the fine setting: rCAD's
@@ -76,7 +76,10 @@ vents, logos or badges.
 1. Face 0.2.
 2. Rough round both cars, the gap and the ends to Z3.33: 4 levels, laps, capped at 400 W.
 3. **Walls in one full-height pass** to Z3.33, which is car z 6.47.
-4. Magnet pockets.
+4. Magnet pockets **8.07** (2026-11-22): helix 0.1 inside the wall, then a full lap at size at full depth and a
+   spring lap. The single helix before left the size to how far the re-seated cutter bent, and its bottom lap
+   restarted at 0° and left a wedge up to 0.17 at the floor edge (fixed in rCAD PR #175). A loose magnet gets a
+   drop of glue.
 5. Two Ø7.5 carrier bores in the gap.
 6. T1 0.3 edge break of the bottom outline and the pocket rims.
 

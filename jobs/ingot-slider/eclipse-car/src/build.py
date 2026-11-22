@@ -14,6 +14,7 @@ import json, math
 HERE = "/home/jonas/dmc2/eclipse-car"
 PAIR, SHIM_OP2 = 26.5, 1.67
 POCKET_D, POCKET_H, MAGS = 8.05, 3.15, [-15.0, 0.0, 15.0]
+CAR_POCKET_D = 8.07   # brass pockets 8.07 (Jonas, 2026-11-22); the aluminium bases stay 8.05
 # the thick-rail base: the ingot base (~/dmc2/slider/build.py) with the channel 17.7 wide instead of 20.0
 BW, BL, BT = 25.0, 45.0, 8.6
 CH_W, CH_D = 17.7, 3.0             # rails 3.65 wide (were 2.5)
@@ -74,8 +75,8 @@ class Doc:
 
 def pockets(d, cys, z0):
     pl = d.plane_z(z0, "car bottom") if z0 else {"kind": "origin_plane", "plane": "Top"}
-    sk = d.sketch([{"type": "circle", "center": [0, cy + m], "radius": POCKET_D / 2} for cy in cys for m in MAGS], pl)
-    d.feat("extrude", {"profiles": [{"sketch": sk}], "depth": POCKET_H, "op": "remove"}, "3 magnet pockets 8.05 x 3.15 at x -15/0/+15 (bottom)")
+    sk = d.sketch([{"type": "circle", "center": [0, cy + m], "radius": CAR_POCKET_D / 2} for cy in cys for m in MAGS], pl)
+    d.feat("extrude", {"profiles": [{"sketch": sk}], "depth": POCKET_H, "op": "remove"}, "3 magnet pockets 8.07 x 3.15 at x -15/0/+15 (bottom)")
 
 
 def base(d, cy=0.0, chamfers=True):

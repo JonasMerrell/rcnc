@@ -73,7 +73,7 @@ S += tools(0, BR) + probe(0, 3, 1.0) + [
           bottom=low1, stepdown=(top1 - low1) / 4, leave_floor=0.0, cap=400),
     op(0, "contour", f"Finish the walls in one full-height pass, down to Z{low1:g} (car z {wall_top:.2f}: every vertical wall of the car)", tool=24, side="outside",
        bottom=low1, stepdown=20, lead=2, feed=BR["fin_feed"]),
-    op(0, "bore", "Magnet pockets 8.05 x 3.15 (helical, finish floor)", tool=24, feed=BR["fin_feed"]),
+    op(0, "bore", "Magnet pockets 8.07 x 3.15: helix 0.1 inside, then a full lap at size at full depth and a spring lap", tool=24, feed=BR["fin_feed"], spring_pass=True),
     op(0, "bore", "Two locating bores 7.5 through the carrier between the cars (op 2 finds them)", tool=24, points=CARRIER, thread_diameter=7.5,
        bottom=-0.3, feed=BR["fin_feed"]),
     op(0, "chamfer", "Edge break 0.3: bottom outline and pocket rims", tool=1, chamfer=0.3, side="both", tip_offset=1.0),

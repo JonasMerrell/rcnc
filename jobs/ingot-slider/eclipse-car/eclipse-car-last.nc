@@ -1,6 +1,6 @@
 (Eclipse car op2 top - made by rCAD)
 (RCNC REQUIRE_GUARD: the bog guard [Settings -> Listening, feed hold on] must be armed: rcnc refuses Cycle Start without it)
-(SIM OK: 0 problems in rCAD's stock simulation of these toolpaths, hash e3a966269c66d9ea)
+(SIM OK: 0 problems in rCAD's stock simulation of these toolpaths, hash 43ac8dc678dee5c5)
 (work zero: part origin)
 (2 stations, each in its own work offset)
 (station 1: G54 Eclipse car op1 bottom - work zero: stock bottom, centre [on the vise])
@@ -20,7 +20,7 @@
 (T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)
 (T44 SpeTool W01004 tapered ball R1 2.24 deg [TiAlN] - R1 tapered ball, 2.24deg per side, D3.175 shank, flute length 15, stickout 18)
 (T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill, flute length 18, stickout 22)
-(estimated time 26:36)
+(estimated time 26:39)
 G21 G17 G40 G49 G80 G90 G91.1 G94 G64
 G55
 (RCNC Z_REFERENCE Vise)

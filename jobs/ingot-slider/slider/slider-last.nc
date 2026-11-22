@@ -1,6 +1,6 @@
 (Slider op2 top - made by rCAD)
 (RCNC REQUIRE_GUARD: the bog guard [Settings -> Listening, feed hold on] must be armed: rcnc refuses Cycle Start without it)
-(SIM OK: 0 problems in rCAD's stock simulation of these toolpaths, hash be175889028c5328)
+(SIM OK: 0 problems in rCAD's stock simulation of these toolpaths, hash a36a4f87f92b659f)
 (work zero: part bottom, stock centre [on the vise])
 (3 stations, each in its own work offset)
 (station 1: G54 Slider op1 bottom - work zero: stock bottom, centre [on the vise])
@@ -21,7 +21,7 @@
 (T99 YIDOFENG 3D touch probe - touch probe, D2 stylus ball, flute length 12, stickout 40)
 (T24 3 FLUTE DLC 1/4 - D6.35 flat end mill, 3 flutes, flute length 19.05, stickout 24)
 (T1 ALUMINUM chamfer 90 - D6.35 90deg chamfer mill, flute length 18, stickout 22)
-(estimated time 9:31)
+(estimated time 9:35)
 G21 G17 G40 G49 G80 G90 G91.1 G94 G64
 G55
 (RCNC Z_REFERENCE Vise)
