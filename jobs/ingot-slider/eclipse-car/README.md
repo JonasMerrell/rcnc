@@ -33,9 +33,9 @@ vents, logos or badges.
 | Program | What | rCAD time | rcnc simulator | sha256 |
 |---|---|---|---|---|
 | `eclipse-car-first.nc` | op 1 alone, left station (G54): first blank | 5:42 | 539 s, ran to the end | `0df6ff8d40e5` |
-| `eclipse-car-cycle.nc` | op 1 left (G54) + op 2 right (G55): every blank after it | 23:56 | 1874 s, ran to the end | `ff21635ad21c` |
-| `eclipse-car-last.nc` | op 2 alone, right station (G55): last blank | 18:13 | 1479 s, ran to the end | `7184e833f85d` |
-| `eclipse-car-op1.nc`, `eclipse-car-op2.nc` | the two ops as single programs | 5:42 / 18:29 | 539 / 1479 s | `0df6ff8d40e5` / `189a31f77cb4` |
+| `eclipse-car-cycle.nc` | op 1 left (G54) + op 2 right (G55): every blank after it | 26:10 | 2017 s, ran to the end | `80f790b67a12` |
+| `eclipse-car-last.nc` | op 2 alone, right station (G55): last blank | 20:28 | 1622 s, ran to the end | `2e675bfcada9` |
+| `eclipse-car-op1.nc`, `eclipse-car-op2.nc` | the two ops as single programs | 5:42 / 20:44 | 539 / 1622 s | `0df6ff8d40e5` / `8b76f97356e5` |
 
 **Checks:**
 - Every program has the SIM OK stamp (0 problems). Since this version they are checked at the fine setting: rCAD's
@@ -68,8 +68,8 @@ vents, logos or badges.
 
 | | T44 F1000 | T44 F1500 (posted) | T44 F2000 |
 |---|---|---|---|
-| op 2 / last | F18:29_1000 | F18:29_1500 | F18:29_2000 |
-| cycle | 29.7 min | 23.9 | 21.0 |
+| op 2 / last | 26.5 min | 20.7 | 17.8 |
+| cycle | 31.9 min | 26.2 | 23.3 |
 
 ## Op 1 (bottom up, left station, on the 1.67 shims; T99, T24, T1)
 
@@ -87,8 +87,12 @@ rough (margin 1.28), as on the ingot slider's op 1, which ran. Nothing unfinishe
 
 1. Find stock, blow-out pause, Find bores.
 2. Face to the roof (car z 9.5).
-3. **Heavy rough while the band still joins the cars**, down to car z 6.52 (peak 297 W).
-4. Light rough to car z 3.9 that separates the cars (120 W).
+3. Rough while the band still joins the cars, down to car z 6.52: **light**, 100 W target, capped at 120 W (peak 110 W).
+4. Light rough to car z 3.9 that separates the cars: 100 W target, cap 120 W (peak 100 W).
+
+   Every T24 cut in op 2 stays light because op 2 stands on the shims with only 3.0 mm of the car in the jaws
+   (Jonas, 2026-11-22). Peaks: face 36 W, joined rough 110 W, separating rough 100 W; T44 passes 1–3 W; all at
+   18 000 rpm for T24, climb, in laps.
 5. T44 semi-finish: parallel, 0.25 stepover, leaves 0.05.
 6. T44 finish along the car on slopes ≤ 45°, **0.07 stepover (0.035 D)**.
 7. T44 waterline on the steep faces (≥ 40°), 0.069 apart.

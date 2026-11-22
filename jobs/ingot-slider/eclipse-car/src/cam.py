@@ -5,7 +5,7 @@ Car op 1 = the ingot slider's brass op 1 with the car outline: the blank on the 
 (op 1 faces it), walls in one full-height pass down to Z3.33 (car z 6.47: every vertical wall of the car, the
 highest is the tail lamp panel at 6.50), magnet pockets, carrier bores, 0.3 edge break. Car op 2 stands on 1.67
 shims too (grip 3.0) and takes Z from the vise like every op 2 (the shims are in the model), so only op 1 of a
-cycle takes Z from Find stock. Heavy roughing while the band still joins the cars, a light rough that separates
+cycle takes Z from Find stock. Light roughing (100 W, cap 120) while the band still joins the cars, a light rough that separates
 them, then T44 (tapered ball R1) semi-finish, finish (parallel + waterline 0.07 = 0.035 D) and T1 edge break.
 The base is the ingot base's CAM with the 17.7 channel."""
 import json, sys
@@ -89,10 +89,12 @@ S += [setup("Eclipse car op2 top", 1, follows="Eclipse car op1 bottom", z=LEDGE_
 FLOOR = SURF_LO + Z2 - 0.05         # the ball never goes below car z 3.85 (op 1's walls below 3.9 stay untouched)
 S += tools(1, BR) + [{"tool": "cam_tool", "args": dict(BALL, cam=1)}] + probe(1, 3, 1.5) + find_bores(1, 1.0) + [
     op(1, "face", f"Face the top down to the roof, car z {CAR_T:g} ({top1 - CAR_T:g})", tool=24, stepdown=top1 - CAR_T, stepover=0.4),
-    rough(1, BR, f"Heavy rough while the band still joins the cars: down to car z {wall_top + 0.05:.2f} (0.3 left)", bottom=wall_top + 0.05 + Z2,
-          stepdown=1.0, leave_floor=0.2),
-    rough(1, BR, f"Rough the rest down to car z {SURF_LO:g} (separates the cars, light: 120 W)", bottom=SURF_LO + Z2,
-          stepdown=1.0, leave_floor=0.0, target=120, cap=150),
+    # light throughout (Jonas, 2026-11-22: op 2 stands on the shims, only 3.0 of the car in the jaws): every T24
+    # cut in op 2 at about 100 W, capped at 120 W
+    rough(1, BR, f"Rough while the band still joins the cars, light (100 W, cap 120): down to car z {wall_top + 0.05:.2f} (0.3 left)", bottom=wall_top + 0.05 + Z2,
+          stepdown=1.0, leave_floor=0.2, target=100, cap=120),
+    rough(1, BR, f"Rough the rest down to car z {SURF_LO:g} (separates the cars, light: 100 W, cap 120)", bottom=SURF_LO + Z2,
+          stepdown=1.0, leave_floor=0.0, target=100, cap=120),
     op(1, "parallel", "Semi-finish the car tops with T44 (0.25 stepover, leaves 0.05)", tool=BT, angle=90, stepover=0.25, leave=0.05, bottom=FLOOR),
     op(1, "parallel", "Finish the car tops with T44 along the car (0.07 stepover = 0.035 D), slopes up to 45 deg", tool=BT, angle=90, stepover=0.07, leave=0.0,
        bottom=FLOOR, slope_max=45),
