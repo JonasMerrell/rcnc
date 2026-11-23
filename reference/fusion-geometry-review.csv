@@ -1,0 +1,39 @@
+row,fusion_T,type,description,dia_mm,corner_or_tip_radius_mm,taper_deg_per_side,flutes,flute_len_mm,shoulder_dia_mm,shoulder_len_mm,shank_dia_mm,overall_len_mm,fusion_body_len_mm,fusion_material,notes
+1,1,flat,"4F 6*6*143*57",6,,,4,13,6,24,6,57,24,hss,
+2,1,chamfer,"ALUMINUM",6.35,tip 0,45,4,18,6.35,27,6.35,50.8,36,carbide,90 deg included
+3,2,flat,"",8,,,4,19,8,24,8,63,24,hss,
+4,3,flat,"",3,,,3,10,3,21,3,36,24,hss,
+5,4,chamfer,"",6.35,tip 0,45,4,18,6.35,27,6.35,50.8,36,carbide,same geometry as row 2
+6,5,flat,"6mm 2 flute carbide",6,,,2,24,6,30,6,36,30,carbide,
+7,6,flat,"",6,,,3,18,6,21,6,36,24,hss,
+8,7,flat,"2 flute 2mm",2,,,2,15,2,15,4,36,24,hss,
+9,7,flat,"",2,,,3,6,2,6,4,36,24,hss,
+10,8,flat,"3 flute carbide 6mm",6,,,3,20,6,21,6,36,24,hss,
+11,9,flat,"4 flute 2mm",2,,,4,7,2,7,2,36,24,hss,
+12,10,flat,"4 flute 12mm",12,,,4,30,12,40,12,80,40,hss,
+13,11,ball,"6mm 2 flute ball end mill",6,3,,2,18,6,21,6,36,24,hss,
+14,12,flat,"3 flute 1mm",1,,,3,5,1,5,1,36,15,hss,shank 1 mm looks wrong
+15,13,flat,"",6.35,,,3,28.575,6.35,30,6.35,70,30,hss,
+16,14,ball,"",4,2,,2,8,4,15,4,50,15,hss,
+17,15,ball,"",2,1,,2,5,2,8,2,36,20,hss,
+18,16,flat,"",4,,,4,10,4,21,4,36,24,hss,
+19,17,slot mill,"",16,0,,6,3,6,15,6,62,30,hss,16 mm cutter 3 mm thick on 6 mm neck
+20,18,reamer,"",6,,,6,18,5.4,18,?,60,48,hss,
+21,19,thread mill,"",6,,,4 (1 tooth),20,3.40,30,6,50,50,hss,single profile 60 deg 1.5 pitch
+22,20,flat,"1/8 ALUMINUM",3.175,,,4,9.525,3.175,15,3.175,38.1,15,carbide,
+23,20,flat,"1/8 endmill Titanium",3.175,,,4,9.525,3.175,15,3.175,38.1,15,carbide,same geometry as row 22
+24,21,drill,"",2,,118 tip,2,20,2,25,2,40,25,carbide,
+25,22,slot mill,"",6,0,,4,2,2.8,12,?,50,20,carbide,6 mm cutter 2 mm thick on 2.8 mm neck
+26,23,flat,"1/4-for-steel",6.35,,,4,19.05,6.35,21,6.35,36,24,carbide,
+27,24,flat,"1/4 DLC LOW-FORCE",6.35,,,3,19.05,6.35,21,6.35,36,24,carbide,
+28,24,flat,"3 FLUTE DLC 1/4",6.35,,,3,19.05,6.35,21,6.35,36,24,carbide,already in rCAD (T24)
+29,24,flat,"3 FLUTE DLC 1/4 LONG",6.35,,,3,25.4,6.35,26,6.35,36,26,carbide,OAL 36 looks short for a long tool
+30,25,flat,"TITANIUM",6.35,,,4,19.05,6.35,21,6.35,36,24,hss,
+31,26,flat,"3/16 TITANIUM",4.7625,,,4,14.2875,4.7625,21,4.7625,36,24,ti coated,
+32,27,slot mill,"6x1 slot",6,0,,4,1,3,15,3,50,20,carbide,6 mm cutter 1 mm thick on 3 mm neck
+33,28,flat,"3/16 ALUMINUM",4.7625,,,4,19.05,4.7625,21,4.7625,36,24,carbide,
+34,28,flat,"3/16 STEEL",4.7625,,,4,19.05,4.7625,21,4.7625,36,24,carbide,same geometry as row 33
+35,47,tapered ball,"SpeTool W01001",0.5 tip,0.25,5.12,2,15,3.188,15,3.175,38.1,25.4,carbide,TiAlN; listed twice (alu + wood presets)
+36,48,tapered ball,"SpeTool W01002",1.0 tip,0.5,4.16,2,15,3.182,15,3.175,38.1,25.4,carbide,TiAlN; the 1 mm tapered ball
+37,49,tapered ball,"SpeTool W01003",1.5 tip,0.75,3.2,2,15,3.177,15,3.175,38.1,25.4,carbide,TiAlN
+38,50,tapered ball,"SpeTool W01004",2.0 tip,1.0,2.24,2,15,3.173,15,3.175,38.1,25.4,carbide,TiAlN; the 2 mm tapered ball

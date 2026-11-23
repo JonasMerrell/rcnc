@@ -1,0 +1,21 @@
+---
+name: dmc2-machine-facts
+description: DMC2 mill capabilities Jonas has confirmed (spindle speed, tool library, spindle holder)
+metadata:
+  type: project
+  modified: 2026-11-15T08:21:53.457Z
+---
+- Spindle max 24,000 rpm (Jonas, 2026-11-14). Spindle is ER16 today. Rated 1.5 kW, which is electrical INPUT power, so less at the shaft (Jonas, 2026-11-15). Spindle power is the machine's binding limit: see MEMORY.md spindle line (wall watt meter on the whole machine since 2026-11-16: 20 W idle, 40 W steppers, 55 W homing).
+- Chip clearing (Jonas, 2026-11-15): flood coolant, low pressure. Chips have built up badly in deep pockets with HSM toolpaths; worse with thin light chips (not thrown far). Prefer the thickest chip power allows inside pockets.
+- All of Jonas's tools are carbide; the 1/4" flat end mills are DLC coated (Jonas, 2026-11-15). Ignore "HSS" in the Fusion library's material column (e.g. T11 6 mm ball is carbide).
+- Jonas's Fusion tool library (CSV export) is on netdash at ~/dmc2/tools/fusion-library-full.csv; rCAD imports it. Tool numbers repeat (T7, T20, T24 x3), so key tools by row/description.
+- First test part (2026-11-14) uses (24000 rpm, ~80% Fusion chip load) T24 "3 FLUTE DLC 1/4", T20 "1/8 ALUMINUM", T1 "ALUMINUM" 90deg chamfer, T99 touch probe ([[dmc2-touch-probe]]); job files in ~/dmc2/job on netdash.
+- Mill PC should build rcnc from integration branch mill/2026-11-14 (main + PRs 8,9,10,11 + job tool-header loading + setup sheets; job files in jobs/dmc2-testpart/). Feature branches alone miss each other's work (Jonas hit missing homing on find-stock). rcnc shows setup sheet only if named <program>.html beside the .nc.
+- Vise fixed-jaw insert bar: held by M5 x 8 screws, 25.4 mm spacing, counterbored (Jonas, 2026-11-14). Second part (2026-11-14): vise work stop that mounts on one of these screws, job in jobs/vise-stop/ on rcnc mill/2026-11-14.
+- The vise CAD (~/dmc2/cad/DMC2-cad/vise.step) is the exact CAD Jonas machined the vise from: trust its dimensions (bar 8.7 tall, M5 holes 10 deep), no need to ask him to re-measure. Only its placement on the table in the machine model was a guess.
+- Jonas has a fixture plate with a grid of M8 holes (2026-11-14); usable for bolting stops/fixtures. Two 25 mm grid patterns, the second centred in the first (offset 12.5, 12.5), so holes are 17.7 mm apart on the diagonal; position vs the vise not recorded.
+- Second part (phone stand) job state: [[dmc2-phone-stand-job]].
+- VFD (nameplate photo from Jonas, 2026-11-15): H100-2.2C2-1B, 2.2 kW, input 1-phase 110 V 50/60 Hz, output 3-phase 0-110 V, 17.5 A, 0-1000 Hz. So any replacement spindle must be the 110 V winding; 800 Hz 4-pole is supported.
+- VFD settings read by Jonas 2026-11-17 (H100 uses F-codes, not Huanyang PD; keys SET/ESC/arrows, << steps the Hz/A/V display): F004 400, F005 400, F006 1.0, F009 13.5, F008 380, F010 5, F012 1 (vector), F120 150, F141 110 V, F142 11 A, F143 2 poles, F144 24(000). Live in air: 24k = 109 V, 0.9 A; 12k = 55 V, 0.63 A (linear V/f, tiny no-load current), winding 1.5 ohm phase-to-phase: behaves like a 220 V winding at half flux (Jonas's hypothesis; F141/F142 are just typed in). 2026-11-17 6:52 PM: Jonas set F004 400->200 (original 400): air 6k = 55 V 1.5 A, 12k = 108 V 1.6 A steady, louder. CONFIRMED higher-voltage (220 V class) winding on a 110 V-max drive: now full flux up to 12k, field weakening above, 24k unchanged. Expected ~4x torque at 12k (~2x today's 24k power), unmeasured; a 220 V-output VFD would give it to 24k. F004 left at 200; no cutting until the v4 calibration (12k passes with hold armed).
+- 2026-11-15: Jonas is considering a G-Penny GDL80-20-24Z/2.2 water-cooled 2.2 kW ISO20 ATC spindle (variants 4P 800 Hz 24k / 4P 400 Hz 12k / 2P 400 Hz 24k) as a drop-in for his current spindle; wants steel capability.
+- Mill PC (DMC2) git: rcnc checkout C:\src\rcnc, build target C:\src\rcnc-test-target (desktop shortcuts). GitHub sign-in (GCM) saved 2026-11-17 so pushes work from there; Claude Code there blocks some git ops (merge/checkout) via auto-mode permission check unless Jonas says go. No desktop control (computer use off) on the mill PC: Jonas opens programs himself. This thread's folder tools reach jonas-desktop, not the mill PC.
