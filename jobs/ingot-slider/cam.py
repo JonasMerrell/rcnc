@@ -28,6 +28,23 @@ INGOT_CH_1 = 1.7          # the ingot chamfer's first pass (half the area of the
 JAW_LIMIT = 5.0             # lowest the tool goes beside the jaws (their top 4.7 + 0.3)
 RAIL_CH, INGOT_CH = 1.7, 2.4  # the chamfers that hide the seam (build.py BCH / SCH)
 
+# Chamfer mill bites (Jonas, 2026-11-26: the thick base's 1.7 rail chamfer, cut in one pass with 0.3 band stock
+# beside it, came out poorly). No pass cuts deeper than CH_BITE square to the chamfer face, counting the stock left
+# beside the edge; the last pass at size takes CH_LAST. Returns the chamfer widths of the passes, smallest first.
+CH_BITE, CH_LAST = 0.3, 0.1
+def chamfer_passes(final, side_stock=0.0, top_stock=0.0, bite=CH_BITE, last=CH_LAST):
+    import math
+    r2 = math.sqrt(2.0)
+    start = -(side_stock + top_stock)          # the stock's own corner, as a chamfer width on the part's edge
+    if (final - start) / r2 <= bite + 1e-9:
+        return [final]                         # small enough for one pass (the 0.3 edge breaks)
+    pre = final - last * r2                    # the width before the light last pass
+    n = max(1, math.ceil((pre - start) / (bite * r2) - 1e-9))
+    w = [start + (pre - start) * (i + 1) / n for i in range(n)]
+    return [round(x, 3) for x in w if x > 0.02] + [final]
+RAIL_PASSES = chamfer_passes(RAIL_CH, side_stock=0.3)
+INGOT_PASSES = chamfer_passes(INGOT_CH, side_stock=0.3)
+
 # ---- the spindle (guidelines.md, 2026-11-18: F004 = 150, 9k is the strong speed) ----
 # the power available falls above 9000 rpm as (9000 / rpm)^0.76: caution 850 W at 9k, 684 at 12k, 403 at 24k
 M = {"name": "DMC2", "model": "DMC2", "travel": [343, 234, 150], "max_feed": 3000, "link_feed": 5000, "rapid_z": 5000,
@@ -188,8 +205,13 @@ S += tools(1, AL) + probe(1, 3, 1.5) + find_bores(1, 1.0) + [
           bottom=wall_top - 0.2, stepdown=BASE_T - wall_top + 0.2, leave_floor=0.0, target=120, cap=150),
     op(1, "trace", f"Finish the rails' channel walls, Z{BASE_T:g} to Z{CH_FLOOR:g}, one pass (traces inside the channel sketch, straight through the cleared gap)", tool=24,
        sketches=[14], side="inside", top=BASE_T, depth=BASE_T - CH_FLOOR, stepdown=BASE_T - CH_FLOOR, rpm=AL["fin_rpm"], feed=AL["fin_feed"]),
-    op(1, "deburr", f"Chamfer {RAIL_CH} the rail tops outside (takes the 0.3 left on the band and hides the op 1 / op 2 seam)", tool=1,
-       chamfer=RAIL_CH, tip_offset=1.0, edges=[[s * BW / 2, cy, BASE_T] for s in (1, -1) for cy in (-26.5, 26.5)]),
+] + [
+    # the 1.7 chamfer plus the 0.3 left on the band, at most CH_BITE (0.3) deep per pass, the last 0.1 (Jonas 2026-11-26)
+    op(1, "deburr", (f"Chamfer {RAIL_CH} the rail tops outside, pass {i + 1} of {len(RAIL_PASSES)}: {c:g} wide"
+                     + (" (to size; hides the op 1 / op 2 seam)" if c == RAIL_CH else " (takes the 0.3 left on the band)")), tool=1,
+       chamfer=c, tip_offset=1.0, edges=[[s * BW / 2, cy, BASE_T] for s in (1, -1) for cy in (-26.5, 26.5)])
+    for i, c in enumerate(RAIL_PASSES)
+] + [
     op(1, "deburr", "Edge break 0.3: channel edges, floor ends, pocket rims", tool=1, chamfer=0.3, tip_offset=0.7,
        edges=[[s * 10.0, cy, BASE_T] for s in (1, -1) for cy in (-26.5, 26.5)] + [[0, cy + s * 22.5, CH_FLOOR] for s in (1, -1) for cy in (-26.5, 26.5)]
        + [[4.025, cy + m, CH_FLOOR] for m in (-15, 0, 15) for cy in (-26.5, 26.5)]),
@@ -234,10 +256,11 @@ S += [setup("Slider op2 engrave", 4, follows="Slider op2 top", z=LEDGE_Z - FACE_
             model="DMC2-twostation-slider", wcs=2)]
 S += [tools(4, BR)[0],
       op(4, "trace", "Engrave the crosshatch 0.4 deep (chamfer mill tip)", tool=1, sketches=[9, 10], depth=0.4, stepdown=0.4),
-      op(4, "chamfer", f"Ingot chamfer, first pass {INGOT_CH_1:g} x 45 (about half the area of the full one; tip at Z{SLIDER_T - INGOT_CH_1 - 0.58:.2f})",
-         tool=1, chamfer=INGOT_CH_1, side="outside", tip_offset=0.58),
-      op(4, "chamfer", f"Ingot chamfer {INGOT_CH} x 45, second pass to size (takes the 0.3 left on the band, hides the seam; tip at Z{SLIDER_T - INGOT_CH - 0.58:.2f})",
-         tool=1, chamfer=INGOT_CH, side="outside", tip_offset=0.58)] + info(4, "slider-engrave") + cycle(2, "slider-cycle") + first_last(2, "slider", ["Slider op1 bottom"], ["Slider op2 top", "Slider op2 engrave"])
+      ] + [
+      # the 2.4 chamfer plus the 0.3 left on the band, at most CH_BITE (0.3) deep per pass, the last 0.1 (Jonas 2026-11-26)
+      op(4, "chamfer", (f"Ingot chamfer {INGOT_CH} x 45, pass {i + 1} of {len(INGOT_PASSES)}: {c:g} wide (tip at Z{SLIDER_T - c - 0.58:.2f})"
+                        + ("; to size, hides the seam" if c == INGOT_CH else "")), tool=1, chamfer=c, side="outside", tip_offset=0.58)
+      for i, c in enumerate(INGOT_PASSES)] + info(4, "slider-engrave") + cycle(2, "slider-cycle") + first_last(2, "slider", ["Slider op1 bottom"], ["Slider op2 top", "Slider op2 engrave"])
 S += [{"tool": "save_document", "args": {"path": "slider-cam.json"}}]
 # toolpaths are made once per setup, by cam_info at its end, not again after every operation added
 for st in S:

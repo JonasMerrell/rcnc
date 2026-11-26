@@ -1,6 +1,6 @@
 (Thick base op1 bottom - made by rCAD)
 (RCNC REQUIRE_GUARD: the bog guard [Settings -> Listening, feed hold on] must be armed: rcnc refuses Cycle Start without it)
-(SIM OK: 0 problems in rCAD's stock simulation of these toolpaths, hash d2365ff299d6a965)
+(SIM OK: 0 problems in rCAD's stock simulation of these toolpaths, hash 5be5aeb7bbe84c0c)
 (work zero: stock bottom, centre [on the vise])
 (clamp the part with its bottom side up)
 (fixture moving jaw [-X]: X-26 to -13.3, Y-47.75 to 47.75, Z0 to 4.7 [work])
@@ -1984,9 +1984,9 @@ G3 X-5.077 Y-0.57 Z0.074 I-0.047 J0.573
 G3 X-5.198 Y-0.54 Z-0.109 I0.077 J0.57
 G3 X-5.309 Y-0.485 Z-0.292 I0.198 J0.54
 G1 X-5.172 Y-0.549 Z-0.3
-X-4.445 Y0.149
-G3 X-4.425 Y0 I-0.555 J-0.149
-G1 X-5
+G3 X-5.308 Y-0.486 I0.172 J0.549
+G1 X-5.172 Y-0.549
+X-5 Y0
 G0 Z6
 X5.575
 G1 X5.558 Y0.125 Z11.132 F5000
@@ -2059,9 +2059,9 @@ G3 X5.195 Y-0.541 Z0.248 I-0.306 J0.487
 G3 X5.074 Y-0.57 Z0.066 I-0.195 J0.541
 G3 X4.95 Y-0.573 Z-0.117 I-0.074 J0.57
 G3 X4.828 Y-0.549 Z-0.3 I0.05 J0.573
-G1 X5.555 Y0.149
-G3 X5.575 Y0 I-0.555 J-0.149
-G1 X5
+G3 X4.692 Y-0.486 I0.172 J0.549
+G1 X4.828 Y-0.549
+X5 Y0
 G0 Z14.14
 Z17.34
 

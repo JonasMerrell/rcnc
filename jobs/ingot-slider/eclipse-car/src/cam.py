@@ -140,6 +140,7 @@ S += tools(2, AL) + probe(2, 3, 1.0) + [
 ] + outs(2, BASED, "eclipse-base-thick-op1", ["Thick base op1 bottom"])
 S += [setup("Thick base op2 top", 3, follows="Thick base op1 bottom", z=LEDGE_Z - FACE_AL, station_x=FIXED_R + BW / 2, fixtures=jaws(BW, -1),
             model="DMC2-twostation-base", wcs=2)]
+RAIL_PASSES = chamfer_passes(RAIL_CH, side_stock=0.3)
 S += tools(3, AL) + probe(3, 3, 1.5) + find_bores(3, 1.0) + [
     op(3, "face", f"Face the top down to Z{BASE_T:g} ({top1 - BASE_T:g}, two levels)", tool=24, stepdown=(top1 - BASE_T) / 2, stepover=0.2,
        rpm=AL["face_rpm"], feed=AL["feed"]),
@@ -151,8 +152,14 @@ S += tools(3, AL) + probe(3, 3, 1.5) + find_bores(3, 1.0) + [
           bottom=wall_top - 0.2, stepdown=BASE_T - wall_top + 0.2, leave_floor=0.0, target=120, cap=150),
     op(3, "trace", f"Finish the rails' channel walls (17.7 apart), Z{BASE_T:g} to Z{CH_FLOOR:g}, one pass (inside the channel sketch, through the cleared gap)", tool=24,
        sketches=[ids["channel_sketch"]], side="inside", top=BASE_T, depth=BASE_T - CH_FLOOR, stepdown=BASE_T - CH_FLOOR, rpm=AL["fin_rpm"], feed=AL["fin_feed"]),
-    op(3, "deburr", f"Chamfer {RAIL_CH} the rail tops outside (takes the 0.3 left on the band and hides the op 1 / op 2 seam)", tool=1,
-       chamfer=RAIL_CH, tip_offset=1.0, edges=[[s * BW / 2, cy, BASE_T] for s in (1, -1) for cy in (-26.5, 26.5)]),
+] + [
+    # the 1.7 chamfer plus the 0.3 left on the band, at most CH_BITE (0.3) deep per pass, the last 0.1 (Jonas 2026-11-26:
+    # one pass came out poorly). Each pass keeps the tip 1.0 under its own lower edge.
+    op(3, "deburr", (f"Chamfer {RAIL_CH} the rail tops outside, pass {i + 1} of {len(RAIL_PASSES)}: {c:g} wide"
+                     + (" (to size; hides the op 1 / op 2 seam)" if c == RAIL_CH else " (takes the 0.3 left on the band)")), tool=1,
+       chamfer=c, tip_offset=1.0, edges=[[s * BW / 2, cy, BASE_T] for s in (1, -1) for cy in (-26.5, 26.5)])
+    for i, c in enumerate(RAIL_PASSES)
+] + [
     op(3, "deburr", "Edge break 0.3: channel edges, floor ends, pocket rims", tool=1, chamfer=0.3, tip_offset=0.7,
        edges=[[s * CH_W / 2, cy, BASE_T] for s in (1, -1) for cy in (-26.5, 26.5)] + [[0, cy + s * 22.5, CH_FLOOR] for s in (1, -1) for cy in (-26.5, 26.5)]
        + [[4.025, cy + m, CH_FLOOR] for m in (-15, 0, 15) for cy in (-26.5, 26.5)]),
