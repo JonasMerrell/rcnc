@@ -24,6 +24,14 @@ for p in ALL:
     if not has(p, "REQUIRE_GUARD"):
         run("mark_guard.py", p)
 
+# slider op 1 runs with no shims on the cut left jaws (Jonas, 2026-11-26) and deepens their cut: say so in the header
+NOTE = "(NOTE: slider op 1, NO SHIMS: the bar sits on the ledges of the cut left-station jaws [grip 3.33]. T24 goes to Z3.63 beside them and cuts the jaw bars up to 1.07 deeper, 3.8-7 mm in from their faces [Jonas OK 2026-11-26; vise model vise-2026-11-26-left-jaws-cut, bars as after this run])\n"
+for p in ("slider/slider-op1.nc", "slider/slider-first.nc", "slider/slider-cycle.nc"):
+    t = open(p).read()
+    if "NO SHIMS" not in t:
+        i = t.index("\n", t.index("(RCNC REQUIRE_GUARD")) + 1
+        open(p, "w").write(t[:i] + NOTE + t[i:])
+
 V = [{"tool": "open_document", "args": {"path": "slider-cam.json"}}]
 for cam, path, st in ((0, "base/base-op1.nc", ["Base op1 bottom"]), (1, "base/base-op2.nc", None), (2, "slider/slider-op1.nc", ["Slider op1 bottom"]), (0, "base/base-cycle.nc", None), (2, "slider/slider-cycle.nc", None),
                       (0, "base/base-first.nc", ["Base op1 bottom"]), (0, "base/base-last.nc", ["Base op2 top"]),

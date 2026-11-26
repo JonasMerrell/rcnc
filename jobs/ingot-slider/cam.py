@@ -19,6 +19,9 @@ import json
 BAR_AL = (26.6, 12.34)      # 6061, measured 26.6 wide x 12.34 thick (Jonas, 2026-11-20)
 SHIM_AL = 0.0               # aluminium op 1 shims: none (the base is 8.6 thick instead)
 BAR_BR = (25.0, 10.0)       # C360, measured 10.0 x 25.0 (Jonas, 2026-11-19)
+LEFT_GRIP = 3.33            # left-station jaw height at the faces since the 2026-11-26 jaw cut (was 4.7)
+SHIM_BR1 = 0.0              # brass op 1 shims since the jaw cut: none (Jonas, 2026-11-26: the bar on the ledges, the cut jaws grip 3.33,
+                            # and op 1 may deepen the cut where it reaches past it; the old 1.67 strips would leave ~1.7 of grip)
 SHIM_BR = 1.67              # brass op 1 lies on two shim strips this thick (Jonas's shims; 10 mm bar: op 1's walls reach Z6.47 in op 2)
 BLANK_L = 101.0             # sawn to 101 (Jonas, 2026-11-19); op 1 finishes the parts' outer ends 98 apart
 FACE_AL, FACE_BR = 0.2, 0.2  # op 1 facing of the bar top (the parts' bottoms)
@@ -70,12 +73,13 @@ BR = {"rough_rpm": 18000, "face_rpm": 18000, "fin_rpm": 18000, "ch_rpm": 18000, 
       "ch_feed": 1000, "target": 300}
 
 
-def jaws(w, fixed_side, z0=0.0, extra=()):
-    """Jaw boxes (work coordinates) for a part or blank w wide centred on X0, gripping from z0 to z0 + 4.7."""
+def jaws(w, fixed_side, z0=0.0, extra=(), h=None):
+    """Jaw boxes (work coordinates) for a part or blank w wide centred on X0, gripping from z0 to z0 + h (4.7)."""
+    h = JAW_H if h is None else h
     fx, mv = "fixed jaw (centre block)", "moving jaw"
     left, right = (fx, mv) if fixed_side < 0 else (mv, fx)
-    return [{"name": f"{left} (-X)", "min": [-w / 2 - JAW_T, -JAW_L / 2, z0], "max": [-w / 2, JAW_L / 2, z0 + JAW_H]},
-            {"name": f"{right} (+X)", "min": [w / 2, -JAW_L / 2, z0], "max": [w / 2 + JAW_T, JAW_L / 2, z0 + JAW_H]}] + list(extra)
+    return [{"name": f"{left} (-X)", "min": [-w / 2 - JAW_T, -JAW_L / 2, z0], "max": [-w / 2, JAW_L / 2, z0 + h]},
+            {"name": f"{right} (+X)", "min": [w / 2, -JAW_L / 2, z0], "max": [w / 2 + JAW_T, JAW_L / 2, z0 + h]}] + list(extra)
 
 
 def tools(c, f, chamfer=True):
@@ -220,18 +224,18 @@ S += tools(1, AL) + probe(1, 3, 1.5) + find_bores(1, 1.0) + [
 # ======================= C360 sliders =======================
 W, H = BAR_BR
 SW = 19.6
-top1 = H - FACE_BR                  # op 1 (blank coordinates: Z0 is the blank's bottom on the shims)
-low1 = JAW_LIMIT - SHIM_BR          # op 1's lowest beside the jaws, in those coordinates
+top1 = H - FACE_BR                  # op 1 (blank coordinates: Z0 is the blank's bottom, on the ledges)
+low1 = LEFT_GRIP + 0.3 - SHIM_BR1   # op 1's lowest beside the jaws (3.63: the cut jaws' 3.33 + 0.3; deepens their cut where it reaches past it)
 wall_top = top1 - low1              # op 2: how high op 1's walls reach
 assert SLIDER_T - INGOT_CH <= wall_top - 0.2 + 1e-9, f"ingot chamfer lower edge Z{SLIDER_T - INGOT_CH} not 0.2 under the op 1 wall top Z{wall_top}"
 shims = [{"name": f"{SHIM_BR} mm shim strip (25 x 39) under the {e} slider, op 1 only", "min": [-12.5, lo, -SHIM_BR], "max": [12.5, lo + 39, 0]}
          for e, lo in (("-Y", -45), ("+Y", 6))]
 S += [setup("Slider op1 bottom", 4, stock={"size": [W, BLANK_L, H], "bottom": H - FACE_BR - SLIDER_T, "material": "Brass C360"}, orient="bottom",
-            origin="stock_bottom_center", station_x=FIXED_L - W / 2, fixtures=jaws(W, +1, z0=-SHIM_BR, extra=shims), model="DMC2-twostation-slider",
-            with_=["Slider op2 top", "Slider op2 engrave"], zref="")]
+            origin="stock_bottom_center", station_x=FIXED_L - W / 2, fixtures=jaws(W, +1, h=LEFT_GRIP), model="DMC2-twostation-slider",
+            with_=["Slider op2 top", "Slider op2 engrave"], zref="Vise")]
 S += tools(2, BR) + probe(2, 3, 1.0) + [
     op(2, "face", f"Face the bar top (the sliders' bottoms) {FACE_BR}, passes along the slide (Y)", tool=24, stepdown=FACE_BR, angle=90, stepover=0.4),
-    rough(2, BR, f"Rough round both sliders, the gap and the ends to Z{low1:g} (laps, power budget, capped at 400 W: the jaws hold only {4.7 - SHIM_BR:.1f} of the bar)",
+    rough(2, BR, f"Rough round both sliders, the gap and the ends to Z{low1:g} (laps, power budget, capped at 400 W: the cut jaws hold {LEFT_GRIP - SHIM_BR1:.2f} of the bar)",
           bottom=low1, stepdown=(top1 - low1) / 4, leave_floor=0.0, cap=400),
     op(2, "contour", f"Finish the walls in one full-height pass, down to Z{low1:g} (op 2 cuts no wall below the chamfer)", tool=24, side="outside",
        bottom=low1, stepdown=20, lead=2, feed=BR["fin_feed"]),
