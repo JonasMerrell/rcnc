@@ -15,6 +15,7 @@ use crate::sheet::{self, Sheets, SheetView};
 pub mod ears;
 mod findstock;
 mod pages;
+mod shims;
 mod toolchange;
 mod vfd;
 use pages::{SettingsDraft, Tab};
@@ -128,6 +129,9 @@ pub struct App {
     program_lines: (usize, Vec<usize>),
     /// The window's close button was pressed while the machine was busy.
     confirm_quit: bool,
+    /// Cycle Start was pressed on a program with `(RCNC REQUIRE_SHIM …)` lines: these, until the operator
+    /// says the shims are in (or cancels).
+    confirm_shims: Option<Vec<String>>,
     /// Quit was confirmed: let the window close.
     quitting: bool,
     /// The microphone, if there is one.
@@ -192,6 +196,7 @@ impl App {
             sheet_rect: None,
             program_lines: (0, Vec::new()),
             confirm_quit: false,
+            confirm_shims: None,
             quitting: false,
             ears: ears::Ears::new(),
             vfd: vfd::SpindleVfd::new(),
@@ -405,6 +410,19 @@ impl App {
     /// Cycle Start, unless the program asks for the listening feed hold (`(RCNC REQUIRE_GUARD)`) and it can't
     /// work: listening off, the hold switched off, or the input silent. Then it says why and doesn't start.
     fn cycle_start(&mut self) {
+        // a program that stands its work on shims: ask before it starts (not on a resume from a pause or hold)
+        if matches!(self.snap.mode, machine::Mode::Idle) && self.snap.tool_change.is_none() {
+            let shims = shims::required(&self.snap.program);
+            if !shims.is_empty() {
+                self.confirm_shims = Some(shims);
+                return;
+            }
+        }
+        self.cycle_start_now();
+    }
+
+    /// Cycle Start once the shims (if any) are confirmed.
+    fn cycle_start_now(&mut self) {
         if ears::requires_guard(&self.snap.program) && matches!(self.snap.mode, machine::Mode::Idle) {
             if let Err(why) = self.ears.guard_ready() {
                 self.machine.send(Command::Note(format!(
@@ -466,6 +484,7 @@ impl eframe::App for App {
         self.update_preview(ctx);
         self.keyboard(ctx);
         self.guard_close(ctx);
+        self.shim_check(ctx);
         if self.alive.1.elapsed() > std::time::Duration::from_millis(500) {
             egui::TopBottomPanel::top("dead")
                 .frame(egui::Frame::new().fill(RED).inner_margin(Margin::symmetric(14, 8)))
@@ -613,6 +632,38 @@ impl App {
                     }
                     if ui.button("Keep running").clicked() {
                         self.confirm_quit = false;
+                    }
+                });
+            });
+    }
+
+    /// "Are the shims in?" before a program that needs them starts. Nothing moves until the operator says yes.
+    fn shim_check(&mut self, ctx: &egui::Context) {
+        let Some(shims) = self.confirm_shims.clone() else { return };
+        // the program was changed or something started meanwhile: forget the question
+        if !matches!(self.snap.mode, Mode::Idle) || shims::required(&self.snap.program) != shims {
+            self.confirm_shims = None;
+            return;
+        }
+        egui::Window::new("Shims in?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label(RichText::new("This program is posted for work standing on shims:").strong());
+                for s in &shims {
+                    ui.label(RichText::new(format!("  •  {s}")).color(AMBER).strong());
+                }
+                ui.add_space(4.0);
+                ui.label("Without them the work sits lower and every cut goes that much deeper, into the vise jaws.");
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(RichText::new("Shims are in: Cycle Start").color(GREEN).strong()).clicked() {
+                        self.confirm_shims = None;
+                        self.cycle_start_now();
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.confirm_shims = None;
                     }
                 });
             });
