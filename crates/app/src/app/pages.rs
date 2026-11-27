@@ -773,7 +773,9 @@ impl App {
             self.draft.base = None;
             self.draft.import_notes.clear();
         }
-        if !dirty && self.draft.import_notes.is_empty() {
+        // Compared again after this frame's edits: `dirty` was taken before them, and dropping the
+        // draft on it threw away an edit made in a single frame (a tick box unticked itself).
+        if self.draft.config.as_ref() == self.draft.base.as_ref() && self.draft.import_notes.is_empty() {
             // Track changes made elsewhere (jog speed, probe page).
             self.draft.config = None;
         }
