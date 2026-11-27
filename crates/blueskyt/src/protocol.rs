@@ -112,6 +112,10 @@ pub struct BoardSetup {
     pub extra_inputs: Vec<(usize, Input)>,
     pub enable_signal: u8,
     pub spindle_signal: u8,
+    /// The output that runs the spindle in reverse (wired to the VFD's REV terminal, with
+    /// `spindle_signal` on its FWD terminal): on instead of `spindle_signal` for M4. None: the
+    /// spindle signal is on for either direction, as before.
+    pub reverse_signal: Option<u8>,
     pub flood_signal: u8,
     pub mist_signal: u8,
     /// PWM base frequency × 10 as the plugin sends it (5000 Hz → 10000, capped).
@@ -140,6 +144,9 @@ impl BoardSetup {
             extra_inputs: (0..10).map(|i| (input_signal::OEM_TRIG1 + 3 + i, Input::new(16 + i as u8, true))).collect(),
             enable_signal: ENABLE1,
             spindle_signal: OUTPUT1,
+            // Output 2 on pin 12, the DMC2's one free output. It only ever comes on for M4, which
+            // rcnc refuses until "Spindle can run in reverse" is ticked.
+            reverse_signal: Some(OUTPUT1 + 1),
             flood_signal: OUTPUT1 + 2,
             mist_signal: OUTPUT1 + 2,
             pwm_base: 10000,
@@ -323,7 +330,8 @@ pub fn status_request(setup: &BoardSetup, s: &HostState) -> Payload {
     let o = &s.outputs;
     let bits = setup.output_bits(|signal| {
         (signal == setup.enable_signal && !s.reset)
-            || (signal == setup.spindle_signal && o.spindle_on)
+            || (signal == setup.spindle_signal && o.spindle_on && !(o.spindle_ccw && setup.reverse_signal.is_some()))
+            || (Some(signal) == setup.reverse_signal && o.spindle_on && o.spindle_ccw)
             || (signal == setup.flood_signal && o.flood)
             || (signal == setup.mist_signal && o.mist)
     });
@@ -613,6 +621,36 @@ mod tests {
             z_steps_per_unit: 200.0,
         };
         assert_eq!(status_request(&setup, &state), cap);
+    }
+
+    #[test]
+    fn reverse_runs_on_its_own_output() {
+        let setup = BoardSetup::dmc2();
+        let bits = |on: bool, ccw: bool| {
+            let state = HostState {
+                reset: false,
+                outputs: machine::Outputs { enable: true, spindle_on: on, spindle_ccw: ccw, ..Default::default() },
+                max_rpm: 25000.0,
+                z_steps_per_unit: 200.0,
+            };
+            u32::from_le_bytes(status_request(&setup, &state)[0..4].try_into().unwrap())
+        };
+        // the spindle output (signal OUTPUT1, pin 11) is active low; the reverse output (pin 12) active high
+        let (fwd, rev) = (1u32 << OUTPUT1, 1u32 << (OUTPUT1 + 1));
+        assert_eq!(bits(false, false) & (fwd | rev), fwd, "off: neither");
+        assert_eq!(bits(true, false) & (fwd | rev), 0, "M3: the forward output only");
+        assert_eq!(bits(true, true) & (fwd | rev), fwd | rev, "M4: the reverse output only");
+        // a stale reverse flag with the spindle off switches nothing on
+        assert_eq!(bits(false, true) & (fwd | rev), fwd);
+        // wired for one direction: the spindle output is on either way
+        let one = BoardSetup { reverse_signal: None, ..BoardSetup::dmc2() };
+        let state = HostState {
+            reset: false,
+            outputs: machine::Outputs { enable: true, spindle_on: true, spindle_ccw: true, ..Default::default() },
+            max_rpm: 25000.0,
+            z_steps_per_unit: 200.0,
+        };
+        assert_eq!(u32::from_le_bytes(status_request(&one, &state)[0..4].try_into().unwrap()) & (fwd | rev), 0);
     }
 
     fn cap_f32(p: &Payload, at: usize) -> f64 {
