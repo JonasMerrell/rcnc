@@ -38,8 +38,11 @@ pub struct ProbeSettings {
     /// Feed for positioning moves.
     pub travel_feed: f64,
     pub setter: ToolSetter,
-    /// Tool number of the touch probe. The spindle won't start with it loaded.
+    /// Tool number of the touch probe that the probing cycles load. The spindle won't start with it loaded.
     pub probe_tool: u32,
+    /// Every tool number that is a touch probe (`probe_tool` always counts too). With one of them in the
+    /// spindle the coolant never comes on and the spindle never starts.
+    pub probe_tools: Vec<u32>,
     pub find_stock: FindStockSettings,
     /// What the Calibrate probe wizard measured; nothing until it has run.
     pub calibration: ProbeCalibration,
@@ -152,6 +155,11 @@ pub struct ProbeCalibration {
 }
 
 impl ProbeSettings {
+    /// Tool `t` is a touch probe: no coolant and no spindle with it in.
+    pub fn is_probe(&self, t: u32) -> bool {
+        t != 0 && (t == self.probe_tool || self.probe_tools.contains(&t))
+    }
+
     /// The ball's effective radius touching along `axis` (0 = X, 1 = Y).
     pub fn ball_radius(&self, axis: usize) -> f64 {
         match self.calibration.diameter.get(axis) {
@@ -256,6 +264,7 @@ impl Default for ProbeSettings {
             travel_feed: 3000.0,
             setter: ToolSetter::default(),
             probe_tool: 99,
+            probe_tools: vec![99],
             find_stock: FindStockSettings::default(),
             calibration: ProbeCalibration::default(),
             vise: ViseSettings::default(),
@@ -365,12 +374,37 @@ pub(crate) fn touch(s: &ProbeSettings, axis: usize, positive: bool, distance: f6
 /// Go to the tool setter and measure the tool twice: a fast search, then
 /// two slow touches with a back-off between them. Records two touches.
 pub(crate) fn setter_steps(s: &ProbeSettings) -> Vec<Step> {
-    let t = &s.setter;
-    let mut steps = vec![guarded_to(s, 2, t.travel_z), guarded_to(s, 0, t.x), guarded_to(s, 1, t.y)];
-    steps.extend(touch(s, 2, false, t.max_distance));
-    steps.push(Step::Probe { axis: 2, by: -2.0 * s.latch, feed: s.slow_feed, record: true });
-    steps.push(Step::MoveBy { axis: 2, by: s.latch, feed: s.fast_feed, guarded: false });
+    let mut steps = setter_approach(s);
+    steps.push(setter_fast(s));
+    steps.push(setter_back_off(s));
+    steps.extend(setter_slow(s));
     steps
+}
+
+/// Over the tool setter at its travel height.
+pub(crate) fn setter_approach(s: &ProbeSettings) -> Vec<Step> {
+    let t = &s.setter;
+    vec![guarded_to(s, 2, t.travel_z), guarded_to(s, 0, t.x), guarded_to(s, 1, t.y)]
+}
+
+/// The fast search down onto the setter (not recorded).
+pub(crate) fn setter_fast(s: &ProbeSettings) -> Step {
+    Step::Probe { axis: 2, by: -s.setter.max_distance, feed: s.fast_feed, record: false }
+}
+
+/// Lift the latch distance off the setter.
+pub(crate) fn setter_back_off(s: &ProbeSettings) -> Step {
+    Step::MoveBy { axis: 2, by: s.latch, feed: s.fast_feed, guarded: false }
+}
+
+/// After the fast search and its back-off: the two slow touches with a back-off after each (both recorded).
+pub(crate) fn setter_slow(s: &ProbeSettings) -> Vec<Step> {
+    vec![
+        Step::Probe { axis: 2, by: -2.0 * s.latch, feed: s.slow_feed, record: true },
+        Step::MoveBy { axis: 2, by: s.latch, feed: s.fast_feed, guarded: false },
+        Step::Probe { axis: 2, by: -2.0 * s.latch, feed: s.slow_feed, record: true },
+        Step::MoveBy { axis: 2, by: s.latch, feed: s.fast_feed, guarded: false },
+    ]
 }
 
 /// The tool's touch on the setter from the last two readings, or why they can't be trusted.
