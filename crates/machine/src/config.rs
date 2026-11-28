@@ -163,8 +163,15 @@ pub struct ToolChangeSettings {
     pub x_travel: f64,
     /// Lowest machine Z to travel and change tools at; Z is raised to it, never lowered.
     pub z: f64,
-    /// Go back to where the tool change started, with the spindle and coolant as they were.
+    /// Go back to where the tool change started, with the spindle as it was. The coolant stays off: the
+    /// program's next M7/M8 turns it on again.
     pub return_to_start: bool,
+    /// Run the flood coolant over the tool setter for the fast search down onto it, to wash chips off it;
+    /// off for the two slow touches. Never with a touch probe in the spindle.
+    pub setter_coolant: bool,
+    /// Seconds to wait after the coolant goes off before the slow touches, so the spray stops and the setter
+    /// drains.
+    pub setter_drain: f64,
     /// Machine Z of the collet nut's face when a tool's tip touches the setter, less the tool's stick-out:
     /// with it, measuring a tool gives its stick-out. None until calibrated with a tool whose stick-out
     /// is known (Tools page).
@@ -189,6 +196,8 @@ impl Default for ToolChangeSettings {
             x_travel: 343.0,
             z: 0.0,
             return_to_start: true,
+            setter_coolant: true,
+            setter_drain: 1.0,
             nut_face_z: None,
             stickout_tolerance: 1.5,
         }

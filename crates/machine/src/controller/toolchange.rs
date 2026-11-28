@@ -2,7 +2,14 @@
 //! wait for the operator to load the new tool, measure it twice on the tool
 //! setter (pausing if the two readings disagree), then go back to where the
 //! change started, with the tool tip at the same work height and the spindle
-//! and coolant as they were.
+//! as it was.
+//!
+//! Coolant: off for the whole change, except that a cutting tool's fast search
+//! down onto the setter runs with the flood on to wash chips off the setter;
+//! it goes off again, and the setter drains (`setter_drain`), before the two
+//! slow touches. It stays off after the change: the program's next M7/M8
+//! turns it on (rCAD's posts send M9 before every M6 and M8 after it). With a
+//! touch probe in the spindle it never comes on.
 
 use std::collections::VecDeque;
 
@@ -122,6 +129,9 @@ impl Controller {
             }
         });
         self.outputs.spindle_on = false;
+        if (self.outputs.flood || self.outputs.mist) && self.config.probing.is_probe(tool) {
+            self.info(format!("Coolant off: T{tool} is a touch probe"));
+        }
         self.outputs.flood = false;
         self.outputs.mist = false;
 
@@ -161,7 +171,7 @@ impl Controller {
                 return Ok(vec![]);
             }
             c.stage(ToolChangeStage::Measuring);
-            Ok(measure_steps(&c.config.probing))
+            Ok(measure_steps(c))
         })));
         steps.push_back(Step::Then(Box::new(move |c, _| c.tool_change_return())));
 
@@ -265,12 +275,20 @@ impl Controller {
         self.info(format!("Tool {} loaded", view.to));
         // the probe's checks, for its probing cycles up to the next tool change
         self.probe_checks = view.checks.as_ref().map(|k| ProbeChecks { vise: k.vise == Some(true), bore_stops: k.bore_stops.clone() });
-        // The program carries on expecting the spindle and coolant as they
-        // were, whether or not the tool goes back to where it started.
-        // Never start the spindle with the touch probe in it.
-        let probe = view.to != 0 && view.to == self.config.probing.probe_tool;
+        // The program carries on expecting the spindle as it was, whether or
+        // not the tool goes back to where it started. Never start the spindle
+        // with the touch probe in it. The coolant stays off until the program
+        // asks for it again.
+        let probe = self.config.probing.is_probe(view.to);
         if probe && outputs.spindle_on {
             self.info("The touch probe is loaded: the spindle stays off");
+        }
+        if outputs.flood || outputs.mist {
+            self.info(if probe {
+                "The touch probe is loaded: the coolant stays off"
+            } else {
+                "Coolant stays off after the tool change: the program's next M7/M8 turns it on"
+            });
         }
         let spin = outputs.spindle_on && !probe;
         let restore = Step::Then(Box::new(move |c, _| {
@@ -278,8 +296,8 @@ impl Controller {
             c.outputs.spindle_ccw = outputs.spindle_ccw;
             c.outputs.spindle_duty = outputs.spindle_duty;
             c.outputs.spindle_rpm = outputs.spindle_rpm;
-            c.outputs.flood = outputs.flood;
-            c.outputs.mist = outputs.mist;
+            c.outputs.flood = false;
+            c.outputs.mist = false;
             Ok(if spin { vec![Step::Wait(c.config.spindle_spin_up)] } else { vec![] })
         }));
         if !view.return_to_start {
@@ -314,6 +332,9 @@ impl Controller {
         if self.tool_change.take().is_none() {
             return;
         }
+        // however it ended (a failed touch on the setter too): no coolant
+        self.outputs.flood = false;
+        self.outputs.mist = false;
         match result {
             Ok(()) => {
                 if let Some(Exec { wait: wait @ Wait::Routine, .. }) = &mut self.exec {
@@ -329,9 +350,43 @@ impl Controller {
 /// Measure the tool twice on the setter. If the readings agree, set work Z
 /// from their average; if not, lift off the setter and wait for the operator
 /// to check things, then measure again.
-fn measure_steps(s: &ProbeSettings) -> Vec<Step> {
-    let mut steps = probing::setter_steps(s);
-    let s = s.clone();
+///
+/// A cutting tool's fast search down onto the setter runs with the flood
+/// coolant on (`setter_coolant`) to wash chips off it; the coolant goes off at
+/// the touch, then the setter drains for `setter_drain` s before the slow
+/// touches. A touch probe's passes are all dry.
+fn measure_steps(c: &Controller) -> Vec<Step> {
+    let s = c.config.probing.clone();
+    let tool = c.tool_change.as_ref().map_or(c.loaded_tool, |t| t.view.to);
+    let tc = &c.config.tool_change;
+    let wash = tc.setter_coolant && !s.is_probe(tool);
+    let drain = tc.setter_drain.max(0.0);
+    let mut steps = probing::setter_approach(&s);
+    if wash {
+        steps.push(Step::Then(Box::new(|c, _| {
+            // the interlock again, in case the tool in the spindle changed meanwhile
+            if !c.probe_in_spindle() {
+                c.outputs.flood = true;
+                c.info("Coolant on: washing the tool setter for the fast touch");
+            }
+            Ok(vec![])
+        })));
+    }
+    steps.push(probing::setter_fast(&s));
+    if wash {
+        steps.push(Step::Then(Box::new(|c, _| {
+            c.outputs.flood = false;
+            c.outputs.mist = false;
+            c.info("Coolant off for the slow touches");
+            Ok(vec![])
+        })));
+    }
+    steps.push(probing::setter_back_off(&s));
+    if wash && drain > 0.0 {
+        // off the setter, so it drains from under the tip too
+        steps.push(Step::Wait(drain));
+    }
+    steps.extend(probing::setter_slow(&s));
     steps.push(Step::Then(Box::new(move |c, hits| match probing::setter_reading(&s, hits) {
         Ok(hit) => match c.stickout_problem(hit) {
             None => Ok(probing::touch_off(c, &s, hit)),
@@ -355,7 +410,7 @@ fn mismatch(c: &mut Controller, s: &ProbeSettings, e: String) -> Vec<Step> {
             c.set_problem(None);
             c.stage(ToolChangeStage::Measuring);
             c.info("Measuring the tool again");
-            Ok(measure_steps(&c.config.probing))
+            Ok(measure_steps(c))
         })),
     ]
 }

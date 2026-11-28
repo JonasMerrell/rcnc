@@ -39,6 +39,8 @@ pub(super) struct SettingsDraft {
     pub new_tool: u32,
     /// Tool number for "Change tool".
     pub change_to: u32,
+    /// The touch probe tool numbers being typed (None: as set).
+    pub probe_tools: Option<String>,
 }
 
 fn num(ui: &mut egui::Ui, v: &mut f64, speed: f64, suffix: &str) -> bool {
@@ -324,6 +326,32 @@ impl App {
             changed |= ui
                 .add(DragValue::new(&mut c.probing.setter.repeat_tolerance).speed(0.001).range(0.001..=1.0).max_decimals(3).suffix(" mm"))
                 .changed();
+        });
+        changed |= ui
+            .checkbox(&mut c.tool_change.setter_coolant, "Flood coolant on the setter for the fast touch")
+            .on_hover_text("Washes chips off the setter on the way down; off for the two slow touches. Never with a touch probe in")
+            .changed();
+        ui.add_enabled_ui(c.tool_change.setter_coolant, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Then let the setter drain for");
+                changed |= ui.add(DragValue::new(&mut c.tool_change.setter_drain).speed(0.1).range(0.0..=10.0).max_decimals(1).suffix(" s")).changed();
+            });
+        });
+        ui.horizontal(|ui| {
+            ui.label("Touch probe tools (never coolant or spindle)");
+            let shown = || c.probing.probe_tools.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ");
+            let text = self.draft.probe_tools.get_or_insert_with(shown);
+            let edit = ui.add(egui::TextEdit::singleline(text).desired_width(90.0).hint_text("99"));
+            if edit.lost_focus() {
+                let tools: Vec<u32> = text.split([',', ' ']).filter_map(|t| t.trim().trim_start_matches(['T', 't']).parse().ok()).filter(|&t| t != 0).collect();
+                if tools != c.probing.probe_tools {
+                    c.probing.probe_tools = tools;
+                    changed = true;
+                }
+                self.draft.probe_tools = None;
+            } else if !edit.has_focus() {
+                self.draft.probe_tools = None;
+            }
         });
         ui.label(
             RichText::new("Positions are machine coordinates. The spindle stops during the change and restarts on the way back.")

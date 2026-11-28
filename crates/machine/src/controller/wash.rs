@@ -76,6 +76,9 @@ impl Controller {
         if self.generator.feed_override == 0.0 {
             return fail(self, "feed override is at 0%".into());
         }
+        if self.probe_in_spindle() {
+            return fail(self, format!("the touch probe (T{}) is in the spindle and must stay dry: load a cutter first", self.loaded_tool));
+        }
         let (x, y) = match self.config.wash_area() {
             Ok(a) => a,
             Err(e) => return fail(self, e),
@@ -106,6 +109,9 @@ impl Controller {
             steps.push_back(mv(axis, to, travel));
         }
         steps.push_back(Step::Then(Box::new(|c, _| {
+            if c.probe_in_spindle() {
+                return Err("the touch probe is in the spindle: no coolant".into());
+            }
             c.outputs.flood = true;
             c.info("Wash down: coolant on");
             Ok(vec![])
@@ -128,13 +134,14 @@ impl Controller {
             }
             // The program carries on expecting the spindle and coolant as they were.
             let o = wash.outputs.clone();
-            let spin = o.spindle_on && !c.probe_loaded();
+            let probe = c.probe_in_spindle();
+            let spin = o.spindle_on && !probe;
             c.outputs.spindle_on = spin;
             c.outputs.spindle_ccw = o.spindle_ccw;
             c.outputs.spindle_duty = o.spindle_duty;
             c.outputs.spindle_rpm = o.spindle_rpm;
-            c.outputs.flood = o.flood;
-            c.outputs.mist = o.mist;
+            c.outputs.flood = o.flood && !probe;
+            c.outputs.mist = o.mist && !probe;
             Ok(if spin { vec![Step::Wait(c.config.spindle_spin_up)] } else { vec![] })
         })));
 
@@ -162,7 +169,7 @@ impl Controller {
 
     pub(super) fn end_wash_down(&mut self, result: &Result<(), String>) {
         let Some(wash) = self.wash.take() else { return };
-        self.outputs.flood = if result.is_ok() && wash.in_program { wash.outputs.flood } else { false };
+        self.outputs.flood = result.is_ok() && wash.in_program && wash.outputs.flood && !self.probe_in_spindle();
         match result {
             Ok(()) => {
                 if let Some(Exec { wait: wait @ Wait::Routine, .. }) = &mut self.exec {

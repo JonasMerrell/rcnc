@@ -1783,6 +1783,12 @@ impl Controller {
         if self.mode == Mode::EStop {
             self.outputs = Outputs::default();
         }
+        // Hard interlock, whatever asked for it: never coolant with the touch probe in the spindle.
+        if (self.outputs.flood || self.outputs.mist) && self.probe_in_spindle() {
+            self.outputs.flood = false;
+            self.outputs.mist = false;
+            self.info(format!("Warning: coolant switched off: the touch probe (T{}) is in the spindle", self.loaded_tool));
+        }
         let machine = self.machine_position();
         self.outputs.work_position = self.interp.to_work(&machine);
         self.outputs.feed_rate = self.interp.state.feed;
@@ -2070,7 +2076,7 @@ impl Controller {
                         line + 1
                     ));
                 }
-                if state != Spindle::Off && self.probe_loaded() {
+                if state != Spindle::Off && self.probe_in_spindle() {
                     return self.raise(format!(
                         "line {}: the touch probe (T{}) is in the spindle; load a cutter before starting it",
                         line + 1,
@@ -2099,8 +2105,25 @@ impl Controller {
                 }
             }
             Op::Coolant { flood, mist } => {
-                self.outputs.flood = flood;
-                self.outputs.mist = mist;
+                // Hard interlock: never coolant on the touch probe. Refused, not an alarm: the probe stays
+                // dry and its moves are right without coolant, so the program carries on.
+                if (flood || mist) && self.probe_in_spindle() {
+                    let what = if matches!(&self.exec, Some(Exec { source: Source::Program, .. })) { format!("line {}", line + 1) } else { "MDI".into() };
+                    self.info(format!(
+                        "Warning: {what}: {} refused, the touch probe (T{}) is in the spindle; the coolant stays off",
+                        match (flood, mist) {
+                            (true, true) => "M7/M8 (mist and flood)",
+                            (true, false) => "M8 (flood)",
+                            _ => "M7 (mist)",
+                        },
+                        self.loaded_tool
+                    ));
+                    self.outputs.flood = false;
+                    self.outputs.mist = false;
+                } else {
+                    self.outputs.flood = flood;
+                    self.outputs.mist = mist;
+                }
                 Wait::None
             }
             Op::ToolChange { tool } if self.config.tool_change.guided && self.config.probe.is_some() => {
@@ -2113,11 +2136,26 @@ impl Controller {
                     return;
                 }
             }
-            Op::ToolChange { tool } => Wait::ToolChange(if self.config.tool_change_touch_off {
-                format!("Load tool {tool}, then press Cycle Start to touch it off and carry on")
-            } else {
-                format!("Load tool {tool}, touch it off if needed, then press Cycle Start")
-            }),
+            Op::ToolChange { tool } => {
+                // the operator loads `tool` now: as far as rcnc knows it's in the spindle from here
+                if self.config.probing.is_probe(tool) {
+                    if self.outputs.flood || self.outputs.mist {
+                        self.info(format!("Coolant off: T{tool} is a touch probe"));
+                    }
+                    self.outputs.flood = false;
+                    self.outputs.mist = false;
+                }
+                if tool != self.loaded_tool {
+                    self.probe_runout = None;
+                    self.tool_measured = false;
+                }
+                self.loaded_tool = tool;
+                Wait::ToolChange(if self.config.tool_change_touch_off {
+                    format!("Load tool {tool}, then press Cycle Start to touch it off and carry on")
+                } else {
+                    format!("Load tool {tool}, touch it off if needed, then press Cycle Start")
+                })
+            }
             // a (MSG,...) just before the stop says what it's for
             Op::Pause { .. } if self.probe_checks.as_ref().is_some_and(|p| p.bore_stops.contains(&line)) => {
                 self.last_message = None;
@@ -3539,7 +3577,7 @@ mod tests {
         assert!(!s.flood);
 
         c.handle(Command::CycleStart);
-        // Back at the start before the program carries on: spindle and coolant on again.
+        // Back at the start before the program carries on: spindle on again, coolant off until the program's M8.
         for _ in 0..40_000 {
             clock.advance(0.005);
             c.update();
@@ -3555,7 +3593,9 @@ mod tests {
         assert!(close(s.work[2], 110.0), "{:?}", s.work);
         assert!(close(s.machine[2], 126.69), "{:?}", s.machine);
         assert_eq!(s.mode, Mode::Running);
-        assert!(s.flood);
+        assert_eq!(s.spindle, Spindle::Cw);
+        assert!(!s.flood, "the coolant stays off after the change");
+        assert!(s.log.iter().any(|l| l.contains("Coolant stays off after the tool change")), "{:?}", s.log);
 
         run_until_idle(&mut c, &clock, 30.0);
         let s = c.snapshot();
@@ -4103,7 +4143,7 @@ mod tests {
         }
         let s = c.snapshot();
         assert_eq!(s.spindle, Spindle::Cw, "{:?}", s.log);
-        assert!(s.flood);
+        assert!(!s.flood, "the coolant waits for the program's M8");
     }
 
     #[test]
@@ -5568,5 +5608,225 @@ mod tests {
         c.handle(Command::CycleStart);
         run_until(&mut c, &clock, 60.0, "the stop", |s| s.paused.is_some() || s.mode == Mode::Alarm);
         assert!(c.snapshot().paused.unwrap().contains("Blow the chips out of the bores"));
+    }
+    // ---- coolant at the tool change, and the touch probe's coolant interlock ----
+
+    /// One controller tick, as the tests below see it.
+    #[derive(Debug, Clone)]
+    struct Tick {
+        t: f64,
+        flood: bool,
+        mist: bool,
+        probe: bool,
+        machine: Axes,
+        /// The tool the running tool change loads, if one runs.
+        changing_to: Option<u32>,
+    }
+
+    /// The probing sim (setter = table plane at machine Z30, at X50 Y50) with a guided tool change, running
+    /// `program` to the end, pressing Continue at every tool change; every tick recorded.
+    fn coolant_run(program: &str, settings: impl FnOnce(&mut MachineConfig)) -> (Controller, Arc<ManualClock>, Vec<Tick>) {
+        let (mut c, clock) = probing_setup();
+        let mut config = MachineConfig::dmc2();
+        config.probing.setter = crate::probing::ToolSetter { x: 50.0, y: 50.0, travel_z: 120.0, offset: 13.31, reference: String::new(), ..Default::default() };
+        config.tool_change = crate::config::ToolChangeSettings { x: 10.0, y: Some(20.0), z: 120.0, centre_x: false, ..Default::default() };
+        settings(&mut config);
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.homed = [true; 6];
+        c.handle(Command::Mdi("G53 G0 X130 Y130 Z110".into()));
+        run_until_idle(&mut c, &clock, 5.0);
+        c.handle(Command::Load { name: "t".into(), text: program.into() });
+        c.handle(Command::CycleStart);
+        let mut ticks = vec![];
+        let mut t = 0.0;
+        loop {
+            clock.advance(0.005);
+            c.update();
+            t += 0.005;
+            let s = c.snapshot();
+            if s.tool_change.as_ref().is_some_and(|t| t.stage == ToolChangeStage::Loading) && c.routine_waiting {
+                c.handle(Command::ToolChangeContinue { measure: None });
+            }
+            ticks.push(Tick { t, flood: s.flood, mist: s.mist, probe: s.probe_active, machine: s.machine, changing_to: s.tool_change.as_ref().map(|t| t.to) });
+            if matches!(s.mode, Mode::Idle | Mode::Alarm) {
+                break;
+            }
+            assert!(t < 600.0, "still {:?}: {:?}", s.mode, s.log);
+        }
+        (c, clock, ticks)
+    }
+
+    /// Times the probe input came on (a touch on the setter) during the change to `tool`.
+    fn touches(ticks: &[Tick], tool: u32) -> Vec<usize> {
+        (1..ticks.len()).filter(|&i| ticks[i].changing_to == Some(tool) && ticks[i].probe && !ticks[i - 1].probe).collect()
+    }
+
+    #[test]
+    fn a_cutters_fast_touch_runs_with_coolant_and_the_slow_ones_dry() {
+        let (c, _, ticks) = coolant_run("T3 M6\nM30", |c| c.tool_change.setter_drain = 2.0);
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Tool touched off")), "{:?}", s.log);
+        let hits = touches(&ticks, 3);
+        assert_eq!(hits.len(), 3, "a fast touch, then two slow ones");
+        // flood on for the fast touch, off for both slow ones
+        // (the touch ends the move and the coolant goes off in the same tick: on right up to it)
+        assert!(ticks[hits[0] - 1].flood, "coolant on down to the fast touch");
+        assert!(!ticks[hits[1]].flood && !ticks[hits[2]].flood, "dry slow touches");
+        // it came on over the setter, at the travel height, for the move down; not on the way there
+        let on = (1..ticks.len()).find(|&i| ticks[i].flood && !ticks[i - 1].flood).expect("coolant came on");
+        let m = ticks[on].machine;
+        assert!(close(m[0], 50.0) && close(m[1], 50.0) && close(m[2], 120.0), "came on at {m:?}");
+        assert_eq!(ticks.iter().filter(|k| k.flood).count(), (on..).take_while(|&i| ticks[i].flood).count(), "on once only");
+        // off at the fast touch (within a tick or two), never on again
+        let off = (on..ticks.len()).find(|&i| !ticks[i].flood).unwrap();
+        assert!(off <= hits[0] + 2, "off at the touch: tick {off}, touch {}", hits[0]);
+        assert!(ticks[off..].iter().all(|k| !k.flood && !k.mist));
+        // then the drain: backed off the setter and still for 2 s before the slow touch starts down
+        let z = ticks[off..hits[1]].iter().map(|k| k.machine[2]).collect::<Vec<_>>();
+        let mut still = 0.0f64;
+        let mut best = 0.0f64;
+        for w in z.windows(2) {
+            still = if (w[1] - w[0]).abs() < 1e-9 { still + 0.005 } else { 0.0 };
+            best = best.max(still);
+        }
+        assert!(best >= 2.0 - 0.02, "the setter drains for 2 s, still for {best} s");
+        let i = s.log.iter().position(|l| l.contains("Coolant on: washing the tool setter")).expect("logged");
+        assert!(s.log.iter().skip(i).any(|l| l.contains("Coolant off for the slow touches")), "{:?}", s.log);
+        // the readings are as good as dry ones: the sim's setter is at Z30, top 13.31
+        assert!(close(s.work[2] - s.machine[2], 13.31 - 30.0) || s.tool_measured, "{:?}", s.log);
+    }
+
+    #[test]
+    fn the_setter_wash_can_be_switched_off() {
+        let (c, _, ticks) = coolant_run("T3 M6\nM30", |c| c.tool_change.setter_coolant = false);
+        assert!(c.snapshot().log.iter().any(|l| l.contains("Tool touched off")));
+        assert_eq!(touches(&ticks, 3).len(), 3);
+        assert!(ticks.iter().all(|k| !k.flood), "dry all the way");
+    }
+
+    #[test]
+    fn the_probes_touch_off_is_dry_and_its_coolant_is_interlocked() {
+        // cutter -> probe -> cutter, every one with M8 after it, and the coolant left on into the probe's M6
+        let program = "T3 M6\nS1000 M3\nM8\nG1 X100 F1000\nM5\nT99 M6\nM8\nG0 X120\nM7\nG0 X110\nM9\nT4 M6\nS1000 M3\nM8\nG1 X100 F1000\nM5 M9\nM30";
+        let (c, _, ticks) = coolant_run(program, |_| {});
+        let s = c.snapshot();
+        assert!(s.log.iter().any(|l| l.contains("Program finished")), "the program runs to the end: {:?}", s.log);
+        // the cutters' fast touches are washed, the probe's are all dry
+        for tool in [3, 4] {
+            let h = touches(&ticks, tool);
+            assert_eq!(h.len(), 3, "T{tool}");
+            assert!(ticks[h[0] - 1].flood && !ticks[h[1]].flood && !ticks[h[2]].flood, "T{tool}");
+        }
+        assert_eq!(touches(&ticks, 99).len(), 3, "the probe is measured too");
+        assert!(ticks.iter().filter(|k| k.changing_to == Some(99)).all(|k| !k.flood && !k.mist), "never coolant at the probe's change");
+        // the coolant on from the cutter is switched off when the probe's change starts
+        let start = ticks.iter().position(|k| k.changing_to == Some(99)).unwrap();
+        assert!(ticks[start - 1].flood && !ticks[start].flood);
+        assert!(s.log.iter().any(|l| l.contains("Coolant off: T99 is a touch probe")), "{:?}", s.log);
+        // with the probe in: the M8 and M7 are refused, logged, and the program carries on dry
+        let (done, next) = (ticks.iter().rposition(|k| k.changing_to == Some(99)).unwrap(), ticks.iter().position(|k| k.changing_to == Some(4)).unwrap());
+        assert!(next > done + 10);
+        assert!(ticks[done..next].iter().all(|k| !k.flood && !k.mist), "dry from the probe's change to the next");
+        assert!(s.log.iter().any(|l| l.contains("Warning: line 7: M8 (flood) refused, the touch probe (T99) is in the spindle")), "{:?}", s.log);
+        assert!(s.log.iter().any(|l| l.contains("Warning: line 9: M7/M8 (mist and flood) refused")), "{:?}", s.log);
+        // the cutter after it gets its coolant back where the program asks for it (line 14's M8)
+        let after = ticks.iter().rposition(|k| k.changing_to == Some(4)).unwrap();
+        assert!(!ticks[after + 1].flood, "off at the end of the change");
+        assert!(ticks[after..].iter().any(|k| k.flood), "back on at the program's M8");
+    }
+
+    #[test]
+    fn no_coolant_from_mdi_with_the_probe_in() {
+        let (mut c, clock) = setup();
+        c.loaded_tool = 99;
+        for code in ["M8", "M7", "M7 M8"] {
+            c.handle(Command::Mdi(code.into()));
+            run_until_idle(&mut c, &clock, 2.0);
+            let s = c.snapshot();
+            assert!(!s.flood && !s.mist, "{code}");
+            assert!(s.log.iter().rev().take(3).any(|l| l.contains("Warning: MDI:") && l.contains("refused")), "{code}: {:?}", s.log);
+            assert_eq!(s.mode, Mode::Idle, "refused, not an alarm");
+        }
+        // M9 still works, and a cutter gets its coolant
+        c.handle(Command::Mdi("M9".into()));
+        run_until_idle(&mut c, &clock, 2.0);
+        c.loaded_tool = 3;
+        c.handle(Command::Mdi("M8".into()));
+        run_until_idle(&mut c, &clock, 2.0);
+        assert!(c.snapshot().flood);
+    }
+
+    #[test]
+    fn every_probe_tool_number_is_interlocked() {
+        let (mut c, clock) = setup();
+        let mut config = c.snapshot().config;
+        config.probing.probe_tools = vec![98];
+        c.handle(Command::SetConfig(Box::new(config)));
+        assert!(c.config.probing.is_probe(98) && c.config.probing.is_probe(99), "probe_tool always counts");
+        assert!(!c.config.probing.is_probe(0) && !c.config.probing.is_probe(3));
+        c.loaded_tool = 98;
+        c.handle(Command::Mdi("M8".into()));
+        run_until_idle(&mut c, &clock, 2.0);
+        assert!(!c.snapshot().flood);
+        // and the spindle won't start with it either
+        c.handle(Command::Mdi("S1000 M3".into()));
+        run_until_idle(&mut c, &clock, 2.0);
+        assert_eq!(c.snapshot().spindle, Spindle::Off);
+        // the default list is [99]
+        assert_eq!(crate::probing::ProbeSettings::default().probe_tools, vec![99]);
+    }
+
+    #[test]
+    fn the_coolant_goes_off_whatever_turned_it_on_with_the_probe_in() {
+        // anything that sets the output directly (a button, a routine restoring it) is caught before the board sees it
+        let (mut c, clock, wire) = flaky_setup();
+        c.loaded_tool = 99;
+        c.outputs.flood = true;
+        c.outputs.mist = true;
+        clock.advance(0.005);
+        c.update();
+        let sent = wire.lock().unwrap().last_poll.unwrap();
+        assert!(!sent.flood && !sent.mist, "the board never got the coolant");
+        assert!(c.snapshot().log.back().unwrap().contains("Warning: coolant switched off: the touch probe (T99) is in the spindle"));
+    }
+
+    #[test]
+    fn wash_down_refuses_the_probe() {
+        let (mut c, clock) = setup();
+        c.homed = [true; 6];
+        c.loaded_tool = 99;
+        c.handle(Command::WashDown);
+        let s = c.snapshot();
+        assert!(!c.washing() && !s.flood && s.mode == Mode::Idle);
+        assert!(s.log.back().unwrap().contains("Wash down: the touch probe (T99) is in the spindle"), "{:?}", s.log);
+        // from a program: holds it, like any wash down that can't run
+        c.handle(Command::Load { name: "t".into(), text: "(RCNC WASH_DOWN)\nM30".into() });
+        c.handle(Command::CycleStart);
+        run_until_idle(&mut c, &clock, 5.0);
+        let s = c.snapshot();
+        assert_eq!(s.mode, Mode::Alarm);
+        assert!(!s.flood);
+        assert!(s.alarm.unwrap().contains("touch probe"));
+    }
+
+    #[test]
+    fn an_unguided_probe_change_turns_the_coolant_off() {
+        let (mut c, clock) = setup();
+        let mut config = c.snapshot().config;
+        config.tool_change.guided = false;
+        config.tool_change_touch_off = false;
+        c.handle(Command::SetConfig(Box::new(config)));
+        c.handle(Command::Load { name: "t".into(), text: "M8\nT99 M6\nM8\nM30".into() });
+        c.handle(Command::CycleStart);
+        run_until(&mut c, &clock, 5.0, "the M6 wait", |s| s.paused.is_some());
+        let s = c.snapshot();
+        assert!(!s.flood, "off at the M6");
+        assert_eq!(s.loaded_tool, 99);
+        assert!(s.log.iter().any(|l| l.contains("Coolant off: T99 is a touch probe")), "{:?}", s.log);
+        c.handle(Command::CycleStart);
+        run_until_idle(&mut c, &clock, 5.0);
+        let s = c.snapshot();
+        assert!(!s.flood);
+        assert!(s.log.iter().any(|l| l.contains("M8 (flood) refused")), "{:?}", s.log);
     }
 }
