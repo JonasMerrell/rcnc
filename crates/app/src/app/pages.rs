@@ -762,7 +762,7 @@ impl App {
             ui.checkbox(&mut draft.spindle_reversible, "Spindle can run in reverse (M4, G84)");
             egui::Grid::new("spindle").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
                 labelled(ui, "Max spindle speed", &mut draft.spindle_max_rpm, 100.0, " rpm");
-                labelled(ui, "Spin-up wait", &mut draft.spindle_spin_up, 0.1, " s");
+                labelled(ui, "Spin-up wait at max speed", &mut draft.spindle_spin_up, 0.1, " s");
                 labelled(ui, "Spin-down wait", &mut draft.spindle_spin_down, 0.1, " s");
                 labelled(ui, "Corner tolerance", &mut draft.junction_deviation, 0.001, " mm");
                 labelled(ui, "Home pull-off", &mut draft.home_pulloff, 0.1, " mm");
@@ -801,7 +801,9 @@ impl App {
             self.draft.base = None;
             self.draft.import_notes.clear();
         }
-        if !dirty && self.draft.import_notes.is_empty() {
+        // Compared again after this frame's edits: `dirty` was taken before them, and dropping the
+        // draft on it threw away an edit made in a single frame (a tick box unticked itself).
+        if self.draft.config.as_ref() == self.draft.base.as_ref() && self.draft.import_notes.is_empty() {
             // Track changes made elsewhere (jog speed, probe page).
             self.draft.config = None;
         }

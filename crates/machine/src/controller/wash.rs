@@ -142,7 +142,7 @@ impl Controller {
             c.outputs.spindle_rpm = o.spindle_rpm;
             c.outputs.flood = o.flood && !probe;
             c.outputs.mist = o.mist && !probe;
-            Ok(if spin { vec![Step::Wait(c.config.spindle_spin_up)] } else { vec![] })
+            Ok(if spin { vec![Step::Wait(c.spin_up_wait(c.outputs.spindle_rpm))] } else { vec![] })
         })));
 
         self.info(format!(

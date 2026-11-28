@@ -2065,6 +2065,13 @@ impl Controller {
         }
     }
 
+    /// How long the drive takes to reach `rpm` from rest. The spin-up wait in the settings is the
+    /// time to the spindle's top speed; the drive ramps at a steady rate, so a lower speed takes
+    /// that share of it.
+    pub(crate) fn spin_up_wait(&self, rpm: f64) -> f64 {
+        self.config.spindle_spin_up * (rpm.abs() / self.config.spindle_max_rpm.max(1.0)).clamp(0.0, 1.0)
+    }
+
     fn action(&mut self, line: usize, op: Op) {
         let now = self.clock.now();
         let wait = match op {
@@ -2096,11 +2103,9 @@ impl Controller {
                 self.outputs.spindle_rpm = rpm;
                 self.outputs.spindle_duty = (rpm / self.config.spindle_max_rpm).clamp(0.0, 1.0);
                 match (was_on, self.outputs.spindle_on) {
-                    (false, true) => Wait::Until(now + self.config.spindle_spin_up),
+                    (false, true) => Wait::Until(now + self.spin_up_wait(rpm)),
                     (true, false) => Wait::Until(now + self.config.spindle_spin_down),
-                    _ if reversing => {
-                        Wait::Until(now + self.config.spindle_spin_down + self.config.spindle_spin_up)
-                    }
+                    _ if reversing => Wait::Until(now + self.config.spindle_spin_down + self.spin_up_wait(rpm)),
                     _ => retime.map(|t| Wait::Until(now + t)).unwrap_or(Wait::None),
                 }
             }
@@ -3030,6 +3035,33 @@ mod tests {
         assert!(spin > 0.0 && (changed - plain - want).abs() < 0.05, "{plain} {changed} {want}");
     }
 
+    /// Starting the spindle waits the share of the spin-up time that its speed is of the top speed.
+    #[test]
+    fn spin_up_wait_follows_the_speed() {
+        let start_of_moves = |text: &str| {
+            let (mut c, clock) = setup();
+            c.handle(Command::Load { name: "t".into(), text: text.into() });
+            c.handle(Command::CycleStart);
+            let x0 = c.snapshot().machine[0];
+            for _ in 0..20_000 {
+                clock.advance(0.005);
+                c.update();
+                if (c.snapshot().machine[0] - x0).abs() > 1e-6 {
+                    return (clock.now(), c.config.spindle_spin_up, c.config.spindle_max_rpm);
+                }
+            }
+            panic!("never moved");
+        };
+        let (none, spin, max) = start_of_moves("G91 G1 X1 F600\nM30");
+        let (full, _, _) = start_of_moves(&format!("M3 S{max}\nG91 G1 X1 F600\nM30"));
+        let (quarter, _, _) = start_of_moves(&format!("M3 S{}\nG91 G1 X1 F600\nM30", max / 4.0));
+        let (over, _, _) = start_of_moves(&format!("M3 S{}\nG91 G1 X1 F600\nM30", max * 2.0));
+        assert!(spin > 0.0);
+        assert!((full - none - spin).abs() < 0.05, "{none} {full} {spin}");
+        assert!((quarter - none - spin / 4.0).abs() < 0.05, "{none} {quarter} {spin}");
+        assert!((over - none - spin).abs() < 0.05, "never longer than the full wait: {none} {over} {spin}");
+    }
+
     /// How long a feed hold takes to stop a cut at 2400 mm/min, from the command to the axes at rest (the
     /// board still plays what is queued, about 0.24 s, then the planner's deceleration), and how far it goes.
     #[test]
@@ -3137,10 +3169,10 @@ mod tests {
         let (mut c, clock) = setup();
         c.handle(Command::Load {
             name: "t".into(),
-            text: "M3 S10000\nG91\nG1 X10 F600\nG1 X10\nG1 X10\nG1 X10\nG1 X10\nM30".into(),
+            text: "M3 S24000\nG91\nG1 X10 F600\nG1 X10\nG1 X10\nG1 X10\nG1 X10\nM30".into(),
         });
         c.handle(Command::CycleStart);
-        // Past the spin-up and into the moves.
+        // Past the spin-up (the full wait, at top speed) and into the moves.
         tick(&mut c, &clock, 2600);
         assert_eq!(c.mode(), Mode::Running);
         assert!(c.interpreter().pc() > 2);
