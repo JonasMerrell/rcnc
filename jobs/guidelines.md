@@ -83,6 +83,12 @@ The planning rules that follow:
 - **Beyond a proven cut:** any cut past one that has already run fine needs rcnc's **bog guard** armed. Put
   `(RCNC REQUIRE_GUARD)` in the program: it holds the feed when the heard speed sags, and Cycle Start refuses
   without it.
+- **Shims:** a program whose work stands on shims carries one `(RCNC REQUIRE_SHIM: <station>: <which shims>)`
+  line per station that uses them. Cycle Start from Idle then asks "Shims in?" and starts only on "Shims are in"
+  **(Jonas, 2026-11-26)**. Without the shims the work sits lower and every cut goes that much deeper: the Eclipse
+  car's op 1 ran without its 1.67 mm shims and cut 1.37 mm off both left-station jaws (the left station now grips
+  only 3.33 above its ledges at the faces). rCAD's posts list the shims as `fixture … shim …` header lines;
+  `mark_shim.py` (jobs/ingot-slider) turns them into the REQUIRE_SHIM lines for the stations the program runs.
 - **Older points disagree:** the test part's 4.65 × 3 and the phone stand's 1 × 12.5 ran although the model
   puts them above the measured pull-out. Don't plan on them until that's understood.
 
@@ -238,6 +244,14 @@ The planning rules that follow:
     and the tip offset cut into that face all along the edge: op 1 of the stick-out gauge (2026-11-18) gouged
     its thumb dish round the rim this way. Break those edges with the ball. rCAD's chamfer op now leaves such
     an edge out with a warning ("left out the edge near …"); read the warnings.
+  - **Chamfer mill bites: at most 0.3 mm per pass, measured square to the chamfer face, and the last pass at
+    size takes 0.1 mm** **(Jonas, 2026-11-26)**. Count any stock left on the faces beside the edge (a band or
+    wall left 0.3 for the chamfer to take): the first pass's bite is (its width + that stock) / √2. A bigger
+    chamfer is cut as several chamfer/deburr ops of growing width, each with the same tip offset under its own
+    lower edge, e.g. 1.7 with 0.3 beside it = 0.07, 0.44, 0.82, 1.19, 1.56, 1.7 (`chamfer_passes()` in the
+    slider job's `cam.py`). The 0.3 edge breaks (0.21 deep) stay one pass. rCAD's chamfer and deburr ops cut
+    one pass at the width given, so split them in the job script. Why: the Eclipse thick-rail base's 1.7 rail
+    chamfer, posted as one pass that also took the 0.3 band stock (about 1.4 mm deep), came out poorly.
 - **No ramp entries on finish contours (Jonas, 2026-11-18).** Enter in space that's already cleared (straight
   down there, then the arc lead-in at full depth) or from outside the stock; ramp or helix only where the
   entry really has to go into material, and then rather start off the part's or the stock's edge. Same for
