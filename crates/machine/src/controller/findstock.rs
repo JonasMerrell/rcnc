@@ -112,6 +112,18 @@ impl Controller {
         t != 0 && self.loaded_tool == t
     }
 
+    /// A touch probe (any of `probe_tools`) is, or may be, in the spindle: no coolant, no spindle. During a
+    /// tool change: until the operator has loaded the new tool, either the old or the new one; once it's
+    /// loaded (measuring, going back), the new one.
+    pub(crate) fn probe_in_spindle(&self) -> bool {
+        let p = &self.config.probing;
+        match self.tool_change.as_ref().map(|t| (t.view.stage, t.view.to)) {
+            Some((super::ToolChangeStage::Moving | super::ToolChangeStage::Loading, to)) => p.is_probe(self.loaded_tool) || p.is_probe(to),
+            Some((_, to)) => p.is_probe(to),
+            None => p.is_probe(self.loaded_tool),
+        }
+    }
+
     /// Start the wizard, from a program's FIND_STOCK request or from the Probe page.
     /// Why the probe can't put its ball's tip `depth` mm below a surface it hovers over (the probe
     /// body would hit it first): the probe's flute length in the tool table is its stylus length.
